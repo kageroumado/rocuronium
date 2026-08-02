@@ -35,10 +35,17 @@ final class VirtualDisplayBridge {
     }
 
     private(set) var isInstalled = false
-    private(set) var activeLease: Lease?
+    /// Every outstanding lease, not just the latest. Concurrent tasks each hold their own, and
+    /// the display is torn down only when the last one goes — previously a second caller was
+    /// handed the *same* lease id, so whoever released first killed the display underneath the
+    /// other, which is precisely what the refcount in Adrafinil's holds exists to prevent.
+    private(set) var leases: [UUID: Lease] = [:]
     /// Whether *we* launched the display. Determines whether we are allowed to close it.
     private var startedByUs = false
-    private var expiryTask: Task<Void, Never>?
+    private var expiryTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// Kept for the menu bar, which only needs to know whether anything is holding it.
+    var activeLease: Lease? { leases.values.first }
 
     var isRunning: Bool { runningApplication != nil }
 
@@ -66,6 +73,9 @@ final class VirtualDisplayBridge {
     ///
     /// Idempotent: an existing lease is extended rather than duplicated, so concurrent tasks
     /// share one display instead of fighting over it.
+    /// Takes out a lease, starting the display if nothing is holding one yet.
+    ///
+    /// Each caller gets its own lease. Sharing is by refcount, not by handing out the same id.
     @discardableResult
     func acquire(
         reason: String,
@@ -73,66 +83,52 @@ final class VirtualDisplayBridge {
     ) async throws -> Lease {
         guard isInstalled else { throw BridgeError.notInstalled }
 
-        if activeLease != nil {
-            return renew(reason: reason, duration: duration)
+        if leases.isEmpty, runningApplication == nil {
+            try await launch()
         }
-
-        if runningApplication == nil {
-            // Claim ownership *before* awaiting attachment: launch() can throw after the app
-            // has already started (attach timeout), and a throw between start and this line
-            // would strand a virtual display nobody believes they own.
-            startedByUs = true
-            do {
-                try await launch()
-            } catch {
-                release()
-                throw error
-            }
+        guard virtualScreen != nil else {
+            // Nothing is holding it and it never attached: don't leave a half-started display.
+            if leases.isEmpty { teardown() }
+            throw BridgeError.displayNeverAttached
         }
-
-        guard virtualScreen != nil else { throw BridgeError.displayNeverAttached }
 
         let lease = Lease(
             id: UUID(),
             reason: reason,
             expiresAt: ContinuousClock().now.advanced(by: duration),
         )
-        activeLease = lease
-        scheduleExpiry(after: duration)
+        leases[lease.id] = lease
+        expiryTasks[lease.id] = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            self?.release(lease)
+        }
         return lease
     }
 
-    /// Releases the lease and tears the display down if we own it.
-    func release(_ lease: Lease? = nil) {
-        if let lease, lease.id != activeLease?.id { return }
-        expiryTask?.cancel()
-        expiryTask = nil
-        activeLease = nil
+    /// Gives up one lease. The display goes away only when the last holder lets go.
+    func release(_ lease: Lease) {
+        guard leases.removeValue(forKey: lease.id) != nil else { return }
+        expiryTasks.removeValue(forKey: lease.id)?.cancel()
+        guard leases.isEmpty else { return }
+        teardown()
+    }
 
+    /// Drops every lease. For app termination, where nothing is going to release them.
+    func releaseAll() {
+        leases.removeAll()
+        for task in expiryTasks.values { task.cancel() }
+        expiryTasks.removeAll()
+        teardown()
+    }
+
+    private func teardown() {
+        // Cleared unconditionally: if the display died on us, leaving this set would make a
+        // later release terminate a display the *user* had since started themselves.
+        defer { startedByUs = false }
         // Never close a display the user opened. Theirs is not ours to reclaim.
         guard startedByUs, let application = runningApplication else { return }
         application.terminate()
-        startedByUs = false
-    }
-
-    private func renew(reason: String, duration: Duration) -> Lease {
-        let lease = Lease(
-            id: activeLease?.id ?? UUID(),
-            reason: reason,
-            expiresAt: ContinuousClock().now.advanced(by: duration),
-        )
-        activeLease = lease
-        scheduleExpiry(after: duration)
-        return lease
-    }
-
-    private func scheduleExpiry(after duration: Duration) {
-        expiryTask?.cancel()
-        expiryTask = Task { [weak self] in
-            try? await Task.sleep(for: duration)
-            guard !Task.isCancelled else { return }
-            self?.release()
-        }
     }
 
     // MARK: - Launching
@@ -142,6 +138,9 @@ final class VirtualDisplayBridge {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false  // never steal focus to attach a screen
         _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        // Ownership is claimed the moment the app exists, not after it attaches: the wait below
+        // can throw, and a throw in between would strand a display nobody believes they own.
+        startedByUs = true
 
         // Wait for the screen to actually register: launching is not attaching.
         let deadline = ContinuousClock().now.advanced(by: Constants.attachTimeout)
