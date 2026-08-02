@@ -219,3 +219,19 @@ register — launching is not attaching.
 The agent loop (Claude Code owns it), a scripting DSL (the CLI is the DSL), cloud anything,
 cross-platform, and Mac App Store distribution — the required entitlements make MAS impossible,
 so this ships direct + homebrew cask like Adrafinil.
+
+**Explicitly declined: unlocking the machine.** Disassembly of Codex's shipped implementation
+shows `allow_locked_computer_use` is not "keep working while locked" — it is a full auto-unlock
+system. A `CUALockScreenGuardian` detects the lock, clicks the reveal prompt through
+accessibility, types the user's credentials, and presses Return; it is gated by a SecurityAgent
+authorization plugin installed into `/Library/Security/SecurityAgentPlugins/`, and their
+installer runs as root to **rewrite the `system.login.screensaver` right in the system
+authorization database**.
+
+Rocuronium will not do any of this: no credential entry, no SecurityAgent plugin, no
+modification of the authorization database, no root installer. The capability it would buy is
+one we already have without it — we measured that a locked session with an awake display
+exposes full accessibility trees, so the engine already works through a lock. What auto-unlock
+adds is the ability to defeat the lock a human deliberately engaged, and a lock that software
+can talk its way past is not a lock. If unattended work needs the screen unlocked, that is the
+user's decision to make in advance, not ours to make on their behalf at 4 a.m.
