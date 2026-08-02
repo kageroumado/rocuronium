@@ -107,6 +107,15 @@ nonisolated struct AXElement {
         ((attribute(kAXWindowsAttribute) as? [AXUIElement]) ?? []).map(AXElement.init)
     }
 
+    /// The window the app considers primary, which is a better default target than
+    /// `windows.first` — that ordering is arbitrary and can surface a palette or an
+    /// inspector ahead of the document.
+    var mainWindow: AXElement? {
+        guard let window = attribute(kAXMainWindowAttribute),
+              CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(window as! AXUIElement)
+    }
+
     var menuBar: AXElement? {
         guard let bar = attribute(kAXMenuBarAttribute),
               CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
@@ -132,6 +141,16 @@ nonisolated struct AXElement {
     @discardableResult
     func setValue(_ text: String) -> AXError {
         AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, text as CFString)
+    }
+
+    /// Moves an element (in practice: a window) to a point in the same top-left global space
+    /// `frame` reads from. Same rule as `setValue`: the return code is not evidence — the
+    /// window manager is free to clamp or refuse, so callers read the frame back.
+    @discardableResult
+    func setPosition(_ point: CGPoint) -> AXError {
+        var point = point
+        guard let value = AXValueCreate(.cgPoint, &point) else { return .failure }
+        return AXUIElementSetAttributeValue(raw, kAXPositionAttribute as CFString, value)
     }
 
     @discardableResult

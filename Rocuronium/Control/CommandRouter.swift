@@ -1,6 +1,8 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Decodes a JSON request, runs it against the engine, and encodes the reply.
 ///
@@ -31,6 +33,19 @@ final class CommandRouter {
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?
+        /// Subcommand for verbs that have one (`display acquire|release|status`).
+        var action: String?
+        /// Why a virtual display lease is being taken; recorded on the lease.
+        var reason: String?
+        /// Lease duration. The bridge's 30-minute backstop applies when absent.
+        var minutes: Double?
+        /// Lease id to release.
+        var lease: String?
+        /// Where a screenshot should be written. A default under Application Support otherwise.
+        var path: String?
+        /// Region size for screenshots, paired with x/y.
+        var w: Double?
+        var h: Double?
     }
 
     func route(_ data: Data) async -> Data {
@@ -38,7 +53,10 @@ final class CommandRouter {
             let request = try JSONDecoder().decode(Request.self, from: data)
             return encode(try await execute(request))
         } catch {
-            return encode(["ok": false, "error": "\(error)"])
+            // Interpolating a Swift error enum prints its case name ("notInstalled"), which
+            // tells the caller nothing; the description written for humans is the reply.
+            let description = (error as? any LocalizedError)?.errorDescription ?? "\(error)"
+            return encode(["ok": false, "error": description])
         }
     }
 
@@ -52,6 +70,9 @@ final class CommandRouter {
         case "find": try await find(request)
         case "type": try await typeCommand(request)
         case "click": try await act(request, action: .click)
+        case "display": try await display(request)
+        case "park": try await park(request)
+        case "screenshot": try await screenshot(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
     }
@@ -190,6 +211,185 @@ final class CommandRouter {
         ]
     }
 
+    // MARK: - Virtual display
+
+    /// Lease lifecycle over the socket. Leases are explicit on purpose: an agent that wants a
+    /// display asks for one, gets an id, and gives it back — the display is never a silent
+    /// side effect of some other command, because a stray virtual screen is confusing and
+    /// whoever left it running should be findable in the lease's reason.
+    private func display(_ request: Request) async throws -> [String: Any] {
+        switch request.action {
+        case "acquire":
+            let lease: VirtualDisplayBridge.Lease
+            if let minutes = request.minutes, minutes > 0 {
+                lease = try await virtualDisplay.acquire(
+                    reason: request.reason ?? "socket client",
+                    duration: .seconds(minutes * 60),
+                )
+            } else {
+                lease = try await virtualDisplay.acquire(reason: request.reason ?? "socket client")
+            }
+            var reply: [String: Any] = [
+                "ok": true,
+                "lease": lease.id.uuidString,
+                "summary": "virtual display leased (\(lease.reason))",
+            ]
+            if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
+            return reply
+
+        case "release":
+            guard let id = request.lease.flatMap(UUID.init(uuidString:)) else {
+                return ["ok": false, "error": "'display release' requires --lease <id> from acquire"]
+            }
+            guard virtualDisplay.release(id: id) else {
+                return ["ok": false, "error": "no outstanding lease \(id.uuidString) — already released or expired"]
+            }
+            let holders = virtualDisplay.leases.count
+            return [
+                "ok": true,
+                "leasesRemaining": holders,
+                "summary": holders == 0
+                    ? "released; no holders remain, display torn down (if it was ours)"
+                    : "released; \(holders) other holder(s) keep the display up",
+            ]
+
+        case "status", nil:
+            var reply: [String: Any] = [
+                "ok": true,
+                "installed": virtualDisplay.isInstalled,
+                "running": virtualDisplay.isRunning,
+                "leases": virtualDisplay.leases.values.map {
+                    ["id": $0.id.uuidString, "reason": $0.reason] as [String: Any]
+                },
+                "summary": virtualDisplay.isRunning
+                    ? "running · \(virtualDisplay.leases.count) lease(s)"
+                    : (virtualDisplay.isInstalled ? "installed, not running" : "Test Display.app is not installed"),
+            ]
+            if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
+            return reply
+
+        default:
+            return ["ok": false, "error": "unknown display action '\(request.action ?? "")' — use acquire, release, or status"]
+        }
+    }
+
+    /// Moves an app's primary window — onto the virtual display by default, or to an explicit
+    /// point (which is also how a caller puts a window back where it found it: `park` replies
+    /// carry the window's previous position).
+    private func park(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let destination: CGPoint
+        if let x = request.x, let y = request.y {
+            destination = CGPoint(x: x, y: y)
+        } else if let bounds = virtualDisplay.virtualScreenBounds {
+            // Inset from the corner so the title bar is reachable even if the display's
+            // menu bar overlaps its top edge.
+            destination = CGPoint(x: bounds.origin.x + 40, y: bounds.origin.y + 40)
+        } else {
+            return [
+                "ok": false,
+                "error": "no virtual display is attached — run 'display acquire' first, or pass --x/--y for an explicit destination",
+            ]
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        let move = try await engine.moveWindow(pid: pid, to: destination)
+
+        var reply: [String: Any] = [
+            "ok": move.landed,
+            "window": move.window,
+            "requested": ["x": move.requestedX, "y": move.requestedY],
+            "summary": move.landed
+                ? "moved '\(move.window)' to (\(Int(move.requestedX)), \(Int(move.requestedY)))"
+                : (move.moved
+                    ? "window moved but not to the requested point — the window manager clamped it"
+                    : "window did not move"),
+            "presence": presenceBlock(),
+        ]
+        if let before = move.before { reply["before"] = block(for: before) }
+        if let after = move.after { reply["after"] = block(for: after) }
+        return reply
+    }
+
+    // MARK: - Screenshots
+
+    /// The default vision backend made concrete: capture pixels and hand them to the caller,
+    /// whose own model does the looking. Captures the app's primary window when `--app` is
+    /// given, an explicit region when x/y/w/h are, and the main display otherwise.
+    private func screenshot(_ request: Request) async throws -> [String: Any] {
+        guard ScreenCapture.isPermitted else {
+            return [
+                "ok": false,
+                "error": "Screen Recording is not granted — run 'request-capture', or approve Rocuronium in System Settings",
+            ]
+        }
+
+        // An app capture goes through the window filter, not a region of the display: a region
+        // returns whatever is *topmost* there, and an occluded window would be captured as
+        // someone else's pixels at exactly the right size — a correct-looking wrong answer.
+        if request.app != nil {
+            let pid = try resolve(request)
+            let frame = try await engine.windowFrame(pid: pid)
+            let capture = try await ScreenCapture.windowImage(
+                ownedBy: pid,
+                near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
+            )
+            let url = try writePNG(capture.image, to: request.path)
+            return [
+                "ok": true,
+                "path": url.path,
+                "width": capture.image.width,
+                "height": capture.image.height,
+                "window": capture.windowTitle,
+                "rect": block(for: capture.windowFrame),
+                "summary": "captured window '\(capture.windowTitle)' "
+                    + "(\(capture.image.width)x\(capture.image.height) px) to \(url.path)",
+                "presence": presenceBlock(),
+            ]
+        }
+
+        let rect: CGRect = if let x = request.x, let y = request.y, let w = request.w, let h = request.h {
+            CGRect(x: x, y: y, width: w, height: h)
+        } else {
+            CGDisplayBounds(CGMainDisplayID())
+        }
+        guard let image = try await ScreenCapture.image(of: rect) else {
+            return ["ok": false, "error": "the capture region is degenerate (\(rect))"]
+        }
+        let url = try writePNG(image, to: request.path)
+        return [
+            "ok": true,
+            "path": url.path,
+            "width": image.width,
+            "height": image.height,
+            "rect": block(for: rect),
+            "summary": "captured \(image.width)x\(image.height) px to \(url.path)",
+            "presence": presenceBlock(),
+        ]
+    }
+
+    private func writePNG(_ image: CGImage, to explicitPath: String?) throws -> URL {
+        let url: URL
+        if let explicitPath {
+            url = URL(fileURLWithPath: (explicitPath as NSString).expandingTildeInPath)
+        } else {
+            let directory = URL.applicationSupportDirectory
+                .appending(path: "glass.kagerou.rocuronium")
+                .appending(path: "captures")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            url = directory.appending(path: "capture-\(UUID().uuidString).png")
+        }
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil,
+        ) else { throw RouterError.captureWriteFailed(url.path) }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw RouterError.captureWriteFailed(url.path)
+        }
+        return url
+    }
+
     // MARK: - Resolution
 
     private func resolve(_ request: Request) throws -> pid_t {
@@ -202,6 +402,14 @@ final class CommandRouter {
         return match.processIdentifier
     }
 
+
+    private func block(for rect: CGRect) -> [String: Any] {
+        ["x": rect.origin.x, "y": rect.origin.y, "w": rect.width, "h": rect.height]
+    }
+
+    private func block(for frame: Engine.ElementDescriptor.Frame) -> [String: Any] {
+        ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
+    }
 
     private func presenceBlock() -> [String: Any] {
         let presence = UserPresence.read()
@@ -221,6 +429,7 @@ final class CommandRouter {
         case missingApp
         case appNotRunning(String)
         case ambiguous(String, [String])
+        case captureWriteFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -228,6 +437,7 @@ final class CommandRouter {
             case let .appNotRunning(name): "'\(name)' is not running."
             case let .ambiguous(query, candidates):
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
+            case let .captureWriteFailed(path): "Could not write the capture to \(path)."
             }
         }
     }

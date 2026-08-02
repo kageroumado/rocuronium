@@ -214,6 +214,18 @@ Test Display exposes no URL scheme or CLI, so the bridge launches and terminates
 (`glass.kagerou.testdisplay`) with `activates = false`, then waits for the screen to actually
 register — launching is not attaching.
 
+Over the socket this is three verbs. `display acquire|release|status` manages leases — always
+explicit, never a side effect of another command, so a stray virtual screen is traceable to a
+lease's recorded reason. `park --app` moves an app's primary window onto the virtual screen
+(or to `--x/--y`, which is also the undo: the reply carries the window's previous position),
+with the landing read back as evidence because the window manager may clamp or refuse.
+`screenshot` is the default vision backend made concrete — capture and hand the pixels to the
+calling model. An `--app` capture uses `SCContentFilter(desktopIndependentWindow:)`, never a
+region of the display: a region returns whatever is topmost there, and an occluded window
+would be captured as someone else's pixels at exactly the right size (measured; see
+`Docs/REVIEW-2026-08-02.md` §15). Region and full-display captures keep visible-pixel
+semantics, which is the right question for a diff.
+
 ## 11. Non-goals
 
 The agent loop (Claude Code owns it), a scripting DSL (the CLI is the DSL), cloud anything,

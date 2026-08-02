@@ -48,6 +48,29 @@ actor Engine {
         let cacheMisses: Int
     }
 
+    /// The evidence for a window move: where it was asked to go, where it was, and where it
+    /// actually landed. `setPosition`'s return code is not part of this on purpose — the
+    /// window manager may clamp or refuse, and only the read-back knows.
+    struct WindowMove: Sendable {
+        let window: String
+        let requestedX: Double
+        let requestedY: Double
+        let before: ElementDescriptor.Frame?
+        let after: ElementDescriptor.Frame?
+
+        /// Within a couple of points of the request. Exact equality would fail on apps that
+        /// snap their own geometry, and a 2 pt snap is still "it went where we sent it".
+        var landed: Bool {
+            guard let after else { return false }
+            return abs(after.x - requestedX) <= 2 && abs(after.y - requestedY) <= 2
+        }
+
+        var moved: Bool {
+            guard let before, let after else { return false }
+            return before.x != after.x || before.y != after.y
+        }
+    }
+
     enum EngineError: LocalizedError, Sendable {
         case cannotSee
         case notFound(String)
@@ -92,7 +115,45 @@ actor Engine {
         )
     }
 
+    /// The frame of the app's primary window, for aiming a capture at it.
+    func windowFrame(pid: pid_t) throws -> ElementDescriptor.Frame {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let application = AXElement(pid: pid)
+        guard let window = application.mainWindow ?? application.windows.first,
+              let frame = window.frame
+        else { throw EngineError.notFound("a window with a frame for pid \(pid)") }
+        return .init(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
+    }
+
     // MARK: - Actuation
+
+    /// Moves the app's primary window and reads its frame back as evidence.
+    func moveWindow(pid: pid_t, to point: CGPoint) async throws -> WindowMove {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let application = AXElement(pid: pid)
+        guard let window = application.mainWindow ?? application.windows.first else {
+            throw EngineError.notFound("a window for pid \(pid)")
+        }
+
+        let before = window.frame
+        window.setPosition(point)
+        var after = window.frame
+        // Some apps apply geometry asynchronously; one short re-read distinguishes "slow"
+        // from "refused" without turning this into a poll loop.
+        if after?.origin != point {
+            try? await Task.sleep(for: .milliseconds(150))
+            after = window.frame
+        }
+
+        cache.invalidate(pid: pid)  // every cached frame for this process just moved
+        return WindowMove(
+            window: window.label,
+            requestedX: point.x,
+            requestedY: point.y,
+            before: before.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
+            after: after.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
+        )
+    }
 
     func act(
         pid: pid_t,
