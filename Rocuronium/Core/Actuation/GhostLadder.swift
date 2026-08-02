@@ -16,7 +16,7 @@ nonisolated struct GhostLadder {
         self.allowHardwareInput = allowHardwareInput
     }
 
-    enum Action {
+    enum Action: Sendable {
         case setText(String)
         case click
         case press

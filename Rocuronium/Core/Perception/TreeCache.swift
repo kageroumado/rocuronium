@@ -11,7 +11,10 @@ import Foundation
 /// a timer alone, entries carry a cheap **fingerprint** — a handful of O(1) accessibility reads
 /// — that is re-taken on every hit. If the fingerprint moved, the app's UI moved, and the walk
 /// is redone.
-actor TreeCache {
+/// Owned exclusively by `Engine`, which is an actor, so this needs no isolation of its own —
+/// a second actor here would only add hops. `nonisolated` because the module defaults to
+/// main-actor isolation and this must run wherever the engine runs.
+nonisolated final class TreeCache {
     private enum Constants {
         /// Even a matching fingerprint expires: a tree can change without moving focus,
         /// window count, or the frontmost window's title.

@@ -15,7 +15,8 @@ final class CommandRouter {
     /// tell at a glance whether an agent currently has hands.
     private(set) var isDriving = false
 
-    private let cache = TreeCache()
+    /// All accessibility work happens here, off the main actor. See `Engine`.
+    private let engine = Engine()
     private let virtualDisplay = VirtualDisplayBridge()
 
     struct Request: Decodable {
@@ -96,6 +97,7 @@ final class CommandRouter {
             "bundlePath": Bundle.main.bundlePath,
             "axTrusted": AXIsProcessTrusted(),
             "screenCapturePreflight": ScreenCapture.isPermitted,
+            "engineOffMainThread": await engine.runsOffMainThread(),
         ]
         do {
             let image = try await ScreenCapture.image(of: CGRect(x: 0, y: 0, width: 16, height: 16))
@@ -106,59 +108,16 @@ final class CommandRouter {
         return report
     }
 
-    private func find(_ request: Request) async throws -> [String: Any] {
-        let pid = try resolve(request)
-
-        // "Nothing found" and "I cannot see" are different answers, and only one of them means
-        // the app has no such element. Refuse to imply the first while the display is asleep.
-        guard DisplayWake.perceptionIsReliable else {
-            return [
-                "ok": false,
-                "error": "the display is asleep — every accessibility tree is degenerate right now, so this would report nothing found when nothing can be seen",
-                "canSee": false,
-                "presence": presenceBlock(),
-            ]
-        }
-
-        // Chromium builds its tree lazily; ask once, cheap and harmless elsewhere.
-        AXElement(pid: pid).enableManualAccessibility()
-
-        let live = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
-        await cache.evictDeadProcesses(livePIDs: live)
-
-        let query = request.label
-        let key = "find:\(query ?? "*")"
-        let results = await cache.results(for: pid, key: key) {
-            if let query { ElementQuery.named(query, pid: pid) } else { ElementQuery.editables(pid: pid) }
-        }
-        let matches = results.matches.prefix(20).map { match in
-            [
-                "role": match.element.role,
-                "label": match.element.label,
-                "value": match.element.value ?? "",
-                "depth": match.depth,
-                "frame": match.element.frame.map {
-                    ["x": $0.origin.x, "y": $0.origin.y, "w": $0.width, "h": $0.height]
-                } ?? [:],
-            ] as [String: Any]
-        }
-        return [
-            "ok": true,
-            "matches": matches,
-            "truncated": results.truncated,
-            "elementsVisited": results.elementsVisited,
-            "canSee": true,
-            "cache": await { let s = await cache.statistics; return ["hits": s.hits, "misses": s.misses] }(),
-            "presence": presenceBlock(),
-        ]
-    }
-
     /// `type` is the one verb that can destroy or send something, so its guards live here.
     private func typeCommand(_ request: Request) async throws -> [String: Any] {
         // Absent text is not the same as empty text. Defaulting to "" would silently clear the
         // field — an unrecoverable write — for a request that simply forgot an argument.
         guard let text = request.text else {
-            return ["ok": false, "error": "'type' requires text; pass an empty string explicitly to clear a field", "presence": presenceBlock()]
+            return [
+                "ok": false,
+                "error": "'type' requires text; pass an empty string explicitly to clear a field",
+                "presence": presenceBlock(),
+            ]
         }
         // A newline in a composer submits. Refuse control characters unless asked plainly.
         if request.submit != true, text.contains(where: { $0.isNewline || $0 == "\t" }) {
@@ -171,17 +130,50 @@ final class CommandRouter {
         return try await act(request, action: .setText(text))
     }
 
+    private func find(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let outcome = try await engine.find(pid: pid, query: request.label)
+        return [
+            "ok": true,
+            "matches": outcome.elements.map { element -> [String: Any] in
+                var row: [String: Any] = [
+                    "role": element.role,
+                    "label": element.label,
+                    "value": element.value,
+                    "depth": element.depth,
+                ]
+                if let frame = element.frame {
+                    row["frame"] = ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
+                }
+                return row
+            },
+            "truncated": outcome.truncated,
+            "elementsVisited": outcome.elementsVisited,
+            "canSee": true,
+            "cache": ["hits": outcome.cacheHits, "misses": outcome.cacheMisses],
+            "presence": presenceBlock(),
+        ]
+    }
+
     private func act(_ request: Request, action: GhostLadder.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
-        guard let element = try locate(request, pid: pid) else {
-            return ["ok": false, "error": "no element matched", "presence": presenceBlock()]
+        // A coordinate is answered by a hit-test and a label by a search; neither falls back to
+        // the other, so the caller always knows which mechanism replied.
+        let locator: Engine.Locator = if let x = request.x, let y = request.y {
+            .point(x: x, y: y)
+        } else if let label = request.label {
+            .named(label)
+        } else {
+            .focused
         }
-        let ladder = GhostLadder(allowHardwareInput: request.allowHardwareInput ?? false)
+
         isDriving = true
-        let evidence = await ladder.perform(action, on: element, pid: pid)
-        isDriving = false
-        // The interface just changed; anything cached about this process is now suspect.
-        await cache.invalidate(pid: pid)
+        defer { isDriving = false }
+        let evidence = try await engine.act(
+            pid: pid, locator: locator, action: action,
+            allowHardwareInput: request.allowHardwareInput ?? false,
+        )
+
         return [
             "ok": evidence.succeeded,
             "verdict": evidence.verdict.rawValue,
@@ -210,21 +202,6 @@ final class CommandRouter {
         return match.processIdentifier
     }
 
-    /// A coordinate resolves by hit-test; a label resolves by search; neither falls back to
-    /// the other, so a caller always knows which one answered.
-    private func locate(_ request: Request, pid: pid_t) throws -> AXElement? {
-        if let x = request.x, let y = request.y {
-            return ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid)
-        }
-        guard let label = request.label else { return ElementQuery.focused(pid: pid) }
-        let matches = ElementQuery.named(label, pid: pid).matches
-        // Matching is by substring, so "delete" can name several controls. Acting on whichever
-        // sorted first would be a coin flip on a possibly destructive button.
-        guard matches.count <= 1 else {
-            throw RouterError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
-        }
-        return matches.first?.element
-    }
 
     private func presenceBlock() -> [String: Any] {
         let presence = UserPresence.read()
