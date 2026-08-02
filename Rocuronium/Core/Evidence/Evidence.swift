@@ -48,9 +48,24 @@ nonisolated struct Evidence: Codable, Sendable {
     /// visible instead of silent.
     let attempts: [Attempt]
 
+    /// Where to go when no rung can reach the target. Rung 3 is a signpost, not an adapter:
+    /// web page content needs the browser's own protocol, and the calling agent — which has
+    /// the task context and the launch flags — is the one who can use it. Set only when the
+    /// ladder was exhausted on a target it recognizes as unreachable.
+    let referral: Referral?
+
     struct Attempt: Codable, Sendable {
         let rung: Rung
         let outcome: String
+    }
+
+    struct Referral: Codable, Sendable {
+        /// The protocol that can reach this target: "refrax-ctl", "cdp", "safari-js", …
+        let channel: String
+        /// Why the ghost rungs cannot.
+        let reason: String
+        /// The concrete next move, written for the agent on the other end of the socket.
+        let advice: String
     }
 
     var succeeded: Bool { verdict == .confirmed }
@@ -86,7 +101,7 @@ nonisolated struct Evidence: Codable, Sendable {
             focusBefore: focusBefore, focusAfter: focusAfter,
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
-            attempts: attempts,
+            attempts: attempts, referral: referral,
         )
     }
 

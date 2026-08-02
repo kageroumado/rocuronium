@@ -197,6 +197,12 @@ default:
     if let attempts = reply["attempts"] as? [[String: Any]] {
         for attempt in attempts { print("  · \(attempt["rung"] ?? "?"): \(attempt["outcome"] ?? "")") }
     }
+    // The referral is the actionable part of a failure on web content: it names the channel
+    // that can reach what the ghost rungs cannot.
+    if let referral = reply["referral"] as? [String: Any] {
+        print("→ \(referral["reason"] ?? "unreachable")")
+        print("→ use \(referral["channel"] ?? "?"): \(referral["advice"] ?? "")")
+    }
 }
 
 exit(reply["ok"] as? Bool == true ? 0 : 1)

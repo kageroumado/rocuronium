@@ -195,7 +195,7 @@ final class CommandRouter {
             allowHardwareInput: request.allowHardwareInput ?? false,
         )
 
-        return [
+        var reply: [String: Any] = [
             "ok": evidence.succeeded,
             "verdict": evidence.verdict.rawValue,
             "rung": evidence.rung.rawValue,
@@ -209,6 +209,14 @@ final class CommandRouter {
             "attempts": evidence.attempts.map { ["rung": $0.rung.rawValue, "outcome": $0.outcome] },
             "presence": presenceBlock(),
         ]
+        if let referral = evidence.referral {
+            reply["referral"] = [
+                "channel": referral.channel,
+                "reason": referral.reason,
+                "advice": referral.advice,
+            ]
+        }
+        return reply
     }
 
     // MARK: - Virtual display

@@ -95,9 +95,16 @@ nonisolated struct GhostLadder {
             )
         }
 
-        // Rung 3 (app automation) is delegated to the target adapters: WebKit and Chromium page
-        // content cannot be reached by OS input at all, and needs the app's own protocol.
-        attempts.append(.init(rung: .appAutomation, outcome: "no adapter for this target"))
+        // Rung 3 — a referral, not an adapter. Web page content is the one surface OS input
+        // cannot reach at all, and the channel that can (refrax-ctl, CDP, Safari's own
+        // scripting) belongs to the calling agent, which holds the task context and the
+        // launch flags. The honest move is structured evidence naming that channel.
+        let referral = WebContent.referral(for: element, pid: pid)
+        attempts.append(.init(
+            rung: .appAutomation,
+            outcome: referral.map { "unreachable by OS input — refer to \($0.channel)" }
+                ?? "no adapter for this target",
+        ))
 
         // Rung 4 — the cursor-stealing path. Never silent, never implicit.
         guard allowHardwareInput else {
@@ -107,14 +114,14 @@ nonisolated struct GhostLadder {
             return await finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
-                cursorBefore, frontBefore, attempts, pid,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
             ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element))
         }
         attempts.append(.init(rung: .hardwareInput, outcome: "not implemented — no hardware-input path exists yet"))
         return await finish(
             action, element, .hardwareInput, .unverifiable, nil, nil,
             focusBefore, ElementQuery.focused(pid: pid)?.signature,
-            cursorBefore, frontBefore, attempts, pid,
+            cursorBefore, frontBefore, attempts, pid, referral: referral,
         )
     }
 
@@ -283,7 +290,8 @@ nonisolated struct GhostLadder {
         _ verdict: Evidence.Verdict, _ readback: String?, _ pixelDelta: Double?,
         _ focusBefore: String?, _ focusAfter: String?,
         _ cursorBefore: CGPoint, _ frontBefore: String,
-        _ attempts: [Evidence.Attempt], _ pid: pid_t
+        _ attempts: [Evidence.Attempt], _ pid: pid_t,
+        referral: Evidence.Referral? = nil
     ) async -> Evidence {
         let cursorAfter = EventPoster.cursorLocation
         let moved = hypot(cursorAfter.x - cursorBefore.x, cursorAfter.y - cursorBefore.y) >= 1
@@ -304,6 +312,7 @@ nonisolated struct GhostLadder {
             frontmostChanged: frontAfter != frontBefore,
             frontmostBecameTarget: frontAfter != frontBefore && frontAfter == targetBundle,
             attempts: attempts,
+            referral: referral,
         )
     }
 }
