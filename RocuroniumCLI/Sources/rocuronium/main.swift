@@ -18,13 +18,20 @@ let usage = """
 rocuronium — drive this Mac without taking the cursor
 
   rocuronium status
-  rocuronium find   --app <name> [--label <text>]
-  rocuronium type   --app <name> --text <text> [--label <text>]
-  rocuronium click  --app <name> [--label <text>] [--x <n> --y <n>]
+  rocuronium find       --app <name> [--label <text>]
+  rocuronium type       --app <name> --text <text> [--label <text>]
+  rocuronium click      --app <name> [--label <text>] [--x <n> --y <n>]
+  rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
+  rocuronium park       --app <name> [--x <n> --y <n>]
+  rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
 
 Options:
   --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
   --json                   print the raw reply
+
+'display' leases the headless virtual screen; 'park' moves an app's window onto it (or to an
+explicit point — the reply carries the previous position, which is how you put it back).
+'screenshot' hands the pixels to you, the caller: your model does the looking.
 
 Every reply reports whether a human is present; hardware input stays off unless asked for.
 """
@@ -45,10 +52,15 @@ func value(for flag: String) -> String? {
 }
 
 var payload: [String: Any] = ["command": command]
-for flag in ["app", "label", "text"] {
+// `display` takes a positional subcommand: `rocuronium display acquire`.
+if command == "display", let action = arguments.first, !action.hasPrefix("-") {
+    payload["action"] = action
+    arguments.removeFirst()
+}
+for flag in ["app", "label", "text", "reason", "lease", "path"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
-for flag in ["x", "y"] {
+for flag in ["x", "y", "w", "h", "minutes"] {
     if let found = value(for: flag), let number = Double(found) { payload[flag] = number }
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
@@ -147,6 +159,28 @@ case "find":
     }
     print("\n\(matches.count) shown · \(reply["elementsVisited"] ?? 0) elements visited"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
+
+case "display":
+    print(reply["summary"] as? String ?? "done")
+    // The lease id is the one thing the caller must keep; print it where a script can grab it.
+    if let lease = reply["lease"] as? String { print("lease \(lease)") }
+    for lease in reply["leases"] as? [[String: Any]] ?? [] {
+        print("  · \(lease["id"] ?? "?")  (\(lease["reason"] ?? ""))")
+    }
+    if let screen = reply["screen"] as? [String: Any] {
+        print("screen @(\(Int(screen["x"] as? Double ?? 0)),\(Int(screen["y"] as? Double ?? 0))) "
+            + "\(Int(screen["w"] as? Double ?? 0))x\(Int(screen["h"] as? Double ?? 0)) pt")
+    }
+
+case "park":
+    print(reply["summary"] as? String ?? "done")
+    // The previous position is the undo: `park --x --y` with these numbers puts it back.
+    if let before = reply["before"] as? [String: Any] {
+        print("was @(\(Int(before["x"] as? Double ?? 0)),\(Int(before["y"] as? Double ?? 0)))")
+    }
+
+case "screenshot":
+    print(reply["path"] as? String ?? "done")
 
 default:
     print(reply["summary"] as? String ?? "done")

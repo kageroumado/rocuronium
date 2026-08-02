@@ -67,6 +67,18 @@ final class VirtualDisplayBridge {
         return NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains("Test Display") }
     }
 
+    /// The virtual screen's bounds in the top-left-origin global space that AX frames and
+    /// synthetic events use. `NSScreen.frame` is in Cocoa's bottom-left space; going through
+    /// the display ID to `CGDisplayBounds` gets the flip right instead of doing it by hand.
+    var virtualScreenBounds: CGRect? {
+        guard let screen = virtualScreen,
+              let number = screen.deviceDescription[
+                  NSDeviceDescriptionKey("NSScreenNumber")
+              ] as? NSNumber
+        else { return nil }
+        return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+    }
+
     // MARK: - Lease lifecycle
 
     /// Ensures a virtual display exists and returns a lease for it.
@@ -104,6 +116,15 @@ final class VirtualDisplayBridge {
             self?.release(lease)
         }
         return lease
+    }
+
+    /// Release by id, for callers on the far side of the socket who hold a string, not a
+    /// `Lease`. Returns whether the id named an outstanding lease.
+    @discardableResult
+    func release(id: UUID) -> Bool {
+        guard let lease = leases[id] else { return false }
+        release(lease)
+        return true
     }
 
     /// Gives up one lease. The display goes away only when the last holder lets go.
