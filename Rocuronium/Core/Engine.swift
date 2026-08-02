@@ -221,8 +221,28 @@ actor Engine {
         allowHardwareInput: Bool
     ) async throws -> Evidence {
         let element = try resolve(locator, pid: pid)
+        // How the ladder recovers when the handle dies mid-action (Electron rebuilds elements
+        // on focus): re-run the *original* locator and accept the answer only when its role
+        // matches what we were acting on. An equivalent element is a guess — Codex's own
+        // implementation concedes uniqueness cannot be guaranteed — so the guess is taken
+        // only for a provably dead handle, never to paper over a surprising read.
+        let originalRole = element.role
+        let refetch: () -> AXElement? = {
+            switch locator {
+            case .focused:
+                let candidate = ElementQuery.focused(pid: pid)
+                return candidate?.role == originalRole ? candidate : nil
+            case let .point(x, y):
+                let candidate = ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid)
+                return candidate?.role == originalRole ? candidate : nil
+            case let .named(label):
+                let matches = ElementQuery.named(label, pid: pid).matches
+                guard matches.count == 1, matches[0].element.role == originalRole else { return nil }
+                return matches[0].element
+            }
+        }
         let ladder = GhostLadder(allowHardwareInput: allowHardwareInput)
-        let evidence = await ladder.perform(action, on: element, pid: pid)
+        let evidence = await ladder.perform(action, on: element, pid: pid, refetch: refetch)
         // The interface just changed; anything cached about this process is now suspect.
         cache.invalidate(pid: pid)
         return evidence
