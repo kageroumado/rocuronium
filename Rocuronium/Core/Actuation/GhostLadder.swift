@@ -114,8 +114,11 @@ nonisolated struct GhostLadder {
             }
             try? await Task.sleep(for: .milliseconds(250))
             let readback = element.value
+            // An empty probe would "match" anything, so a cleared field must be verified by
+            // emptiness rather than by containment.
+            let landed = text.isEmpty ? (readback?.isEmpty ?? false) : (readback?.contains(text) == true)
             // The WebKit case: the write reported success and changed nothing.
-            guard readback?.contains(text) == true else {
+            guard landed else {
                 attempts.append(.init(rung: .accessibility, outcome: "reported success, read-back unchanged"))
                 return nil
             }
@@ -167,7 +170,8 @@ nonisolated struct GhostLadder {
             // Re-resolve through the focused element: in Electron the composer only becomes
             // reachable once it holds focus, so the original handle can be stale.
             let landed = ElementQuery.focused(pid: pid)?.value ?? element.value
-            guard landed?.contains(text) == true else {
+            let arrived = text.isEmpty ? (landed?.isEmpty ?? false) : (landed?.contains(text) == true)
+            guard arrived else {
                 attempts.append(.init(rung: .postedEvent, outcome: "posted, did not land in target"))
                 return nil
             }

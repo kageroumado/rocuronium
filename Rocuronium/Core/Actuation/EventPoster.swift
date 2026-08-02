@@ -18,6 +18,8 @@ nonisolated enum EventPoster {
     /// carrying only a virtual keycode are silently ignored by Electron apps, which is why
     /// `sendKey` cannot be used for editing operations there — see `GhostLadder`.
     static func type(_ text: String, pid: pid_t) async {
+        // Our own events reset HIDIdleTime; record them so presence is not fooled by us.
+        InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
         for scalar in text.unicodeScalars {
             var unit = UniChar(scalar.value)
@@ -37,6 +39,7 @@ nonisolated enum EventPoster {
     /// Works for AppKit targets. **Does not work for Electron** — measured: Backspace and
     /// Cmd+A posted to Discord had no effect whatsoever while unicode text worked.
     static func sendKey(_ keyCode: CGKeyCode, modifiers: CGEventFlags = [], pid: pid_t) async {
+        InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
@@ -51,6 +54,7 @@ nonisolated enum EventPoster {
     /// Clicks a screen point inside one process. The pointer is not moved: the coordinate
     /// rides on the event itself.
     static func click(at point: CGPoint, pid: pid_t) async {
+        InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
         guard let down = CGEvent(
             mouseEventSource: source, mouseType: .leftMouseDown,
