@@ -97,10 +97,25 @@ nonisolated struct Evidence: Codable, Sendable {
     /// action is stronger evidence than pixels, and must not be overridden by an unrelated
     /// animation somewhere in the same rectangle.
     func addingVisualEvidence(delta: Double?) -> Evidence {
-        guard verdict == .unverifiable, let delta else { return self }
+        guard verdict != .confirmed, let delta else { return self }
+        // `.noEffect` participates too, and it must: the ladder's fall-through paths assert
+        // no-effect while holding a capture, which is exactly where the pixels are the only
+        // signal left. The previous guard admitted only `.unverifiable`, so those call sites
+        // captured a baseline, diffed it, and discarded the answer — the fix recorded as
+        // item 11 in the review was inert from the day it was written.
+        //
+        // A well-evidenced `.noEffect` is only ever overturned by a *strong* signal, never
+        // softened to `.unverifiable` by a caret blink: read-back that refuted the action is
+        // better evidence than a mid-band flicker in the same rectangle.
+        let visual = Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta)
+        let resolved: Verdict = if verdict == .noEffect {
+            visual == .confirmed ? .confirmed : .noEffect
+        } else {
+            visual
+        }
         return Evidence(
             action: action, target: target, rung: rung,
-            verdict: Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta),
+            verdict: resolved,
             readback: readback, pixelDelta: delta,
             focusBefore: focusBefore, focusAfter: focusAfter,
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
