@@ -21,7 +21,7 @@ struct RocuroniumApp: App {
 @MainActor
 @Observable
 final class EngineHost {
-    private(set) var isDriving = false
+    var isDriving: Bool { router.isDriving }
     private(set) var startupError: String?
     private(set) var presence = UserPresence.read()
 

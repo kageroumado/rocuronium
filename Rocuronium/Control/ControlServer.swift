@@ -22,6 +22,8 @@ final class ControlServer {
         static let socketPermissions: mode_t = 0o600
         /// Generous: a deep walk of a large Electron tree legitimately takes over a second.
         static let replyTimeout: TimeInterval = 30
+        /// A connected client gets this long to actually send its request.
+        static let readTimeout: TimeInterval = 10
     }
 
     static var socketPath: String {
@@ -117,6 +119,10 @@ final class ControlServer {
             }
             var on: Int32 = 1
             setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            // Without this, a client that connects and sends nothing blocks the single accept
+            // thread in read() forever, and every later request — CLI or MCP — hangs with it.
+            var timeout = timeval(tv_sec: Int(Constants.readTimeout), tv_usec: 0)
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
             handle(client: client, router: router)
             close(client)
         }
