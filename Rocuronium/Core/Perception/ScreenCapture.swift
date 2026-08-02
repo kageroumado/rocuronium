@@ -35,8 +35,10 @@ nonisolated enum ScreenCapture {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true,
         )
+        // No fallback to displays.first: a window on another Space, or a stale offscreen AX
+        // frame, would otherwise be captured from display 0 at negative coordinates and return
+        // unrelated pixels — which then feed the verdict as if they meant something.
         guard let display = content.displays.first(where: { $0.frame.intersects(rect) })
-            ?? content.displays.first
         else { throw CaptureError.noDisplayContains(rect) }
 
         // sourceRect is relative to the display's own origin, not the global space.

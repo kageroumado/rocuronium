@@ -38,7 +38,12 @@ nonisolated enum UserPresence {
 
         /// Whether the agent may fall back to hardware input — the one rung that takes the
         /// cursor out of a human's hand. Only ever true when nobody is there to lose it.
-        var mayTakeCursor: Bool { state == .away }
+        ///
+        /// Never while the screen is locked. Synthetic keystrokes then go to the login window's
+        /// password field: failed attempts, lockout delays on a FileVault machine, and someone
+        /// who just pressed Ctrl-Cmd-Q standing right there. Hardware input cannot usefully
+        /// reach an app behind the lock screen anyway.
+        var mayTakeCursor: Bool { state == .away && !screenLocked }
 
         /// Whether perception can be trusted at all right now.
         var canSee: Bool { !displayAsleep }
@@ -52,9 +57,13 @@ nonisolated enum UserPresence {
             case .idle:
                 "No input for \(Int(idleSeconds / 60)) minutes, but the session is live. Prefer ghost rungs; a returning user must not find their cursor moving."
             case .away:
-                displayAsleep
-                    ? "Nobody is watching and the display is asleep — wake it before trusting anything you read."
-                    : "Nobody is watching. Hardware input is acceptable if the ghost rungs fail."
+                if screenLocked {
+                    "The screen is locked. Accessibility still works, but do not use hardware input — it would type into the login window."
+                } else if displayAsleep {
+                    "Nobody is watching and the display is asleep — wake it before trusting anything you read."
+                } else {
+                    "Nobody is watching. Hardware input is acceptable if the ghost rungs fail."
+                }
             case .unknown:
                 "Presence unknown; assuming someone is here. Stay on the ghost rungs."
             }

@@ -67,14 +67,22 @@ nonisolated struct GhostLadder {
         // A baseline for visual verification, taken after the wake so it depicts a screen
         // that is actually on. Absent when Screen Recording was never granted, in which case
         // actions without a read-back stay honestly unverifiable.
+        let baselineRect = element.frame
         let baseline = await baselineImage(of: element)
+
+        // Hold the panel awake for the whole action, not just past the initial wake: a long
+        // sequence can outlive the wake and take every accessibility tree down with it.
+        let hold = DisplayWake.Hold(reason: "Rocuronium is driving the interface")
+        defer { hold?.release() }
 
         // Rung 1 — accessibility, then read back. A success code proves nothing.
         if let evidence = await tryAccessibility(
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore,
         ) {
-            return await evidence.addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
+            return await evidence.addingVisualEvidence(
+                delta: pixelDelta(from: baseline, at: baselineRect, of: element),
+            )
         }
 
         // Rung 2 — posted events, delivered to this process only.
@@ -82,7 +90,9 @@ nonisolated struct GhostLadder {
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable,
         ) {
-            return await evidence.addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
+            return await evidence.addingVisualEvidence(
+                delta: pixelDelta(from: baseline, at: baselineRect, of: element),
+            )
         }
 
         // Rung 3 (app automation) is delegated to the target adapters: WebKit and Chromium page
@@ -98,7 +108,7 @@ nonisolated struct GhostLadder {
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element))
         }
         attempts.append(.init(rung: .hardwareInput, outcome: "not implemented — no hardware-input path exists yet"))
         return await finish(
@@ -117,6 +127,7 @@ nonisolated struct GhostLadder {
     ) async -> Evidence? {
         switch action {
         case let .setText(text):
+            let before = element.value
             let code = element.setValue(text)
             guard code == .success else {
                 attempts.append(.init(rung: .accessibility, outcome: "setValue failed (\(code.rawValue))"))
@@ -129,6 +140,22 @@ nonisolated struct GhostLadder {
             let landed = text.isEmpty ? (readback?.isEmpty ?? false) : (readback?.contains(text) == true)
             // The WebKit case: the write reported success and changed nothing.
             guard landed else {
+                // Falling through would type the same text again on top of a write that may
+                // have actually landed — doubling it. Read-back can differ from what we wrote
+                // for innocent reasons: AppKit's smart quotes turn "don't" into "don’t", and
+                // `"don’t".contains("don't")` is false. Only continue if the field is provably
+                // untouched; otherwise report what is actually there.
+                if readback != before {
+                    attempts.append(.init(
+                        rung: .accessibility,
+                        outcome: "value changed but does not match what was written — not retrying, to avoid duplicating it",
+                    ))
+                    return await finish(
+                        action, element, .accessibility, .noEffect, readback, nil,
+                        focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                        cursorBefore, frontBefore, attempts, pid,
+                    )
+                }
                 attempts.append(.init(rung: .accessibility, outcome: "reported success, read-back unchanged"))
                 return nil
             }
@@ -237,10 +264,15 @@ nonisolated struct GhostLadder {
     /// Re-captures the same rectangle and reports how much of it moved. The element is
     /// re-read for its frame because a confirmed action may have resized or moved it; if it
     /// did, the rectangles no longer match and the diff correctly declines to answer.
-    private func pixelDelta(from baseline: CGImage?, of element: AXElement) async -> Double? {
-        guard let baseline, let frame = element.frame,
-              let after = try? await ScreenCapture.image(of: frame)
-        else { return nil }
+    private func pixelDelta(
+        from baseline: CGImage?, at baselineRect: CGRect?, of element: AXElement
+    ) async -> Double? {
+        guard let baseline, let baselineRect, let frame = element.frame else { return nil }
+        // Same size is not the same place. A row that scrolled, or a field shifted by a layout
+        // change, yields two equally-sized captures of *different* regions — which diff as a
+        // large delta and would read as a confident confirmation.
+        guard frame == baselineRect else { return nil }
+        guard let after = try? await ScreenCapture.image(of: frame) else { return nil }
         return ScreenDiff.changedFraction(from: baseline, to: after)
     }
 

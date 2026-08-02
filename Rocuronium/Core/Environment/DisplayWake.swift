@@ -24,6 +24,9 @@ nonisolated enum DisplayWake {
         case failed
     }
 
+    /// Reused across wakes, per the IOPMLib contract.
+    private nonisolated(unsafe) static var userActivityAssertion: IOPMAssertionID = 0
+
     static var displayIsAsleep: Bool {
         CGDisplayIsAsleep(CGMainDisplayID()) != 0
     }
@@ -37,11 +40,13 @@ nonisolated enum DisplayWake {
     static func ensureAwake() async -> Outcome {
         guard displayIsAsleep else { return .alreadyAwake }
 
-        var assertion: IOPMAssertionID = 0
+        // IOPMLib is explicit that the id returned by the first call must be passed back on
+        // every subsequent one; passing 0 each time creates a fresh assertion per wake that is
+        // never released.
         let result = IOPMAssertionDeclareUserActivity(
             "Rocuronium is driving the interface" as CFString,
             kIOPMUserActiveLocal,
-            &assertion,
+            &userActivityAssertion,
         )
         guard result == kIOReturnSuccess else { return .failed }
 
