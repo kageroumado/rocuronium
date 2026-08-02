@@ -64,9 +64,18 @@ final class EngineHost {
 
     /// Screen Recording is a separate grant, needed only for visual verification. Without it
     /// the engine still works; actions without a read-back just stay unverifiable.
+    ///
+    /// Like the Accessibility prompt, `CGRequestScreenCaptureAccess` only ever shows its dialog
+    /// once per bundle. Worse, an app is not even *listed* in the Screen Recording pane until
+    /// it has attempted a capture — so a button that only opens Settings sends the user to look
+    /// for a row that does not exist. Attempting a real capture first is what registers it.
     func requestScreenRecordingPermission() {
         ScreenCapture.requestPermission()
-        openSettings(pane: "Privacy_ScreenCapture")
+        Task {
+            // The result does not matter; making the attempt is what registers the app.
+            _ = try? await ScreenCapture.image(of: CGRect(x: 0, y: 0, width: 8, height: 8))
+            openSettings(pane: "Privacy_ScreenCapture")
+        }
     }
 
     private func openSettings(pane: String) {
@@ -95,7 +104,7 @@ private struct MenuBarContent: View {
             if !engine.canCaptureScreen {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Screen Recording is optional.").font(.callout)
-                    Text("Without it, clicks that expose no value stay unverifiable.")
+                    Text("Without it, clicks that expose no value stay unverifiable. If Rocuronium isn't in the list yet, press this once more.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Open Screen Recording settings…") { engine.requestScreenRecordingPermission() }
                 }
