@@ -75,6 +75,7 @@ actor Engine {
         case cannotSee
         case notFound(String)
         case ambiguous(String, [String])
+        case unparseableShortcut(String)
 
         var errorDescription: String? {
             switch self {
@@ -84,6 +85,8 @@ actor Engine {
                 "No element matched \(what)."
             case let .ambiguous(query, candidates):
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
+            case let .unparseableShortcut(keys):
+                "Could not parse '\(keys)' — use forms like cmd+a, cmd+shift+z, cmd+left."
             }
         }
     }
@@ -153,6 +156,62 @@ actor Engine {
             before: before.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
             after: after.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
         )
+    }
+
+    /// Delivers a keyboard shortcut by pressing the menu item that carries it, not by posting
+    /// keys. Chromium ignores keycode-only posted events entirely (measured), but menus are
+    /// native AppKit even in Electron — so `AXPress` on the matching item runs the same
+    /// action the keystroke would, on every toolkit, without any CGEvent or focus change.
+    func pressShortcut(
+        pid: pid_t,
+        keys: String,
+        allowHardwareInput: Bool
+    ) async throws -> (evidence: Evidence, menuPath: String, itemReportedEnabled: Bool) {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let shortcut = MenuQuery.Shortcut.parse(keys) else {
+            throw EngineError.unparseableShortcut(keys)
+        }
+        guard let menuBar = AXElement(pid: pid).menuBar else {
+            throw EngineError.notFound("a menu bar for pid \(pid) — background-only processes have none")
+        }
+        guard let match = MenuQuery.item(for: shortcut, in: menuBar) else {
+            throw EngineError.notFound("a menu item carrying '\(keys)'")
+        }
+        // `AXEnabled` is a report, not evidence — measured: a background TextEdit's
+        // "Select All" reads disabled simply because AppKit never validated a menu that was
+        // never opened. So a disabled report does not gate the press; it is recorded, the
+        // press runs, and the verdict comes from read-back. A genuinely disabled item then
+        // yields an honest `noEffect` instead of a guess either way.
+
+        // Window-level visual evidence. A menu press has no read-back of its own, and the
+        // item's rectangle is meaningless while the menu is closed — the consequence lands in
+        // the app's window. Captured window-true, so occlusion cannot fake the comparison.
+        var baseline: ScreenCapture.WindowCapture?
+        if ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid) {
+            baseline = try? await ScreenCapture.windowImage(
+                ownedBy: pid,
+                near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
+            )
+        }
+        let selectionBefore = ElementQuery.focused(pid: pid)?.selectedText
+
+        let ladder = GhostLadder(allowHardwareInput: allowHardwareInput)
+        var evidence = await ladder.perform(.press, on: match.element, pid: pid)
+        cache.invalidate(pid: pid)
+
+        // Two confirmation channels, strongest first: a changed selection is semantic
+        // read-back; pixels can only confirm, never refute — copy changes nothing visible.
+        evidence = evidence.addingSelectionEvidence(
+            before: selectionBefore,
+            after: ElementQuery.focused(pid: pid)?.selectedText,
+        )
+        if evidence.verdict == .unverifiable, let baseline,
+           let after = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame) {
+            evidence = evidence.addingConfirmingVisualEvidence(
+                delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
+            )
+        }
+        return (evidence, match.path, match.enabled)
     }
 
     func act(

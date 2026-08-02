@@ -136,6 +136,19 @@ For WebKit (Safari, Refrax) the browser's own channel — `refrax-ctl`, WebDrive
 scripting — is the only path, since OS-level input cannot reach the separate WebContent
 process at all.
 
+**Keyboard shortcuts go through the menu bar, not the keyboard.** `shortcut --keys cmd+a`
+locates the menu item carrying the shortcut (`AXMenuItemCmdChar`/`CmdVirtualKey` plus the
+Carbon modifier mask, where 0 means plain Cmd) and presses it — no CGEvent, no focus change,
+and it works on Chromium, which ignores keycode-only posted events entirely. Measured limits
+(2026-08-02, `Docs/REVIEW-2026-08-02.md` §16): background *AppKit* apps never validate their
+menus, so the press returns success and does nothing — accurately foretold by the item's
+disabled state, which the reply surfaces. Background *Electron* apps keep items enabled and
+the press is best-effort: a parked Postman opened a real tab right after launch, then the
+same mechanism silently no-oped minutes later, success codes throughout. The rule:
+dependable frontmost, best-effort in the background, and the verdict says which happened.
+Verification is selection read-back first, then a window-true pixel diff that may only
+confirm, never refute — copy changes no pixels and must not read as failure.
+
 **Rung 3 is therefore a referral, not an adapter** (decided 2026-08-02). When the ladder is
 exhausted on a target inside an `AXWebArea`, `WebContent` identifies the engine — Refrax and
 Safari by bundle id, Chromium by id prefix, Electron structurally by its embedded framework —

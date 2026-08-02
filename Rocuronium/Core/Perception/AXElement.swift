@@ -138,6 +138,10 @@ nonisolated struct AXElement {
         return AXElement(element as! AXUIElement)
     }
 
+    /// The current selection in a text element. The read-back channel for menu commands that
+    /// act on selection (Select All and friends), which otherwise have no readable effect.
+    var selectedText: String? { string(kAXSelectedTextAttribute) }
+
     var isEditable: Bool {
         ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role)
     }

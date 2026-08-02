@@ -105,6 +105,44 @@ nonisolated struct Evidence: Codable, Sendable {
         )
     }
 
+    /// Selection as read-back: a selection that changed across a press is direct evidence the
+    /// command ran, for the commands that act on selection (Select All, Find). Only upgrades,
+    /// and only on a non-empty selection — an emptied one is indistinguishable from a focus
+    /// change or a click elsewhere.
+    func addingSelectionEvidence(before: String?, after: String?) -> Evidence {
+        guard verdict == .unverifiable, let after, !after.isEmpty, after != before else { return self }
+        return Evidence(
+            action: action, target: target, rung: rung,
+            verdict: .confirmed,
+            readback: after, pixelDelta: pixelDelta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts, referral: referral,
+        )
+    }
+
+    /// Like `addingVisualEvidence`, but pixels may only **confirm**, never refute.
+    ///
+    /// For a click, "nothing changed" is real evidence of failure. For a menu command it is
+    /// not: copy and its siblings succeed while changing no pixels at all, so a quiet window
+    /// after a shortcut must stay `unverifiable` rather than becoming `noEffect`.
+    func addingConfirmingVisualEvidence(delta: Double?) -> Evidence {
+        guard verdict == .unverifiable, let delta else { return self }
+        // The measurement is recorded even when it decides nothing: a sub-threshold delta
+        // that vanished without trace once read as a mystery, not as a number to reason about.
+        let confirmed = Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta) == .confirmed
+        return Evidence(
+            action: action, target: target, rung: rung,
+            verdict: confirmed ? .confirmed : verdict,
+            readback: readback, pixelDelta: delta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts, referral: referral,
+        )
+    }
+
     /// One line for the activity log and the CLI.
     var summary: String {
         let marker = switch verdict {
