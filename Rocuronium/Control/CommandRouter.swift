@@ -9,7 +9,12 @@ import Foundation
 /// keyboard in order to decide how forceful to be — that has to arrive with every answer,
 /// not only when asked for.
 @MainActor
+@Observable
 final class CommandRouter {
+    /// True while an action is in flight. The menu bar icon reads this, so a user can always
+    /// tell at a glance whether an agent currently has hands.
+    private(set) var isDriving = false
+
     private let cache = TreeCache()
     private let virtualDisplay = VirtualDisplayBridge()
 
@@ -22,6 +27,9 @@ final class CommandRouter {
         var y: Double?
         /// Opt-in to the cursor-stealing rung. Absent means no.
         var allowHardwareInput: Bool?
+        /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
+        /// composer submits, and "type" must not be able to send a message by accident.
+        var submit: Bool?
     }
 
     func route(_ data: Data) async -> Data {
@@ -41,7 +49,7 @@ final class CommandRouter {
         case "diag": await diagnose()
         case "request-capture": requestCapture()
         case "find": try await find(request)
-        case "type": try await act(request, action: .setText(request.text ?? ""))
+        case "type": try await typeCommand(request)
         case "click": try await act(request, action: .click)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
@@ -125,13 +133,33 @@ final class CommandRouter {
         ]
     }
 
+    /// `type` is the one verb that can destroy or send something, so its guards live here.
+    private func typeCommand(_ request: Request) async throws -> [String: Any] {
+        // Absent text is not the same as empty text. Defaulting to "" would silently clear the
+        // field — an unrecoverable write — for a request that simply forgot an argument.
+        guard let text = request.text else {
+            return ["ok": false, "error": "'type' requires text; pass an empty string explicitly to clear a field", "presence": presenceBlock()]
+        }
+        // A newline in a composer submits. Refuse control characters unless asked plainly.
+        if request.submit != true, text.contains(where: { $0.isNewline || $0 == "\t" }) {
+            return [
+                "ok": false,
+                "error": "text contains a control character that would submit or move focus; pass submit:true to allow it",
+                "presence": presenceBlock(),
+            ]
+        }
+        return try await act(request, action: .setText(text))
+    }
+
     private func act(_ request: Request, action: GhostLadder.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
         guard let element = try locate(request, pid: pid) else {
             return ["ok": false, "error": "no element matched", "presence": presenceBlock()]
         }
         let ladder = GhostLadder(allowHardwareInput: request.allowHardwareInput ?? false)
+        isDriving = true
         let evidence = await ladder.perform(action, on: element, pid: pid)
+        isDriving = false
         // The interface just changed; anything cached about this process is now suspect.
         await cache.invalidate(pid: pid)
         return [
@@ -169,7 +197,13 @@ final class CommandRouter {
             return ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid)
         }
         guard let label = request.label else { return ElementQuery.focused(pid: pid) }
-        return ElementQuery.named(label, pid: pid).matches.first?.element
+        let matches = ElementQuery.named(label, pid: pid).matches
+        // Matching is by substring, so "delete" can name several controls. Acting on whichever
+        // sorted first would be a coin flip on a possibly destructive button.
+        guard matches.count <= 1 else {
+            throw RouterError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
+        }
+        return matches.first?.element
     }
 
     private func presenceBlock() -> [String: Any] {
@@ -189,11 +223,14 @@ final class CommandRouter {
     enum RouterError: LocalizedError {
         case missingApp
         case appNotRunning(String)
+        case ambiguous(String, [String])
 
         var errorDescription: String? {
             switch self {
             case .missingApp: "No 'app' given."
             case let .appNotRunning(name): "'\(name)' is not running."
+            case let .ambiguous(query, candidates):
+                "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
             }
         }
     }

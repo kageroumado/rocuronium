@@ -50,8 +50,12 @@ nonisolated enum ScreenDiff {
         let width = image.width
         let height = image.height
         var bytes = [UInt8](repeating: 0, count: width * height * Constants.bytesPerPixel)
-        let context = bytes.withUnsafeMutableBytes { buffer in
-            CGContext(
+        // The context must be created *and used* inside the closure: withUnsafeMutableBytes
+        // only guarantees the pointer for the duration of the call, and drawing afterwards is
+        // undefined behavior whose failure mode is silent — an all-zero buffer means every
+        // diff reads 0.0 and every visually-verified action reports "no effect".
+        let drew = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
                 data: buffer.baseAddress,
                 width: width,
                 height: height,
@@ -59,10 +63,10 @@ nonisolated enum ScreenDiff {
                 bytesPerRow: width * Constants.bytesPerPixel,
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
-            )
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
         }
-        guard let context else { return nil }
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return bytes
+        return drew ? bytes : nil
     }
 }

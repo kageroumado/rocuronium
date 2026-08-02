@@ -29,7 +29,11 @@ nonisolated struct GhostLadder {
 
         let cursorBefore = EventPoster.cursorLocation
         let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
-        let focusBefore = ElementQuery.focused(pid: pid)?.signature
+        // Focus is sampled after rung 0, not here: while the display sleeps every tree is
+        // degenerate, so a pre-wake signature necessarily differs from a post-wake one and the
+        // focus-delta click check below would read "confirmed" for every wake-then-click cycle
+        // — precisely the unattended overnight case this exists for.
+        var focusBefore: String?
 
         // Preflight the grant, because the failure without it is silent. An ungranted
         // CGEvent post returns no error and simply does nothing, which would surface here as
@@ -40,6 +44,7 @@ nonisolated struct GhostLadder {
                 rung: .accessibility,
                 outcome: "Accessibility is not granted — the system discards synthesized input silently",
             ))
+            focusBefore = ElementQuery.focused(pid: pid)?.signature
             return await finish(
                 action, element, .accessibility, .unverifiable, nil, nil,
                 focusBefore, focusBefore, cursorBefore, frontBefore, attempts, pid,
@@ -49,6 +54,9 @@ nonisolated struct GhostLadder {
         // Rung 0 — without this the tree below is a fiction.
         let wake = await DisplayWake.ensureAwake()
         attempts.append(.init(rung: .displayWake, outcome: wake.rawValue))
+        focusBefore = ElementQuery.focused(pid: pid)?.signature
+        // A wake reshapes every tree, so focus deltas across it prove nothing.
+        let focusDeltaIsUsable = wake != .woken
         if wake == .failed {
             return await finish(
                 action, element, .displayWake, .unverifiable, nil, nil,
@@ -72,7 +80,7 @@ nonisolated struct GhostLadder {
         // Rung 2 — posted events, delivered to this process only.
         if let evidence = await tryPostedEvents(
             action, element, pid, &attempts,
-            cursorBefore, frontBefore, focusBefore,
+            cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable,
         ) {
             return await evidence.addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
         }
@@ -84,13 +92,15 @@ nonisolated struct GhostLadder {
         // Rung 4 — the cursor-stealing path. Never silent, never implicit.
         guard allowHardwareInput else {
             attempts.append(.init(rung: .hardwareInput, outcome: "declined: not permitted by caller"))
+            // The one verdict the design calls most important deserves the evidence we already
+            // captured: pixels are the only signal left once every rung has declined.
             return await finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid,
-            )
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
         }
-        attempts.append(.init(rung: .hardwareInput, outcome: "engaged — cursor is no longer the user's"))
+        attempts.append(.init(rung: .hardwareInput, outcome: "not implemented — no hardware-input path exists yet"))
         return await finish(
             action, element, .hardwareInput, .unverifiable, nil, nil,
             focusBefore, ElementQuery.focused(pid: pid)?.signature,
@@ -154,7 +164,8 @@ nonisolated struct GhostLadder {
     private func tryPostedEvents(
         _ action: Action, _ element: AXElement, _ pid: pid_t,
         _ attempts: inout [Evidence.Attempt],
-        _ cursorBefore: CGPoint, _ frontBefore: String, _ focusBefore: String?
+        _ cursorBefore: CGPoint, _ frontBefore: String, _ focusBefore: String?,
+        _ focusDeltaIsUsable: Bool
     ) async -> Evidence? {
         switch action {
         case let .setText(text):
@@ -169,10 +180,23 @@ nonisolated struct GhostLadder {
 
             // Re-resolve through the focused element: in Electron the composer only becomes
             // reachable once it holds focus, so the original handle can be stale.
-            let landed = ElementQuery.focused(pid: pid)?.value ?? element.value
+            // Read back only from the element we aimed at. Posted keys go to whatever the app
+            // considers first responder, which may be something else entirely — measured on
+            // Safari's address bar, where the text lands in the page instead. Accepting the
+            // focused element's value as proof would report "confirmed" for text delivered to
+            // the wrong field, which breaks the one promise this tool makes.
+            let focused = ElementQuery.focused(pid: pid)
+            let isOurTarget = focused?.signature == element.signature
+            let landed = isOurTarget ? focused?.value : element.value
             let arrived = text.isEmpty ? (landed?.isEmpty ?? false) : (landed?.contains(text) == true)
             guard arrived else {
-                attempts.append(.init(rung: .postedEvent, outcome: "posted, did not land in target"))
+                let elsewhere = !isOurTarget && focused?.value?.contains(text) == true
+                attempts.append(.init(
+                    rung: .postedEvent,
+                    outcome: elsewhere
+                        ? "posted, but the text landed in \(focused?.role ?? "?") '\(focused?.label ?? "")' instead"
+                        : "posted, did not land in target",
+                ))
                 return nil
             }
             attempts.append(.init(rung: .postedEvent, outcome: "confirmed by read-back"))
@@ -190,8 +214,10 @@ nonisolated struct GhostLadder {
             await EventPoster.click(at: CGPoint(x: frame.midX, y: frame.midY), pid: pid)
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
-            // A focus change is weak but real evidence that the click was received.
-            let verdict: Evidence.Verdict = focusAfter != focusBefore ? .confirmed : .unverifiable
+            // A focus change is weak but real evidence that the click was received — unless a
+            // display wake intervened, which changes every signature by itself.
+            let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
+                ? .confirmed : .unverifiable
             attempts.append(.init(rung: .postedEvent, outcome: "click posted"))
             return await finish(
                 action, element, .postedEvent, verdict, nil, nil,
