@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import os
+import Security
 import System
 
 /// A Unix-domain socket the CLI and MCP server talk to.
@@ -25,6 +26,10 @@ final class ControlServer {
         static let replyTimeout: TimeInterval = 30
         /// A connected client gets this long to actually send its request.
         static let readTimeout: TimeInterval = 10
+        /// Only binaries signed by us may drive the machine. Apple-anchored plus our team, the
+        /// standard Developer ID form — the embedded CLI satisfies it, an unsigned build does
+        /// not, and neither does anything else on the system.
+        static let peerRequirement = #"anchor apple generic and certificate leaf[subject.OU] = "52K336H235""#
     }
 
     static var socketPath: String {
@@ -127,7 +132,7 @@ final class ControlServer {
             guard let peer = Peer(descriptor: client), peer.isAuthorized else {
                 let peerDescription = Peer(descriptor: client)?.description ?? "unidentified"
                 log.error("Rejected control connection from \(peerDescription, privacy: .public)")
-                _ = Data(#"{"ok":false,"error":"unauthorized"}"#.utf8).withUnsafeBytes {
+                _ = Data(#"{"ok":false,"error":"unauthorized: this socket only accepts binaries signed by the same developer. Use the CLI inside Rocuronium.app/Contents/Resources/."}"#.utf8).withUnsafeBytes {
                     write(client, $0.baseAddress, $0.count)
                 }
                 close(client)
@@ -165,7 +170,15 @@ final class ControlServer {
         let uid: uid_t
         let executablePath: String
 
+        let auditToken: Data?
+
         init?(descriptor: Int32) {
+            var token = audit_token_t()
+            var tokenSize = socklen_t(MemoryLayout<audit_token_t>.size)
+            auditToken = getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &tokenSize) == 0
+                ? withUnsafeBytes(of: &token) { Data($0) }
+                : nil
+
             var credentials = xucred()
             var size = socklen_t(MemoryLayout<xucred>.size)
             guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERCRED, &credentials, &size) == 0 else { return nil }
@@ -181,9 +194,37 @@ final class ControlServer {
                 : "unknown"
         }
 
-        /// Only this user. A different uid cannot reach a 0600 socket anyway, so this is
-        /// defense in depth against a permissions mistake rather than the primary control.
-        var isAuthorized: Bool { uid == getuid() }
+        /// Same user *and* signed by us.
+        ///
+        /// Same-uid alone — all that `chmod 0600` gives — is exactly the boundary TCC exists
+        /// not to trust: this socket re-exports the app's Accessibility grant, so any script or
+        /// sandboxed helper running as the user could otherwise drive the machine through it.
+        var isAuthorized: Bool { uid == getuid() && isSignedByUs }
+
+        private var isSignedByUs: Bool {
+            var attributes: [String: Any] = [:]
+            if let token = auditToken {
+                // The audit token is the race-free identity; a pid can be recycled between the
+                // check and the work.
+                attributes[kSecGuestAttributeAudit as String] = token
+            } else if pid > 0 {
+                attributes[kSecGuestAttributePid as String] = pid
+            } else {
+                return false
+            }
+
+            var code: SecCode?
+            guard SecCodeCopyGuestWithAttributes(nil, attributes as CFDictionary, [], &code) == errSecSuccess,
+                  let code
+            else { return false }
+
+            var requirement: SecRequirement?
+            guard SecRequirementCreateWithString(
+                Constants.peerRequirement as CFString, [], &requirement,
+            ) == errSecSuccess, let requirement else { return false }
+
+            return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        }
 
         var description: String { "pid \(pid) uid \(uid) — \(executablePath)" }
     }
