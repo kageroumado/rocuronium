@@ -250,6 +250,24 @@ would be captured as someone else's pixels at exactly the right size (measured; 
 `Docs/REVIEW-2026-08-02.md` §15). Region and full-display captures keep visible-pixel
 semantics, which is the right question for a diff.
 
+## 9a. Rung 4 — hardware input
+
+The cursor-stealing rung is implemented: `CGEvent`s on `.cghidEventTap`, behaving exactly like
+human input. It is reachable only when the caller passes `allowHardwareInput`, and it refuses
+outright in two cases — when the screen is locked (the console belongs to the password field
+then) and when another app's window covers the aim point.
+
+That second guard is the non-obvious one, and it exists because rung 4 breaks an assumption
+every other rung shares: `postToPid` reaches a *process* through any occlusion, but a real
+click goes to whatever window is topmost at the coordinate. Measured: fifteen windows
+overlapped one point on the main display. So an occluded target is refused with the occluder
+named, and parking the target on the virtual display is the reliable way to satisfy the check
+— which is what ties this rung to the isolation machinery instead of leaving it a hazard.
+
+The pointer is moved to aim and restored afterwards, but `cursorMovedByUs` derives from the
+rung rather than from the before/after measurement the restore would zero out: the restore is
+a courtesy and must never conceal the takeover.
+
 ## 10a. The MCP surface
 
 `rocuronium mcp` speaks Model Context Protocol over stdio, exposing the same eight commands as
