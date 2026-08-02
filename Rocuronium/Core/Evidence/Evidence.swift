@@ -77,7 +77,11 @@ nonisolated struct Evidence: Codable, Sendable {
     /// moving the pointer — every other rung delivers events to a process without touching the
     /// system cursor — so movement under any other rung was the user's own hand. Reporting it
     /// as ours trains people to ignore the warning, which is worse than not having one.
-    var cursorMovedByUs: Bool { cursorMoved && rung == .hardwareInput }
+    ///
+    /// Conversely, the hardware rung **always** took the cursor, even when the before/after
+    /// measurement reads zero: the rung moves the pointer to aim, clicks, and restores it as
+    /// a courtesy. The restore must never conceal the takeover.
+    var cursorMovedByUs: Bool { rung == .hardwareInput }
 
     /// Movement that happened during the action but cannot have been ours. Evidence a human is
     /// actively at the machine, not a warning.
