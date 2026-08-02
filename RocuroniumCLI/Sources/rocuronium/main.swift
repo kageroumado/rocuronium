@@ -126,10 +126,13 @@ if let error = reply["error"] as? String {
 
 switch command {
 case "status":
+    // JSON booleans arrive as NSNumber and would otherwise print as 0 and 1.
+    func yesNo(_ key: String) -> String { reply[key] as? Bool == true ? "yes" : "no" }
+    let trusted = reply["trusted"] as? Bool == true
     print("presence      \(reply["presence"] ?? "?")  (idle \(reply["idleSeconds"] ?? "?")s)")
-    print("trusted       \(reply["trusted"] ?? "?")")
-    print("can see       \(reply["canSee"] ?? "?")  (display asleep: \(reply["displayAsleep"] ?? "?"))")
-    print("screen locked \(reply["screenLocked"] ?? "?")")
+    print("accessibility \(trusted ? "granted" : "NOT GRANTED — nothing works until it is")")
+    print("can see       \(yesNo("canSee"))  (display asleep: \(yesNo("displayAsleep")))")
+    print("screen locked \(yesNo("screenLocked"))  — harmless; only display sleep blinds the engine")
     if let advice = reply["advice"] as? String { print("\n\(advice)") }
 
 case "find":
