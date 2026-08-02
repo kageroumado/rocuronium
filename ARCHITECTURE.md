@@ -250,6 +250,22 @@ would be captured as someone else's pixels at exactly the right size (measured; 
 `Docs/REVIEW-2026-08-02.md` §15). Region and full-display captures keep visible-pixel
 semantics, which is the right question for a diff.
 
+## 10a. The MCP surface
+
+`rocuronium mcp` speaks Model Context Protocol over stdio, exposing the same eight commands as
+typed tools so agent harnesses do not have to shell out and parse text. Register it with
+
+```
+claude mcp add rocuronium -- /Applications/Rocuronium.app/Contents/Resources/rocuronium mcp
+```
+
+It is a hand-written JSON-RPC loop (initialize, ping, tools/list, tools/call) in the CLI, not a
+new build product: an SDK dependency would mean a second binary to sign and notarize for
+~150 lines of protocol. Each tool call becomes one authenticated socket round-trip and returns
+the reply JSON verbatim, so an agent sees exactly the evidence a CLI user sees — including
+`verdict`, `cursorMovedByUs`, and any `referral`. The safety semantics live in the tool
+descriptions, because that text is what an agent reads when choosing a tool.
+
 ## 11. Non-goals
 
 The agent loop (Claude Code owns it), a scripting DSL (the CLI is the DSL), cloud anything,
