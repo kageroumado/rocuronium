@@ -48,11 +48,58 @@ final class CommandRouter {
         var h: Double?
         /// A keyboard shortcut for `shortcut`, e.g. "cmd+a".
         var keys: String?
+        /// Report which menu item a shortcut resolves to without pressing it.
+        var resolveOnly: Bool?
+        /// Press a shortcut that resolves to a session- or data-destroying menu item.
+        var confirm: Bool?
+    }
+
+    /// Bounds every number that arrives over the socket, before it reaches arithmetic that
+    /// traps. Measured: `Duration.seconds(1e30 * 60)` dies with "Overflow in multiplication",
+    /// and `Int(Double.infinity.rounded())` dies with "outside the representable range" —
+    /// either one takes down the app holding the Accessibility grant, the control socket, and
+    /// every lease, and a crashed app never runs its virtual-display teardown. The CLI's
+    /// `Double(argument)` happily parses "inf", so this is one malformed request away.
+    private enum Bounds {
+        /// Well past any real display arrangement, far short of anything that overflows.
+        static let coordinate = 1_000_000.0
+        static let extent = 100_000.0
+        static let leaseMinutes = 24.0 * 60
+    }
+
+    private static func finite(_ value: Double?, limit: Double) -> Double? {
+        guard let value, value.isFinite, abs(value) <= limit else { return nil }
+        return value
+    }
+
+    /// Rejects the whole request rather than silently clamping: a caller who asked to click
+    /// at infinity has a bug, and quietly clicking at the edge of the screen instead would
+    /// act on a coordinate nobody chose.
+    private func validate(_ request: Request) -> String? {
+        for (name, value) in [("x", request.x), ("y", request.y)] where value != nil {
+            guard Self.finite(value, limit: Bounds.coordinate) != nil else {
+                return "'\(name)' must be a finite coordinate within ±\(Int(Bounds.coordinate))"
+            }
+        }
+        for (name, value) in [("w", request.w), ("h", request.h)] where value != nil {
+            guard Self.finite(value, limit: Bounds.extent) != nil else {
+                return "'\(name)' must be a finite size no greater than \(Int(Bounds.extent))"
+            }
+        }
+        if let minutes = request.minutes {
+            guard let minutes = Self.finite(minutes, limit: Bounds.leaseMinutes), minutes > 0 else {
+                return "'minutes' must be between 0 and \(Int(Bounds.leaseMinutes))"
+            }
+        }
+        return nil
     }
 
     func route(_ data: Data) async -> Data {
         do {
             let request = try JSONDecoder().decode(Request.self, from: data)
+            if let complaint = validate(request) {
+                return encode(["ok": false, "error": complaint])
+            }
             return encode(try await execute(request))
         } catch {
             // Interpolating a Swift error enum prints its case name ("notInstalled"), which
@@ -211,15 +258,38 @@ final class CommandRouter {
             ]
         }
         let pid = try resolve(request)
+        let mode: Engine.ShortcutMode = if request.resolveOnly == true {
+            .resolveOnly
+        } else if request.confirm == true {
+            .pressConfirmed
+        } else {
+            .press
+        }
+
         isDriving = true
         defer { isDriving = false }
-        let result = try await engine.pressShortcut(
-            pid: pid, keys: keys,
-            allowHardwareInput: request.allowHardwareInput ?? false,
-        )
-        var reply = evidenceReply(result.evidence)
+        let result = try await engine.pressShortcut(pid: pid, keys: keys, mode: mode)
+
+        guard let evidence = result.evidence else {
+            // Resolve-only: what would be pressed, without pressing it.
+            var reply: [String: Any] = [
+                "ok": true,
+                "menuItem": result.menuPath,
+                "enabled": result.itemReportedEnabled,
+                "summary": "'\(keys)' resolves to '\(result.menuPath)' (not pressed)",
+                "presence": presenceBlock(),
+            ]
+            if let hazard = result.hazard {
+                reply["hazard"] = hazard
+                reply["requiresConfirm"] = true
+            }
+            return reply
+        }
+
+        var reply = evidenceReply(evidence)
         reply["menuItem"] = result.menuPath
-        if !result.itemReportedEnabled {
+        if let hazard = result.hazard { reply["hazard"] = hazard }
+        if !result.itemReportedEnabled, result.evidence != nil {
             // Measured both ways on 2026-08-02: a background AppKit app (TextEdit) reports
             // disabled and the press is a silent no-op that still returns success; a
             // background Electron app (Postman) reports enabled and the press works.
@@ -330,7 +400,25 @@ final class CommandRouter {
         let pid = try resolve(request)
         let destination: CGPoint
         if let x = request.x, let y = request.y {
-            destination = CGPoint(x: x, y: y)
+            // A window sent where no display reaches is findable only by reading the `before`
+            // block out of this reply — recoverable, but only if someone kept it. Refuse
+            // instead: an explicit destination should be somewhere the window can be seen.
+            let point = CGPoint(x: x, y: y)
+            // `CGDisplayBounds`, not `NSScreen.frame`: park's coordinates are the top-left
+            // global space AX frames use, while `NSScreen` reports bottom-left Cocoa space.
+            // Comparing across the two is the coordinate trap this codebase keeps stepping
+            // around, and here it would reject valid points on any non-primary display.
+            let screens = virtualDisplay.displayBounds
+            guard screens.contains(where: { $0.insetBy(dx: -40, dy: -40).contains(point) }) else {
+                return [
+                    "ok": false,
+                    "error": "(\(Int(x)), \(Int(y))) is not on any display — the window would be unreachable. "
+                        + "Displays currently span: "
+                        + screens.map { "(\(Int($0.minX)),\(Int($0.minY))) \(Int($0.width))×\(Int($0.height))" }
+                        .joined(separator: ", "),
+                ]
+            }
+            destination = point
         } else if let bounds = virtualDisplay.virtualScreenBounds {
             // Parking onto the virtual screen requires holding a lease, even when the screen
             // already exists. Without this, a window can be moved onto a display nobody is
@@ -387,6 +475,12 @@ final class CommandRouter {
             ]
         }
 
+        // Resolve the destination before doing any work. Capturing first and then rejecting
+        // the path spends a full-screen grab to deliver an error the caller could have had
+        // immediately — and briefly holds screen contents in memory for a request that was
+        // never going to be honored.
+        let destination = try request.path.map(resolveCapturePath)
+
         // An app capture goes through the window filter, not a region of the display: a region
         // returns whatever is *topmost* there, and an occluded window would be captured as
         // someone else's pixels at exactly the right size — a correct-looking wrong answer.
@@ -397,7 +491,7 @@ final class CommandRouter {
                 ownedBy: pid,
                 near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
             )
-            let url = try writePNG(capture.image, to: request.path)
+            let url = try writePNG(capture.image, to: destination)
             return [
                 "ok": true,
                 "path": url.path,
@@ -411,6 +505,16 @@ final class CommandRouter {
             ]
         }
 
+        // The `--app` path inherits this guard through `engine.windowFrame`; the region and
+        // full-display paths had none, so a capture with the display asleep returned
+        // `ok: true` and a frame of black — a correct-looking picture of nothing, in exactly
+        // the unattended-overnight case this tool is for.
+        guard DisplayWake.perceptionIsReliable else {
+            return [
+                "ok": false,
+                "error": "the display is asleep — a capture right now would be a black frame, not a picture of anything",
+            ]
+        }
         let rect: CGRect = if let x = request.x, let y = request.y, let w = request.w, let h = request.h {
             CGRect(x: x, y: y, width: w, height: h)
         } else {
@@ -419,7 +523,7 @@ final class CommandRouter {
         guard let image = try await ScreenCapture.image(of: rect) else {
             return ["ok": false, "error": "the capture region is degenerate (\(rect))"]
         }
-        let url = try writePNG(image, to: request.path)
+        let url = try writePNG(image, to: destination)
         return [
             "ok": true,
             "path": url.path,
@@ -431,15 +535,55 @@ final class CommandRouter {
         ]
     }
 
-    private func writePNG(_ image: CGImage, to explicitPath: String?) throws -> URL {
+    /// Where a caller-supplied capture path may land, and why there is a rail at all.
+    ///
+    /// `CGImageDestinationCreateWithURL` truncates whatever is already there, so an unchecked
+    /// path is an arbitrary-file overwrite: `--path ~/.zshrc` replaces it with PNG bytes. Over
+    /// MCP the path is written by a *model*, so a hallucinated or mis-joined path is the
+    /// likely trigger rather than an attacker. This is the same rail `type` already has, where
+    /// an absent `text` is refused because defaulting to `""` would be an unrecoverable write.
+    private func resolveCapturePath(_ explicitPath: String) throws -> URL {
+        let url = URL(fileURLWithPath: (explicitPath as NSString).expandingTildeInPath)
+            .standardizedFileURL
+        guard url.pathExtension.lowercased() == "png" else {
+            throw RouterError.captureNotPNG(url.lastPathComponent)
+        }
+        // Refuse to clobber. There is no undo for a truncated file, and the caller who meant
+        // to overwrite can delete first — an explicit act on their side, not a silent one here.
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw RouterError.captureExists(url.path)
+        }
+        let permitted = [
+            URL.homeDirectory.appending(path: "Desktop"),
+            URL.homeDirectory.appending(path: "Downloads"),
+            URL.homeDirectory.appending(path: "Pictures"),
+            URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL,
+            URL(fileURLWithPath: "/tmp"),
+            defaultCaptureDirectory,
+        ]
+        let directory = url.deletingLastPathComponent().standardizedFileURL
+        guard permitted.contains(where: { directory.path.hasPrefix($0.standardizedFileURL.path) }) else {
+            throw RouterError.captureOutsidePermittedDirectory(directory.path)
+        }
+        return url
+    }
+
+    private var defaultCaptureDirectory: URL {
+        URL.applicationSupportDirectory
+            .appending(path: "glass.kagerou.rocuronium")
+            .appending(path: "captures")
+    }
+
+    /// Takes an already-resolved destination: validation happens before any capture, so a
+    /// refused path costs nothing and never puts screen contents in memory.
+    private func writePNG(_ image: CGImage, to destination: URL?) throws -> URL {
         let url: URL
-        if let explicitPath {
-            url = URL(fileURLWithPath: (explicitPath as NSString).expandingTildeInPath)
+        if let destination {
+            url = destination
         } else {
-            let directory = URL.applicationSupportDirectory
-                .appending(path: "glass.kagerou.rocuronium")
-                .appending(path: "captures")
+            let directory = defaultCaptureDirectory
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            sweepOldCaptures(in: directory)
             url = directory.appending(path: "capture-\(UUID().uuidString).png")
         }
         guard let destination = CGImageDestinationCreateWithURL(
@@ -464,6 +608,29 @@ final class CommandRouter {
         return match.processIdentifier
     }
 
+
+    /// Screenshots are screen contents — the most sensitive thing this app produces — and
+    /// they were accumulating with no expiry. Same reasoning as the virtual display's lease
+    /// TTL: state that nobody is holding should not outlive its usefulness. Best-effort and
+    /// deliberately silent; a capture must not fail because cleanup did.
+    private func sweepOldCaptures(in directory: URL) {
+        let cutoff = Date(timeIntervalSinceNow: -Constants.captureRetention)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey],
+        ) else { return }
+        for entry in entries where entry.pathExtension.lowercased() == "png" {
+            let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            guard let modified, modified < cutoff else { continue }
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
+    private enum Constants {
+        /// Long enough for an agent to read a capture it just took and for a human to find it
+        /// afterwards; short enough that a day of automation does not leave a screen archive.
+        static let captureRetention: TimeInterval = 24 * 60 * 60
+    }
 
     private func block(for rect: CGRect) -> [String: Any] {
         ["x": rect.origin.x, "y": rect.origin.y, "w": rect.width, "h": rect.height]
@@ -492,6 +659,9 @@ final class CommandRouter {
         case appNotRunning(String)
         case ambiguous(String, [String])
         case captureWriteFailed(String)
+        case captureNotPNG(String)
+        case captureExists(String)
+        case captureOutsidePermittedDirectory(String)
 
         var errorDescription: String? {
             switch self {
@@ -500,6 +670,12 @@ final class CommandRouter {
             case let .ambiguous(query, candidates):
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
             case let .captureWriteFailed(path): "Could not write the capture to \(path)."
+            case let .captureNotPNG(name):
+                "'\(name)' is not a .png path — captures are PNG, and writing one over a file of another type would destroy it."
+            case let .captureExists(path):
+                "\(path) already exists. Captures never overwrite; delete it first or choose another name."
+            case let .captureOutsidePermittedDirectory(path):
+                "\(path) is outside the directories captures may be written to (Desktop, Downloads, Pictures, /tmp, or the app's own captures folder)."
             }
         }
     }

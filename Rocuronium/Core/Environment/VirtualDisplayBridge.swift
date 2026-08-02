@@ -67,6 +67,20 @@ final class VirtualDisplayBridge {
         return NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains("Test Display") }
     }
 
+    /// Every attached display's bounds, in the top-left-origin global space AX frames use.
+    ///
+    /// Deliberately not `NSScreen.frame`, which is bottom-left Cocoa space: a point compared
+    /// against the wrong space lands somewhere plausible on the primary display and nowhere
+    /// near right on any other.
+    var displayBounds: [CGRect] {
+        NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber else { return nil }
+            return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        }
+    }
+
     /// The virtual screen's bounds in the top-left-origin global space that AX frames and
     /// synthetic events use. `NSScreen.frame` is in Cocoa's bottom-left space; going through
     /// the display ID to `CGDisplayBounds` gets the flip right instead of doing it by hand.

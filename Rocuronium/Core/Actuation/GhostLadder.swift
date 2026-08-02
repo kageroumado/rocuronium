@@ -12,10 +12,6 @@ nonisolated struct GhostLadder {
     /// Whether the caller accepts the cursor being taken if nothing else works.
     let allowHardwareInput: Bool
 
-    init(allowHardwareInput: Bool = false) {
-        self.allowHardwareInput = allowHardwareInput
-    }
-
     enum Action: Sendable {
         case setText(String)
         case click
@@ -23,6 +19,20 @@ nonisolated struct GhostLadder {
     }
 
     // MARK: - Entry point
+
+    /// Stop after the accessibility rung, whatever it reports.
+    ///
+    /// For a menu item this is not a preference but a correctness requirement: the rungs below
+    /// aim real input at `frame.midX/midY`, and a closed menu item's rectangle is meaningless
+    /// — so a declined rung 1 would post a click at an arbitrary point inside the target app,
+    /// or, with hardware input allowed, move the physical cursor there. `AXPress` is the only
+    /// meaningful way to actuate a menu item.
+    let accessibilityOnly: Bool
+
+    init(allowHardwareInput: Bool = false, accessibilityOnly: Bool = false) {
+        self.allowHardwareInput = allowHardwareInput
+        self.accessibilityOnly = accessibilityOnly
+    }
 
     func perform(
         _ action: Action, on element: AXElement, pid: pid_t,
@@ -88,6 +98,20 @@ nonisolated struct GhostLadder {
             )
         }
 
+        // Menu items stop here: everything below aims at a rectangle that means nothing while
+        // the menu is closed. Rung 1's own verdict is the answer.
+        if accessibilityOnly {
+            attempts.append(.init(
+                rung: .postedEvent,
+                outcome: "not attempted: this target is only meaningfully actuated through accessibility",
+            ))
+            return await finish(
+                action, element, .accessibility, .unverifiable, nil, nil,
+                focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                cursorBefore, frontBefore, attempts, pid,
+            )
+        }
+
         // Rung 2 — posted events, delivered to this process only.
         if let evidence = await tryPostedEvents(
             action, element, pid, &attempts,
@@ -120,6 +144,16 @@ nonisolated struct GhostLadder {
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
             ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
         }
+        // A cancelled request must not go on to take the cursor: by this point the socket has
+        // already told the caller the action timed out.
+        guard !Task.isCancelled else {
+            attempts.append(.init(rung: .hardwareInput, outcome: "refused: the request was cancelled before the cursor was taken"))
+            return await finish(
+                action, element, .postedEvent, .unverifiable, nil, nil,
+                focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            )
+        }
         // The lock screen owns the console while locked: a hardware keystroke would land in
         // the password field. Ghost rungs are safe there — this one is categorically not.
         guard !UserPresence.read().screenLocked else {
@@ -135,7 +169,11 @@ nonisolated struct GhostLadder {
         }
 
         let live = element.isValid ? element : (refetch() ?? element)
-        guard let frame = live.frame else {
+        // A zero-area frame is not a frame. Measured across Finder, Safari, TextEdit and
+        // others: a closed menu item reports a *non-nil* (0, screen-bottom) 0×0 rect, so a
+        // plain nil-check passes and the midpoint lands one pixel below the bottom-left
+        // corner — the Dock, or whatever hot corner is configured there.
+        guard let frame = live.frame, frame.width >= 1, frame.height >= 1 else {
             attempts.append(.init(rung: .hardwareInput, outcome: "element has no frame to aim the real cursor at"))
             // Tagged with the last rung that actually posted anything: nothing was delivered
             // here, and a `hardwareInput` tag would falsely warn that the cursor was taken.
@@ -171,7 +209,35 @@ nonisolated struct GhostLadder {
         case let .setText(text):
             await HardwareInput.click(at: aim)
             try? await Task.sleep(for: .milliseconds(200))
-            await HardwareInput.type(text)
+            // Look before typing. The occlusion check ran *before* the click, and the click
+            // itself takes ~110 ms — long enough for an app finishing launch, a ⌘-Tab, or a
+            // modal from elsewhere to take the console. Unlike rung 2's `postToPid`, these
+            // keystrokes go wherever the system's focus now is, so a payload with `submit`
+            // could be a line run in a terminal or a message sent in an unrelated app.
+            let targetBundle = await MainActor.run {
+                NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            }
+            let frontNow = await MainActor.run { EventPoster.frontmostBundleID }
+            guard frontNow == targetBundle else {
+                attempts.append(.init(
+                    rung: .hardwareInput,
+                    outcome: "clicked, but '\(frontNow)' holds the keyboard instead of the target — refusing to type into it",
+                ))
+                return await finish(
+                    action, element, .hardwareInput, .noEffect, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                )
+            }
+            let delivered = await HardwareInput.type(text)
+            if delivered != text {
+                // The screen locked partway through; say how far it got rather than letting
+                // a partial write be judged as if the whole payload had been attempted.
+                attempts.append(.init(
+                    rung: .hardwareInput,
+                    outcome: "typing stopped after \(delivered.count) of \(text.count) characters — the screen locked mid-run",
+                ))
+            }
             try? await Task.sleep(for: .milliseconds(400))
             // Same read-back discipline as rung 2: only the aimed-at element counts, and a
             // handle killed by the focus change is re-resolved before it can misreport.
@@ -323,6 +389,23 @@ nonisolated struct GhostLadder {
             let arrived = text.isEmpty ? (landed?.isEmpty ?? false) : (landed?.contains(text) == true)
             guard arrived else {
                 let elsewhere = !isOurTarget && focused?.value?.contains(text) == true
+                // Unreadable is not refuted. A nil read-back means the target exposes no
+                // value, or its handle died and could not be re-resolved — in neither case
+                // do we know the text failed to land. Falling through from here would let
+                // rung 4 retype the whole payload on top of a write that may have succeeded,
+                // and `contains` would then confirm the *doubled* text. Rung 1 already
+                // refuses to retry for exactly this reason; rung 2 must too.
+                guard landed != nil else {
+                    attempts.append(.init(
+                        rung: .postedEvent,
+                        outcome: "posted; the target exposes no readable value, so this cannot be confirmed or refuted — not retrying, to avoid typing it twice",
+                    ))
+                    return await finish(
+                        action, element, .postedEvent, .unverifiable, nil, nil,
+                        focusBefore, focused?.signature,
+                        cursorBefore, frontBefore, attempts, pid,
+                    )
+                }
                 attempts.append(.init(
                     rung: .postedEvent,
                     outcome: elsewhere
@@ -339,8 +422,10 @@ nonisolated struct GhostLadder {
             )
 
         case .click, .press:
-            guard let frame = element.frame else {
-                attempts.append(.init(rung: .postedEvent, outcome: "element has no frame to click"))
+            // Zero-area counts as no frame — see the note on the hardware rung; a closed menu
+            // item reports a 0×0 rect at the screen corner rather than nothing at all.
+            guard let frame = element.frame, frame.width >= 1, frame.height >= 1 else {
+                attempts.append(.init(rung: .postedEvent, outcome: "element has no usable frame to click"))
                 return nil
             }
             await EventPoster.click(at: CGPoint(x: frame.midX, y: frame.midY), pid: pid)

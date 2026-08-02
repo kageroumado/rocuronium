@@ -129,6 +129,16 @@ final class ControlServer {
                 if errno == EBADF || errno == EINVAL { return }
                 continue
             }
+            // Before *any* write, including the rejection below. Measured: a client that
+            // connects and dies abruptly makes the next write to that socket raise SIGPIPE,
+            // whose default action kills the process — silently, with no crash report, leaving
+            // a stale socket file behind. Setting this only after the authorization check meant
+            // any local process, unsigned and unauthorized, could take down the app holding the
+            // Accessibility grant with a connect-and-exit. Found by a crashing client doing
+            // exactly that by accident.
+            var on: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+
             guard let peer = Peer(descriptor: client), peer.isAuthorized else {
                 let peerDescription = Peer(descriptor: client)?.description ?? "unidentified"
                 log.error("Rejected control connection from \(peerDescription, privacy: .public)")
@@ -142,8 +152,6 @@ final class ControlServer {
             // point of recording the caller is that it survives long enough to be read.
             log.notice("Control request from \(peer.description, privacy: .public)")
 
-            var on: Int32 = 1
-            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             // Without this, a client that connects and sends nothing blocks the single accept
             // thread in read() forever, and every later request — CLI or MCP — hangs with it.
             var timeout = timeval(tv_sec: Int(Constants.readTimeout), tv_usec: 0)
@@ -157,14 +165,15 @@ final class ControlServer {
     ///
     /// The socket hands out this app's Accessibility grant to whoever can talk to it, so
     /// "same uid" — which is all `chmod 0600` establishes — is exactly the boundary TCC exists
-    /// not to trust. This is the first half of closing that: identify and record the caller,
-    /// and refuse anything not running as this user.
+    /// not to trust. So the caller is identified, recorded, and checked against a code
+    /// signature requirement (`isAuthorized`, below): pid and uid for the log, the **audit
+    /// token** for the actual decision, since a pid can be recycled between check and use.
     ///
-    /// **Known gap.** The second half is verifying the peer's code signature so that only known
-    /// binaries can drive the machine. That is deliberately not done yet because the CLI ships
-    /// unsigned from SwiftPM, and a check it cannot pass would be theatre. Until then every
-    /// caller is logged with its pid and executable path, so an unexpected client is at least
-    /// attributable after the fact.
+    /// **What this does and does not buy.** It is not a wall against local code running as
+    /// this user. The bundle ships a signed CLI that forwards arbitrary commands, so anything
+    /// able to exec it reaches the same authority — the effective boundary remains same-uid.
+    /// What the check does buy is attribution and a stable audit trail: every action is
+    /// traceable to a known binary rather than to any process that found the socket path.
     private nonisolated struct Peer: CustomStringConvertible {
         let pid: pid_t
         let uid: uid_t
@@ -238,7 +247,7 @@ final class ControlServer {
         // makes the cross-thread write to `reply` safe.
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var reply = Data()
-        Task { @MainActor in
+        let work = Task { @MainActor in
             reply = await router.route(request)
             semaphore.signal()
         }
@@ -246,7 +255,12 @@ final class ControlServer {
         // not strand this thread forever. The accept loop is single-threaded, so one stuck
         // request would otherwise deadlock every future client.
         if semaphore.wait(timeout: .now() + Constants.replyTimeout) == .timedOut {
-            writeAll(Data(#"{"ok":false,"error":"timed out waiting for the engine"}"#.utf8) + [0x0A], to: client)
+            // Cancel, do not merely abandon. An abandoned request keeps running after the
+            // caller has been told it failed — and with the hardware rung that means the real
+            // cursor moving and keys landing for an action the agent believes never happened,
+            // possibly interleaved with the retry it sends next.
+            work.cancel()
+            writeAll(Data(#"{"ok":false,"error":"timed out waiting for the engine; the request was cancelled"}"#.utf8) + [0x0A], to: client)
             return
         }
 

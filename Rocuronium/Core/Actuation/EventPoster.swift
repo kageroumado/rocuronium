@@ -12,6 +12,18 @@ nonisolated enum EventPoster {
         static let clickHoldDuration: Duration = .milliseconds(30)
     }
 
+    /// Splits text into per-scalar UTF-16 payloads.
+    ///
+    /// **`UniChar` is `UInt16`, so `UniChar(scalar.value)` traps on anything above U+FFFF** —
+    /// every emoji, 𝄞, CJK extension B. Verified by execution: typing "hi👍" killed the
+    /// process with SIGTRAP, which would take the control socket and every lease down with
+    /// it, and a crashed app never runs its virtual-display teardown. A non-BMP scalar must
+    /// be posted as its surrogate *pair* in one event, which is why this returns an array of
+    /// code units per scalar rather than a single unit.
+    static func utf16Payloads(of text: String) -> [[UniChar]] {
+        text.unicodeScalars.map { Array(String($0).utf16) }
+    }
+
     /// Types text into a process by unicode payload.
     ///
     /// The payload matters: **Chromium reads the unicode string, not the keycode.** Events
@@ -21,13 +33,12 @@ nonisolated enum EventPoster {
         // Our own events reset HIDIdleTime; record them so presence is not fooled by us.
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
-        for scalar in text.unicodeScalars {
-            var unit = UniChar(scalar.value)
+        for var units in utf16Payloads(of: text) {
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
             else { continue }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.postToPid(pid)
             up.postToPid(pid)
             try? await Task.sleep(for: Constants.perCharacterDelay)
