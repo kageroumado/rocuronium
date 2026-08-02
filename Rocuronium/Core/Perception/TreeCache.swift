@@ -17,25 +17,38 @@ import Foundation
 nonisolated final class TreeCache {
     private enum Constants {
         /// Even a matching fingerprint expires: a tree can change without moving focus,
-        /// window count, or the frontmost window's title.
-        static let maximumAge: Duration = .seconds(5)
+        /// window count, or the frontmost window's title. Kept short because the cost of a
+        /// stale entry is a click at the wrong coordinates, while the cost of a miss is one
+        /// walk.
+        static let maximumAge: Duration = .seconds(2)
     }
 
     /// The O(1) reads that stand in for "has this app's UI changed?".
+    ///
+    /// The front window's **frame** matters as much as its title: moving or resizing a window
+    /// leaves every other field identical while shifting every cached coordinate, and a cached
+    /// frame is what a click is aimed at. `AXFocusedWindow` is used rather than `windows.first`
+    /// because `AXWindows` ordering is not contractually front-to-back.
     private struct Fingerprint: Equatable {
         let focusedSignature: String?
         let windowCount: Int
         let frontWindowTitle: String?
+        let frontWindowFrame: CGRect?
         /// Perception is worthless while the display sleeps, so a tree captured awake must
         /// never be served asleep, or vice versa.
         let displayAwake: Bool
 
         init(pid: pid_t) {
             let app = AXElement(pid: pid)
-            let windows = app.windows
+            windowCount = app.windows.count
             focusedSignature = app.focused?.signature
-            windowCount = windows.count
-            frontWindowTitle = windows.first?.string(kAXTitleAttribute)
+            let front: AXElement? = {
+                guard let value = app.attribute(kAXFocusedWindowAttribute),
+                      CFGetTypeID(value) == AXUIElementGetTypeID() else { return app.windows.first }
+                return AXElement(value as! AXUIElement)
+            }()
+            frontWindowTitle = front?.string(kAXTitleAttribute)
+            frontWindowFrame = front?.frame
             displayAwake = !DisplayWake.displayIsAsleep
         }
     }
@@ -43,6 +56,11 @@ nonisolated final class TreeCache {
     private struct Entry {
         let results: ElementQuery.Results
         let fingerprint: Fingerprint
+        /// Where each matched element was when the walk ran. A cached result is only usable if
+        /// the things it names are still where it says they are — scrolling a list, opening a
+        /// dropdown, or a layout shift moves elements while leaving the fingerprint untouched,
+        /// and a stale frame means clicking whatever now occupies those coordinates.
+        let matchedFrames: [CGRect?]
         let capturedAt: ContinuousClock.Instant
     }
 
@@ -63,7 +81,8 @@ nonisolated final class TreeCache {
 
         if let entry = entries[pid]?[key],
            entry.fingerprint == fingerprint,
-           entry.capturedAt.duration(to: clock.now) < Constants.maximumAge
+           entry.capturedAt.duration(to: clock.now) < Constants.maximumAge,
+           entry.results.matches.map(\.element.frame) == entry.matchedFrames
         {
             hits += 1
             return entry.results
@@ -82,6 +101,7 @@ nonisolated final class TreeCache {
         entries[pid, default: [:]][key] = Entry(
             results: fresh,
             fingerprint: Fingerprint(pid: pid),
+            matchedFrames: fresh.matches.map(\.element.frame),
             capturedAt: clock.now,
         )
         return fresh
