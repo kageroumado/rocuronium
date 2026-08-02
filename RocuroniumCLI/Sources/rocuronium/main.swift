@@ -25,6 +25,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
+  rocuronium mcp        (serve these commands as MCP tools over stdio)
 
 Options:
   --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
@@ -50,6 +51,13 @@ arguments.removeFirst()
 func value(for flag: String) -> String? {
     guard let index = arguments.firstIndex(of: "--\(flag)"), index + 1 < arguments.count else { return nil }
     return arguments[index + 1]
+}
+
+// MCP mode: a stdio tool server for agent harnesses. Register with e.g.
+//   claude mcp add rocuronium -- /Applications/Rocuronium.app/Contents/Resources/rocuronium mcp
+// Runs until stdin closes; every tool call is one authenticated socket round-trip.
+if command == "mcp" {
+    MCPServer.run(forward: send)
 }
 
 var payload: [String: Any] = ["command": command]
