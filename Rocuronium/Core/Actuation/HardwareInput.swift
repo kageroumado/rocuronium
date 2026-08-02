@@ -81,19 +81,45 @@ nonisolated enum HardwareInput {
     /// Types into the frontmost first responder, like hands on the keyboard. Same unicode
     /// payload as the ghost variant, for the same measured reason: Chromium reads the
     /// string, not the keycode.
-    static func type(_ text: String) async {
+    /// Whether the console is still ours to type into.
+    ///
+    /// Checked between characters, not only before the first: this rung types at ~12 ms a
+    /// character, so a 5,000-character payload holds the physical keyboard for a minute. Two
+    /// things can revoke permission mid-run, and both must be observed here because
+    /// `try? await Task.sleep` swallows cancellation silently:
+    ///
+    /// - The user locks the screen (⌃⌘Q, a hot corner, the lid), after which every remaining
+    ///   character goes into the login window's password field — the precise harm the
+    ///   pre-flight check exists to prevent, arriving a moment after that check passed.
+    /// - The socket times out and cancels the request. The caller has by then been told the
+    ///   action failed; continuing to drive the physical keyboard afterwards is the one thing
+    ///   a tool built on "the evidence matches reality" must never do.
+    private static var consoleIsStillOurs: Bool {
+        !Task.isCancelled && !UserPresence.read().screenLocked
+    }
+
+    /// Returns how much of `text` was actually delivered, so a run cut short is reported
+    /// rather than assumed complete.
+    @discardableResult
+    static func type(_ text: String) async -> String {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
-        for scalar in text.unicodeScalars {
-            var unit = UniChar(scalar.value)
+        var delivered = ""
+        // Per-scalar UTF-16 payloads, not `UniChar(scalar.value)` — that truncating
+        // conversion traps on any non-BMP scalar. See `EventPoster.utf16Payloads`.
+        let scalars = Array(text.unicodeScalars)
+        for (index, var units) in EventPoster.utf16Payloads(of: text).enumerated() {
+            guard consoleIsStillOurs else { return delivered }
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
             else { continue }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
+            delivered.unicodeScalars.append(scalars[index])
             try? await Task.sleep(for: Constants.perCharacterDelay)
         }
+        return delivered
     }
 }

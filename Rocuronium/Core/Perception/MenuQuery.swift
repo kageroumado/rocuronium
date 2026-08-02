@@ -67,6 +67,35 @@ nonisolated enum MenuQuery {
         /// "Edit ▸ Select All" — for the evidence, so the caller sees which item acted.
         let path: String
         let enabled: Bool
+
+        /// Whether pressing this would do something no read-back could undo.
+        ///
+        /// The need is concrete and was measured: **every** app's menu bar carries the Apple
+        /// menu, so `shortcut --app TextEdit --keys cmd+shift+q` resolves to "Log Out Kirie…"
+        /// and `cmd+opt+shift+q` to the variant that logs out *without* a confirmation dialog.
+        /// An agent reaching for a text shortcut can end the user's session from any target.
+        /// `type` already refuses a bare newline for the same reason — a verb that can send or
+        /// destroy must say so before it acts, not report it afterwards.
+        ///
+        /// Quit is deliberately absent: it is app-scoped, ordinary, and the app's own
+        /// save prompts still apply. This list is for the session and the filesystem.
+        var hazard: String? {
+            let title = path.lowercased()
+            let patterns = [
+                "log out": "would end the login session",
+                "shut down": "would power off the Mac",
+                "restart": "would reboot the Mac",
+                "sleep": "would put the Mac to sleep",
+                "lock screen": "would lock the screen",
+                "empty trash": "would permanently delete the Trash",
+                "move to trash": "would delete the selected items",
+                "erase": "would erase data",
+            ]
+            for (needle, consequence) in patterns where title.contains(needle) {
+                return consequence
+            }
+            return nil
+        }
     }
 
     /// Finds the menu item carrying this shortcut. The tree is readable while every menu is

@@ -129,7 +129,13 @@ nonisolated struct Evidence: Codable, Sendable {
     /// and only on a non-empty selection — an emptied one is indistinguishable from a focus
     /// change or a click elsewhere.
     func addingSelectionEvidence(before: String?, after: String?) -> Evidence {
-        guard verdict == .unverifiable, let after, !after.isEmpty, after != before else { return self }
+        // `before` must be a real reading, not nil. `selectedText` returns nil both for "no
+        // selection" and for "the read failed" — nothing focused, a non-text element, or a 2 s
+        // AX timeout on a busy app. Accepting nil as a baseline would confirm a press that did
+        // nothing whenever the before-read raced a beachball and the after-read caught the
+        // selection that was there all along.
+        guard verdict == .unverifiable, let before, let after,
+              !after.isEmpty, after != before else { return self }
         return Evidence(
             action: action, target: target, rung: rung,
             verdict: .confirmed,

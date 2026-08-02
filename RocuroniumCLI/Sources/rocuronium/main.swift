@@ -21,7 +21,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium find       --app <name> [--label <text>]
   rocuronium type       --app <name> --text <text> [--label <text>]
   rocuronium click      --app <name> [--label <text>] [--x <n> --y <n>]
-  rocuronium shortcut   --app <name> --keys <cmd+a>
+  rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
@@ -70,9 +70,23 @@ for flag in ["app", "label", "text", "reason", "lease", "path", "keys"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 for flag in ["x", "y", "w", "h", "minutes"] {
-    if let found = value(for: flag), let number = Double(found) { payload[flag] = number }
+    guard let found = value(for: flag) else { continue }
+    // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
+    // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
+    // takes this process down before the request is ever sent. Reject it here, where the
+    // caller can be told what was wrong, rather than dying mid-serialization.
+    guard let number = Double(found), number.isFinite else {
+        FileHandle.standardError.write(Data("rocuronium: --\(flag) must be a finite number, got '\(found)'\n".utf8))
+        exit(2)
+    }
+    payload[flag] = number
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
+if arguments.contains("--submit") { payload["submit"] = true }
+// `shortcut` can reach Log Out from any app, so seeing what a shortcut resolves to is a
+// first-class operation, and pressing a destructive item takes a deliberate second flag.
+if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
+if arguments.contains("--confirm") { payload["confirm"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
@@ -197,6 +211,7 @@ default:
     if let menuItem = reply["menuItem"] as? String, !menuItem.isEmpty {
         print("menu item: \(menuItem)")
     }
+    if let hazard = reply["hazard"] as? String { print("⚠︎ this item \(hazard)") }
     if let note = reply["note"] as? String { print("note: \(note)") }
     if let readback = reply["readback"] as? String, !readback.isEmpty {
         print("read back: \(readback.prefix(60))")

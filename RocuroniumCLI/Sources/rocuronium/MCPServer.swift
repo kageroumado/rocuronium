@@ -53,10 +53,20 @@ enum MCPServer {
         ),
         tool(
             "shortcut",
-            "Deliver a keyboard shortcut (e.g. 'cmd+a') by pressing the menu item that carries it — works on Chromium, which ignores synthetic keycodes. Dependable on the frontmost app, best-effort in the background; trust the verdict.",
+            """
+            Deliver a keyboard shortcut (e.g. 'cmd+a') by pressing the menu item that carries it — \
+            works on Chromium, which ignores synthetic keycodes. Dependable on the frontmost app, \
+            best-effort in the background; trust the verdict, not the return.
+            HAZARD: every app's menu bar includes the Apple menu, so session-wide items are reachable \
+            from any target — cmd+shift+q resolves to Log Out. Items that end the session or destroy \
+            data are refused unless `confirm` is true. Use `resolveOnly` to see which menu item a \
+            shortcut maps to before pressing it.
+            """,
             properties: [
                 "app": ["type": "string"],
                 "keys": ["type": "string", "description": "cmd+a, cmd+shift+z, cmd+left, ..."],
+                "resolveOnly": ["type": "boolean", "description": "Report the menu item without pressing it"],
+                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
             ], required: ["app", "keys"],
         ),
         tool(
@@ -84,7 +94,7 @@ enum MCPServer {
                 "app": ["type": "string"],
                 "x": ["type": "number"], "y": ["type": "number"],
                 "w": ["type": "number"], "h": ["type": "number"],
-                "path": ["type": "string", "description": "Where to write the PNG; a default under Application Support otherwise"],
+                "path": ["type": "string", "description": "Where to write the PNG. Must end in .png, must not already exist, and must be under Desktop, Downloads, Pictures, /tmp, or the app's captures folder. Omit for a default path."],
             ], required: [],
         ),
     ]
@@ -151,7 +161,21 @@ enum MCPServer {
         else {
             return errorContent("unknown tool '\(parameters["name"] ?? "?")'")
         }
-        var payload = (parameters["arguments"] as? [String: Any]) ?? [:]
+        // Forward only the keys this tool declares. A schema is documentation, not a filter:
+        // copying `arguments` wholesale would honor properties the tool never advertised —
+        // `allowHardwareInput` smuggled into a tool whose schema has no such field, for
+        // instance, escalating past the rungs the description promised. `command` is assigned
+        // after the copy so it can never be overridden by an argument.
+        let declared = Set(schemaProperties(of: name))
+        let arguments = (parameters["arguments"] as? [String: Any]) ?? [:]
+        var payload = arguments.filter { declared.contains($0.key) }
+        let rejected = arguments.keys.filter { !declared.contains($0) }.sorted()
+        guard rejected.isEmpty else {
+            return errorContent(
+                "'\(name)' does not accept \(rejected.map { "'\($0)'" }.joined(separator: ", "))"
+                    + " — accepted: \(declared.sorted().joined(separator: ", "))",
+            )
+        }
         payload["command"] = name
         guard let socketReply = forward(payload) else {
             return errorContent("could not reach Rocuronium.app — is it running?")
@@ -162,6 +186,14 @@ enum MCPServer {
             "content": [["type": "text", "text": text]],
             "isError": socketReply["ok"] as? Bool != true,
         ]
+    }
+
+    private static func schemaProperties(of tool: String) -> [String] {
+        guard let definition = tools.first(where: { $0["name"] as? String == tool }),
+              let schema = definition["inputSchema"] as? [String: Any],
+              let properties = schema["properties"] as? [String: Any]
+        else { return [] }
+        return Array(properties.keys)
     }
 
     private static func errorContent(_ message: String) -> [String: Any] {
