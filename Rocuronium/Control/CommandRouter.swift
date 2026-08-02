@@ -108,6 +108,24 @@ final class CommandRouter {
 
     private func find(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+
+        // "Nothing found" and "I cannot see" are different answers, and only one of them means
+        // the app has no such element. Refuse to imply the first while the display is asleep.
+        guard DisplayWake.perceptionIsReliable else {
+            return [
+                "ok": false,
+                "error": "the display is asleep — every accessibility tree is degenerate right now, so this would report nothing found when nothing can be seen",
+                "canSee": false,
+                "presence": presenceBlock(),
+            ]
+        }
+
+        // Chromium builds its tree lazily; ask once, cheap and harmless elsewhere.
+        AXElement(pid: pid).enableManualAccessibility()
+
+        let live = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
+        await cache.evictDeadProcesses(livePIDs: live)
+
         let query = request.label
         let key = "find:\(query ?? "*")"
         let results = await cache.results(for: pid, key: key) {
@@ -129,6 +147,8 @@ final class CommandRouter {
             "matches": matches,
             "truncated": results.truncated,
             "elementsVisited": results.elementsVisited,
+            "canSee": true,
+            "cache": await { let s = await cache.statistics; return ["hits": s.hits, "misses": s.misses] }(),
             "presence": presenceBlock(),
         ]
     }

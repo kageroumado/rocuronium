@@ -79,10 +79,13 @@ nonisolated enum ElementQuery {
                 matches.append(Match(element: element, depth: depth, path: path))
             }
             guard depth < maxDepth else { return }
+            // `element.role` is loop-invariant but was being re-read per child — one IPC round
+            // trip each, thousands of them on a large tree.
+            let parentRole = element.role
             for (index, child) in element.children.enumerated() {
                 guard visited < budget else { return }
                 guard child.role != "AXApplication" else { continue }
-                visit(child, depth: depth + 1, path: "\(path)/\(element.role)[\(index)]")
+                visit(child, depth: depth + 1, path: "\(path)/\(parentRole)[\(index)]")
             }
         }
 

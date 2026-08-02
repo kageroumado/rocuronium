@@ -68,6 +68,11 @@ actor TreeCache {
 
         misses += 1
         let fresh = walk()
+        // An app with no windows and nothing focused fingerprints identically to a dead one, so
+        // caching it invites serving its results to a recycled pid later. Cheap to redo anyway.
+        guard fingerprint.windowCount > 0 || fingerprint.focusedSignature != nil else {
+            return fresh
+        }
         // Re-fingerprint *after* walking: a walk takes over a second, and the UI may have moved
         // during it. Storing the pre-walk fingerprint would keep serving a tree we already know
         // is stale.
@@ -89,6 +94,12 @@ actor TreeCache {
     /// changes shape at once.
     func invalidateAll() {
         entries.removeAll()
+    }
+
+    /// Drops entries for processes that no longer exist, so the cache cannot grow without
+    /// bound and cannot serve a dead app's tree to whatever inherits its pid.
+    func evictDeadProcesses(livePIDs: Set<pid_t>) {
+        entries = entries.filter { livePIDs.contains($0.key) }
     }
 
     var statistics: (hits: Int, misses: Int) { (hits, misses) }

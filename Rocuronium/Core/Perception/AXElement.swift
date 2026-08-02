@@ -40,13 +40,17 @@ nonisolated struct AXElement {
 
     /// The most human-meaningful name available, in descending order of trustworthiness.
     /// Labels are frequently absent or wrong, so callers must treat this as a hint.
+    /// Short-circuits: every attribute read is an IPC round trip, and building the full array
+    /// fetched all four even when the title answered. Over a 5,000-element tree that is
+    /// thousands of avoidable round trips.
     var label: String {
-        [
-            string(kAXTitleAttribute),
-            string(kAXDescriptionAttribute),
-            string(kAXPlaceholderValueAttribute),
-            string(kAXRoleDescriptionAttribute),
-        ].compactMap { $0 }.first { !$0.isEmpty } ?? ""
+        for name in [
+            kAXTitleAttribute, kAXDescriptionAttribute,
+            kAXPlaceholderValueAttribute, kAXRoleDescriptionAttribute,
+        ] {
+            if let value = string(name), !value.isEmpty { return value }
+        }
+        return ""
     }
 
     var value: String? {
@@ -56,17 +60,27 @@ nonisolated struct AXElement {
         return nil
     }
 
+    /// Casting to a CoreFoundation type performs **no** runtime check — the compiler even
+    /// rejects `as?` here — so a wrong type is not caught, it is carried. Apps do return
+    /// `kCFNull` for empty attributes, which would otherwise yield an element reporting role
+    /// `"?"` with no frame, and the engine would say "exposes no press action" instead of
+    /// "this app returned something that is not an element". Check the type id explicitly.
+    private func axValue(_ name: String) -> AXValue? {
+        guard let value = attribute(name), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        return (value as! AXValue)
+    }
+
     var position: CGPoint? {
-        guard let value = attribute(kAXPositionAttribute) else { return nil }
+        guard let value = axValue(kAXPositionAttribute) else { return nil }
         var point = CGPoint.zero
-        guard AXValueGetValue(value as! AXValue, .cgPoint, &point) else { return nil }
+        guard AXValueGetValue(value, .cgPoint, &point) else { return nil }
         return point
     }
 
     var size: CGSize? {
-        guard let value = attribute(kAXSizeAttribute) else { return nil }
+        guard let value = axValue(kAXSizeAttribute) else { return nil }
         var size = CGSize.zero
-        guard AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
+        guard AXValueGetValue(value, .cgSize, &size) else { return nil }
         return size
     }
 
@@ -94,14 +108,16 @@ nonisolated struct AXElement {
     }
 
     var menuBar: AXElement? {
-        guard let bar = attribute(kAXMenuBarAttribute) else { return nil }
+        guard let bar = attribute(kAXMenuBarAttribute),
+              CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
         return AXElement(bar as! AXUIElement)
     }
 
     /// The app's own idea of what is focused. Instant, and repeatedly finds elements that a
     /// tree walk misses entirely — Electron composer fields in particular.
     var focused: AXElement? {
-        guard let element = attribute(kAXFocusedUIElementAttribute) else { return nil }
+        guard let element = attribute(kAXFocusedUIElementAttribute),
+              CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
         return AXElement(element as! AXUIElement)
     }
 

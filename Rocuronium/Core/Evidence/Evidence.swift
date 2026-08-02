@@ -106,7 +106,12 @@ nonisolated struct Evidence: Codable, Sendable {
 nonisolated enum Verifier {
     private enum Constants {
         /// Below this, a pixel change is antialiasing, a caret blink, or a hover highlight.
-        static let significantPixelDelta = 0.01
+        /// A blinking text caret in a small field is the calibration case: roughly 2×16 pt in a
+        /// 100×20 pt field is about 1.6% of it, so a flat 1% threshold would read a caret blink
+        /// as a confirmed click.
+        static let significantPixelDelta = 0.02
+        /// Any change at all, however small, still rules out "nothing happened".
+        static let noChangeAtAll = 0.0005
     }
 
     static func verdict(
@@ -118,7 +123,11 @@ nonisolated enum Verifier {
             return readback.contains(expected) ? .confirmed : .noEffect
         }
         if let pixelDelta {
-            return pixelDelta > Constants.significantPixelDelta ? .confirmed : .noEffect
+            // Three bands, because a weak signal is not evidence of absence. Claiming
+            // `.noEffect` on a faint delta makes an agent retry — or escalate to hardware
+            // input — for an action that already worked.
+            if pixelDelta > Constants.significantPixelDelta { return .confirmed }
+            return pixelDelta <= Constants.noChangeAtAll ? .noEffect : .unverifiable
         }
         return .unverifiable
     }
