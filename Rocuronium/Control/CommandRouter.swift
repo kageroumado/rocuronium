@@ -38,6 +38,8 @@ final class CommandRouter {
     private func execute(_ request: Request) async throws -> [String: Any] {
         switch request.command {
         case "status": status()
+        case "diag": await diagnose()
+        case "request-capture": requestCapture()
         case "find": try await find(request)
         case "type": try await act(request, action: .setText(request.text ?? ""))
         case "click": try await act(request, action: .click)
@@ -59,6 +61,41 @@ final class CommandRouter {
             "advice": presence.advice,
             "virtualDisplayActive": virtualDisplay.activeLease != nil,
         ]
+    }
+
+    /// Fires the Screen Recording prompt.
+    ///
+    /// ScreenCaptureKit does **not** prompt — it fails with -3801 when ungranted. Only
+    /// `CGRequestScreenCaptureAccess` shows the dialog, and only while TCC holds no decision
+    /// for this bundle; after a decline it returns instantly and forever. `tccutil reset
+    /// ScreenCapture <bundle-id>` is what makes it askable again.
+    private func requestCapture() -> [String: Any] {
+        let granted = CGRequestScreenCaptureAccess()
+        return [
+            "ok": true,
+            "granted": granted,
+            "preflightAfter": ScreenCapture.isPermitted,
+            "note": granted ? "granted" : "if no dialog appeared, TCC still holds a decision — reset it",
+        ]
+    }
+
+    /// Reports what each permission check actually returns, and what a real capture attempt
+    /// actually fails with. Guessing at TCC state from the outside is how hours get lost.
+    private func diagnose() async -> [String: Any] {
+        var report: [String: Any] = [
+            "ok": true,
+            "bundleID": Bundle.main.bundleIdentifier ?? "?",
+            "bundlePath": Bundle.main.bundlePath,
+            "axTrusted": AXIsProcessTrusted(),
+            "screenCapturePreflight": ScreenCapture.isPermitted,
+        ]
+        do {
+            let image = try await ScreenCapture.image(of: CGRect(x: 0, y: 0, width: 16, height: 16))
+            report["captureAttempt"] = image == nil ? "returned nil" : "succeeded (\(image!.width)x\(image!.height) px)"
+        } catch {
+            report["captureAttempt"] = "threw: \(error)"
+        }
+        return report
     }
 
     private func find(_ request: Request) async throws -> [String: Any] {
