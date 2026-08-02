@@ -491,7 +491,7 @@ final class CommandRouter {
                 ownedBy: pid,
                 near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
             )
-            let url = try writePNG(capture.image, to: destination)
+            let url = try await writePNG(capture.image, to: destination)
             return [
                 "ok": true,
                 "path": url.path,
@@ -523,7 +523,7 @@ final class CommandRouter {
         guard let image = try await ScreenCapture.image(of: rect) else {
             return ["ok": false, "error": "the capture region is degenerate (\(rect))"]
         }
-        let url = try writePNG(image, to: destination)
+        let url = try await writePNG(image, to: destination)
         return [
             "ok": true,
             "path": url.path,
@@ -568,7 +568,7 @@ final class CommandRouter {
         return url
     }
 
-    private var defaultCaptureDirectory: URL {
+    private nonisolated var defaultCaptureDirectory: URL {
         URL.applicationSupportDirectory
             .appending(path: "glass.kagerou.rocuronium")
             .appending(path: "captures")
@@ -576,7 +576,13 @@ final class CommandRouter {
 
     /// Takes an already-resolved destination: validation happens before any capture, so a
     /// refused path costs nothing and never puts screen contents in memory.
-    private func writePNG(_ image: CGImage, to destination: URL?) throws -> URL {
+    ///
+    /// `@concurrent`, because a full-display PNG encode measures 0.5–2 s and this type is
+    /// `@MainActor`: encoding inline froze the menu bar — including the `isDriving`
+    /// indicator, the one signal that must stay honest while the engine works. Plain
+    /// `nonisolated` would not move it: under NonisolatedNonsendingByDefault a nonisolated
+    /// async function runs on the *caller's* executor.
+    @concurrent private func writePNG(_ image: CGImage, to destination: URL?) async throws -> URL {
         let url: URL
         if let destination {
             url = destination
@@ -613,7 +619,7 @@ final class CommandRouter {
     /// they were accumulating with no expiry. Same reasoning as the virtual display's lease
     /// TTL: state that nobody is holding should not outlive its usefulness. Best-effort and
     /// deliberately silent; a capture must not fail because cleanup did.
-    private func sweepOldCaptures(in directory: URL) {
+    private nonisolated func sweepOldCaptures(in directory: URL) {
         let cutoff = Date(timeIntervalSinceNow: -Constants.captureRetention)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.contentModificationDateKey],
@@ -626,7 +632,7 @@ final class CommandRouter {
         }
     }
 
-    private enum Constants {
+    private nonisolated enum Constants {
         /// Long enough for an agent to read a capture it just took and for a human to find it
         /// afterwards; short enough that a day of automation does not leave a screen archive.
         static let captureRetention: TimeInterval = 24 * 60 * 60
