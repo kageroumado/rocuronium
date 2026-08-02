@@ -41,12 +41,17 @@ nonisolated struct GhostLadder {
             )
         }
 
+        // A baseline for visual verification, taken after the wake so it depicts a screen
+        // that is actually on. Absent when Screen Recording was never granted, in which case
+        // actions without a read-back stay honestly unverifiable.
+        let baseline = await baselineImage(of: element)
+
         // Rung 1 — accessibility, then read back. A success code proves nothing.
         if let evidence = await tryAccessibility(
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore,
         ) {
-            return evidence
+            return await evidence.addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
         }
 
         // Rung 2 — posted events, delivered to this process only.
@@ -54,7 +59,7 @@ nonisolated struct GhostLadder {
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore,
         ) {
-            return evidence
+            return await evidence.addingVisualEvidence(delta: pixelDelta(from: baseline, of: element))
         }
 
         // Rung 3 (app automation) is delegated to the target adapters: WebKit and Chromium page
@@ -174,6 +179,24 @@ nonisolated struct GhostLadder {
                 focusBefore, focusAfter, cursorBefore, frontBefore, attempts, pid,
             )
         }
+    }
+
+    // MARK: - Visual verification
+
+    /// Captures the target's rectangle before acting, when that is possible at all.
+    private func baselineImage(of element: AXElement) async -> CGImage? {
+        guard ScreenCapture.isPermitted, let frame = element.frame else { return nil }
+        return try? await ScreenCapture.image(of: frame)
+    }
+
+    /// Re-captures the same rectangle and reports how much of it moved. The element is
+    /// re-read for its frame because a confirmed action may have resized or moved it; if it
+    /// did, the rectangles no longer match and the diff correctly declines to answer.
+    private func pixelDelta(from baseline: CGImage?, of element: AXElement) async -> Double? {
+        guard let baseline, let frame = element.frame,
+              let after = try? await ScreenCapture.image(of: frame)
+        else { return nil }
+        return ScreenDiff.changedFraction(from: baseline, to: after)
     }
 
     // MARK: - Evidence assembly

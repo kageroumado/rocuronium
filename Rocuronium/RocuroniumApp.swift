@@ -49,10 +49,29 @@ final class EngineHost {
     }
 
     var isTrusted: Bool { AXIsProcessTrusted() }
+    var canCaptureScreen: Bool { ScreenCapture.isPermitted }
 
+    /// Asks for Accessibility, then opens the pane regardless.
+    ///
+    /// The system prompt from `AXIsProcessTrustedWithOptions` is shown **once per bundle** —
+    /// after it has been dismissed or denied, the call does nothing visible, so a button
+    /// wired only to it appears broken. Opening the pane directly is what actually helps.
     func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+        openSettings(pane: "Privacy_Accessibility")
+    }
+
+    /// Screen Recording is a separate grant, needed only for visual verification. Without it
+    /// the engine still works; actions without a read-back just stay unverifiable.
+    func requestScreenRecordingPermission() {
+        ScreenCapture.requestPermission()
+        openSettings(pane: "Privacy_ScreenCapture")
+    }
+
+    private func openSettings(pane: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
@@ -65,10 +84,20 @@ private struct MenuBarContent: View {
 
             if !engine.isTrusted {
                 // Without this grant nothing works at all, so it is the first thing shown.
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Accessibility access is required.")
-                        .font(.callout)
-                    Button("Grant access…") { engine.requestAccessibilityPermission() }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Accessibility access is required.").font(.callout)
+                    Text("Add Rocuronium in the list, then relaunch it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Accessibility settings…") { engine.requestAccessibilityPermission() }
+                }
+            }
+
+            if !engine.canCaptureScreen {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Screen Recording is optional.").font(.callout)
+                    Text("Without it, clicks that expose no value stay unverifiable.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Screen Recording settings…") { engine.requestScreenRecordingPermission() }
                 }
             }
 
