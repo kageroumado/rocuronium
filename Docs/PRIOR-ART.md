@@ -35,11 +35,19 @@ get right.
 independently, and clutters the process list; an assertion released in `deinit` cannot outlive
 us. Their idempotent-acquire plus RAII-release shape is worth copying verbatim.
 
-**But with the opposite assertion type.** Codex holds `PreventUserIdleSystemSleep`
-(`macos.rs:26`) — correct for a headless coding turn, wrong for anything that looks at the
-screen, because it keeps the machine running while letting the panel sleep. That is precisely
-the state we measured as collapsing every accessibility tree. The same mistake is live in
-Adrafinil today, which is why it needs a display-class hold.
+**With the opposite assertion type — but see the correction below.** The open-source inhibitor
+holds `PreventUserIdleSystemSleep` (`macos.rs:26`), which keeps the machine running while
+letting the panel sleep: precisely the state we measured as collapsing every accessibility tree.
+That is the right choice for a headless coding turn and the wrong one for anything that looks at
+the screen. The same gap is live in Adrafinil today, which is why it needs a display-class hold.
+
+> **Correction (same day, from disassembly).** It was wrong to call this OpenAI's mistake. Their
+> *GUI* component — `SkyComputerUseService`, the binary that actually drives the screen — holds
+> `PreventUserIdleDisplaySleep` and calls `IOPMAssertionDeclareUserActivity` to wake the panel,
+> which is exactly what `DisplayWake.Hold` does. `PreventUserIdleSystemSleep` appears only in
+> the headless CLI inhibitor, where it is correct. So this is not a divergence from Codex; their
+> shipped GUI binary independently made the same choice we did. See
+> `~/Developer/Research/codex-computer-use-internals.md`.
 
 **The `CFSTR` constant trap.** `macos.rs:24-25` documents that Apple exposes assertion types as
 `CFSTR(...)` macros which cannot be bound as constants — hence raw string literals. The same
