@@ -21,6 +21,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium find       --app <name> [--label <text>]
   rocuronium type       --app <name> --text <text> [--label <text>]
   rocuronium click      --app <name> [--label <text>] [--x <n> --y <n>]
+  rocuronium shortcut   --app <name> --keys <cmd+a>
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
@@ -57,7 +58,7 @@ if command == "display", let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }
-for flag in ["app", "label", "text", "reason", "lease", "path"] {
+for flag in ["app", "label", "text", "reason", "lease", "path", "keys"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 for flag in ["x", "y", "w", "h", "minutes"] {
@@ -184,6 +185,11 @@ case "screenshot":
 
 default:
     print(reply["summary"] as? String ?? "done")
+    // Which menu item delivered a shortcut — "Edit ▸ Select All", not just "it was pressed".
+    if let menuItem = reply["menuItem"] as? String, !menuItem.isEmpty {
+        print("menu item: \(menuItem)")
+    }
+    if let note = reply["note"] as? String { print("note: \(note)") }
     if let readback = reply["readback"] as? String, !readback.isEmpty {
         print("read back: \(readback.prefix(60))")
     }

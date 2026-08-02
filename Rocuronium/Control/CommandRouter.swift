@@ -46,6 +46,8 @@ final class CommandRouter {
         /// Region size for screenshots, paired with x/y.
         var w: Double?
         var h: Double?
+        /// A keyboard shortcut for `shortcut`, e.g. "cmd+a".
+        var keys: String?
     }
 
     func route(_ data: Data) async -> Data {
@@ -70,6 +72,7 @@ final class CommandRouter {
         case "find": try await find(request)
         case "type": try await typeCommand(request)
         case "click": try await act(request, action: .click)
+        case "shortcut": try await shortcut(request)
         case "display": try await display(request)
         case "park": try await park(request)
         case "screenshot": try await screenshot(request)
@@ -194,7 +197,43 @@ final class CommandRouter {
             pid: pid, locator: locator, action: action,
             allowHardwareInput: request.allowHardwareInput ?? false,
         )
+        return evidenceReply(evidence)
+    }
 
+    /// Delivers a keyboard shortcut by pressing its menu item — no CGEvent, no focus change,
+    /// and it works on Chromium, which ignores keycode-only posted events entirely.
+    private func shortcut(_ request: Request) async throws -> [String: Any] {
+        guard let keys = request.keys else {
+            return [
+                "ok": false,
+                "error": "'shortcut' requires --keys, e.g. --keys cmd+a",
+                "presence": presenceBlock(),
+            ]
+        }
+        let pid = try resolve(request)
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.pressShortcut(
+            pid: pid, keys: keys,
+            allowHardwareInput: request.allowHardwareInput ?? false,
+        )
+        var reply = evidenceReply(result.evidence)
+        reply["menuItem"] = result.menuPath
+        if !result.itemReportedEnabled {
+            // Measured both ways on 2026-08-02: a background AppKit app (TextEdit) reports
+            // disabled and the press is a silent no-op that still returns success; a
+            // background Electron app (Postman) reports enabled and the press works.
+            reply["menuItemReportedDisabled"] = true
+            reply["note"] = "the menu item reported disabled before the press. On AppKit apps "
+                + "in the background this is accurate — the press returns success but does "
+                + "nothing, because inactive apps never validate their menus. Treat anything "
+                + "short of a confirmed verdict as 'did not happen'; activating the target "
+                + "first is what makes AppKit menus live."
+        }
+        return reply
+    }
+
+    private func evidenceReply(_ evidence: Evidence) -> [String: Any] {
         var reply: [String: Any] = [
             "ok": evidence.succeeded,
             "verdict": evidence.verdict.rawValue,
@@ -209,6 +248,9 @@ final class CommandRouter {
             "attempts": evidence.attempts.map { ["rung": $0.rung.rawValue, "outcome": $0.outcome] },
             "presence": presenceBlock(),
         ]
+        // The measurement behind a visual verdict. Exposing it is what makes a wrong
+        // threshold discoverable from outside instead of reading as a mystery no-effect.
+        if let pixelDelta = evidence.pixelDelta { reply["pixelDelta"] = pixelDelta }
         if let referral = evidence.referral {
             reply["referral"] = [
                 "channel": referral.channel,
