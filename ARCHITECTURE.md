@@ -26,9 +26,28 @@ Rocuronium.app            menu bar item + engine + control socket   ← holds TC
 The CLI launches the app if it isn't running, then speaks JSON over the socket. This mirrors
 `RefraxControlServer`, so the pattern is already proven in the suite.
 
+**The socket serializes requests, and the engine depends on it.** A deep AX walk blocks the
+`Engine` actor for its full duration (measured 1.2 s on Discord), and `TreeCache` is a plain
+class owned by the engine — deliberately not an actor, because the engine already serializes
+it. That is safe *only while* the accept loop handles one request at a time. Making the
+server concurrent without making walks interruptible would let one slow target stall every
+other caller — re-derive this trade before touching either side. (Review 2026-08-02, item B.)
+
 **Menu bar presence doubles as the safety indicator.** The icon is dimmed when idle and
 active while the engine is driving, which answers the standing "is it working?" complaint by
 construction — the same trick Dantrolene uses for home/away.
+
+**Working on this — three traps that cost real time:**
+
+- **The debug loop is build-sign-install.** The socket verifies the peer's code signature
+  (team `52K336H235`) against its audit token, so `.build/debug/rocuronium` is refused —
+  correctly. Use `./Scripts/release.sh --install` (notarization ~4 min; run it backgrounded),
+  then `/Applications/Rocuronium.app/Contents/Resources/rocuronium`.
+- **The CLI lives in `Contents/Resources`, never `Contents/MacOS`** — the filesystem is
+  case-insensitive, so `rocuronium` there overwrites the app's own `Rocuronium` executable.
+- **`AXUIElement` is not `Sendable`** (checked against the SDK, not assumed). Elements are
+  created, used, and discarded inside the `Engine` actor and never cross its boundary; the
+  module's default isolation is MainActor, engine types are explicitly `nonisolated`.
 
 ## 2. Module layout
 
@@ -140,7 +159,7 @@ process at all.
 locates the menu item carrying the shortcut (`AXMenuItemCmdChar`/`CmdVirtualKey` plus the
 Carbon modifier mask, where 0 means plain Cmd) and presses it — no CGEvent, no focus change,
 and it works on Chromium, which ignores keycode-only posted events entirely. Measured limits
-(2026-08-02, `Docs/REVIEW-2026-08-02.md` §16): background *AppKit* apps never validate their
+(2026-08-02 review, item 16 — the review doc is retired; full text in git history): background *AppKit* apps never validate their
 menus, so the press returns success and does nothing — accurately foretold by the item's
 disabled state, which the reply surfaces. Background *Electron* apps keep items enabled and
 the press is best-effort: a parked Postman opened a real tab right after launch, then the
@@ -246,9 +265,9 @@ with the landing read back as evidence because the window manager may clamp or r
 `screenshot` is the default vision backend made concrete — capture and hand the pixels to the
 calling model. An `--app` capture uses `SCContentFilter(desktopIndependentWindow:)`, never a
 region of the display: a region returns whatever is topmost there, and an occluded window
-would be captured as someone else's pixels at exactly the right size (measured; see
-`Docs/REVIEW-2026-08-02.md` §15). Region and full-display captures keep visible-pixel
-semantics, which is the right question for a diff.
+would be captured as someone else's pixels at exactly the right size (measured, 2026-08-02
+review item 15). Region and full-display captures keep visible-pixel semantics, which is the
+right question for a diff.
 
 ## 9a. Rung 4 — hardware input
 
