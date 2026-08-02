@@ -109,9 +109,12 @@ nonisolated enum MenuQuery {
     private static func search(
         _ element: AXElement, shortcut: Shortcut, path: [String], depth: Int, visited: inout Int
     ) -> Match? {
-        guard depth <= Constants.maximumDepth, visited <= Constants.maximumItemsVisited else { return nil }
+        guard depth <= Constants.maximumDepth else { return nil }
         for child in element.children {
+            // The cap must gate every child, not just recursion entry: one pathologically
+            // wide container would otherwise be walked in full, each item costing AX IPC.
             visited += 1
+            guard visited <= Constants.maximumItemsVisited else { return nil }
             let title = child.string(kAXTitleAttribute) ?? ""
             if child.role == "AXMenuItem", matches(child, shortcut) {
                 let enabled = (child.attribute(kAXEnabledAttribute) as? Bool) ?? true
