@@ -52,6 +52,23 @@ nonisolated struct Evidence: Codable, Sendable {
 
     var succeeded: Bool { verdict == .confirmed }
 
+    /// Folds a visual measurement into an existing verdict.
+    ///
+    /// Only ever *upgrades* `unverifiable`: a read-back that already confirmed or refuted the
+    /// action is stronger evidence than pixels, and must not be overridden by an unrelated
+    /// animation somewhere in the same rectangle.
+    func addingVisualEvidence(delta: Double?) -> Evidence {
+        guard verdict == .unverifiable, let delta else { return self }
+        return Evidence(
+            action: action, target: target, rung: rung,
+            verdict: Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta),
+            readback: readback, pixelDelta: delta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            attempts: attempts,
+        )
+    }
+
     /// One line for the activity log and the CLI.
     var summary: String {
         let marker = switch verdict {
