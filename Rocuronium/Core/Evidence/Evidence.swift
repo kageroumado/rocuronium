@@ -52,6 +52,19 @@ nonisolated struct Evidence: Codable, Sendable {
 
     var succeeded: Bool { verdict == .confirmed }
 
+    /// Whether *we* moved the cursor, as opposed to the cursor having moved.
+    ///
+    /// The raw measurement cannot tell the difference: a human moving the mouse while an action
+    /// runs registers identically to us stealing it. But only `hardwareInput` is capable of
+    /// moving the pointer — every other rung delivers events to a process without touching the
+    /// system cursor — so movement under any other rung was the user's own hand. Reporting it
+    /// as ours trains people to ignore the warning, which is worse than not having one.
+    var cursorMovedByUs: Bool { cursorMoved && rung == .hardwareInput }
+
+    /// Movement that happened during the action but cannot have been ours. Evidence a human is
+    /// actively at the machine, not a warning.
+    var cursorMovedByUser: Bool { cursorMoved && rung != .hardwareInput }
+
     /// Folds a visual measurement into an existing verdict.
     ///
     /// Only ever *upgrades* `unverifiable`: a read-back that already confirmed or refuted the

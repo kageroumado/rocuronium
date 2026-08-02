@@ -154,7 +154,10 @@ default:
         print("read back: \(readback.prefix(60))")
     }
     // The whole point of the tool: say plainly whether the human's cursor was touched.
-    if reply["cursorMoved"] as? Bool == true { print("⚠︎ the cursor was moved") }
+    // Movement under a ghost rung is the user's own hand — warning about it would train
+    // people to ignore the one warning that matters.
+    if reply["cursorMovedByUs"] as? Bool == true { print("⚠︎ the cursor was taken") }
+    else if reply["cursorMovedByUser"] as? Bool == true { print("(cursor moved — yours, not ours)") }
     if reply["frontmostChanged"] as? Bool == true { print("⚠︎ the frontmost app changed") }
     if let attempts = reply["attempts"] as? [[String: Any]] {
         for attempt in attempts { print("  · \(attempt["rung"] ?? "?"): \(attempt["outcome"] ?? "")") }

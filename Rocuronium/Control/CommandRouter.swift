@@ -141,6 +141,8 @@ final class CommandRouter {
             "summary": evidence.summary,
             "readback": evidence.readback ?? "",
             "cursorMoved": evidence.cursorMoved,
+            "cursorMovedByUs": evidence.cursorMovedByUs,
+            "cursorMovedByUser": evidence.cursorMovedByUser,
             "frontmostChanged": evidence.frontmostChanged,
             "attempts": evidence.attempts.map { ["rung": $0.rung.rawValue, "outcome": $0.outcome] },
             "presence": presenceBlock(),
