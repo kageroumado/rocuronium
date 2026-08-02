@@ -144,6 +144,7 @@ final class CommandRouter {
             "cursorMovedByUs": evidence.cursorMovedByUs,
             "cursorMovedByUser": evidence.cursorMovedByUser,
             "frontmostChanged": evidence.frontmostChanged,
+            "focusTakenByUs": evidence.focusTakenByUs,
             "attempts": evidence.attempts.map { ["rung": $0.rung.rawValue, "outcome": $0.outcome] },
             "presence": presenceBlock(),
         ]

@@ -221,11 +221,14 @@ nonisolated struct GhostLadder {
         _ verdict: Evidence.Verdict, _ readback: String?, _ pixelDelta: Double?,
         _ focusBefore: String?, _ focusAfter: String?,
         _ cursorBefore: CGPoint, _ frontBefore: String,
-        _ attempts: [Evidence.Attempt], _: pid_t
+        _ attempts: [Evidence.Attempt], _ pid: pid_t
     ) async -> Evidence {
         let cursorAfter = EventPoster.cursorLocation
         let moved = hypot(cursorAfter.x - cursorBefore.x, cursorAfter.y - cursorBefore.y) >= 1
         let frontAfter = await MainActor.run { EventPoster.frontmostBundleID }
+        let targetBundle = await MainActor.run {
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        }
         return Evidence(
             action: String(describing: action),
             target: "\(element.role) '\(element.label)'",
@@ -237,6 +240,7 @@ nonisolated struct GhostLadder {
             focusAfter: focusAfter,
             cursorMoved: moved,
             frontmostChanged: frontAfter != frontBefore,
+            frontmostBecameTarget: frontAfter != frontBefore && frontAfter == targetBundle,
             attempts: attempts,
         )
     }
