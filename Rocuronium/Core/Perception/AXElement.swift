@@ -178,6 +178,17 @@ nonisolated struct AXElement {
         AXUIElementSetAttributeValue(raw, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
+    /// Whether the handle still refers to a live element. Electron in particular rebuilds
+    /// elements on focus changes, and a dead handle answers every read with nil — which
+    /// downstream looks identical to "the field is empty" and turns a successful action into
+    /// a false `noEffect`. Only `.invalidUIElement` proves death; any other answer (including
+    /// errors) leaves the handle presumed alive, because re-fetching an *equivalent* element
+    /// can find the wrong one of several lookalikes.
+    var isValid: Bool {
+        var out: CFTypeRef?
+        return AXUIElementCopyAttributeValue(raw, kAXRoleAttribute as CFString, &out) != .invalidUIElement
+    }
+
     /// A stable-enough identity for deduping results. `CFEqual` on `AXUIElement` is usable
     /// when the display is awake but degenerates along with everything else when it is not,
     /// so results are collapsed on what they look like instead of on object identity.

@@ -24,7 +24,10 @@ nonisolated struct GhostLadder {
 
     // MARK: - Entry point
 
-    func perform(_ action: Action, on element: AXElement, pid: pid_t) async -> Evidence {
+    func perform(
+        _ action: Action, on element: AXElement, pid: pid_t,
+        refetch: () -> AXElement? = { nil }
+    ) async -> Evidence {
         var attempts: [Evidence.Attempt] = []
 
         let cursorBefore = EventPoster.cursorLocation
@@ -78,20 +81,20 @@ nonisolated struct GhostLadder {
         // Rung 1 — accessibility, then read back. A success code proves nothing.
         if let evidence = await tryAccessibility(
             action, element, pid, &attempts,
-            cursorBefore, frontBefore, focusBefore,
+            cursorBefore, frontBefore, focusBefore, refetch,
         ) {
             return await evidence.addingVisualEvidence(
-                delta: pixelDelta(from: baseline, at: baselineRect, of: element),
+                delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
             )
         }
 
         // Rung 2 — posted events, delivered to this process only.
         if let evidence = await tryPostedEvents(
             action, element, pid, &attempts,
-            cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable,
+            cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
         ) {
             return await evidence.addingVisualEvidence(
-                delta: pixelDelta(from: baseline, at: baselineRect, of: element),
+                delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
             )
         }
 
@@ -115,14 +118,75 @@ nonisolated struct GhostLadder {
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element))
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
         }
-        attempts.append(.init(rung: .hardwareInput, outcome: "not implemented — no hardware-input path exists yet"))
-        return await finish(
-            action, element, .hardwareInput, .unverifiable, nil, nil,
-            focusBefore, ElementQuery.focused(pid: pid)?.signature,
-            cursorBefore, frontBefore, attempts, pid, referral: referral,
-        )
+        // The lock screen owns the console while locked: a hardware keystroke would land in
+        // the password field. Ghost rungs are safe there — this one is categorically not.
+        guard !UserPresence.read().screenLocked else {
+            attempts.append(.init(
+                rung: .hardwareInput,
+                outcome: "refused: the screen is locked and hardware input would type into the lock screen",
+            ))
+            return await finish(
+                action, element, .postedEvent, .noEffect, nil, nil,
+                focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+        }
+
+        let live = element.isValid ? element : (refetch() ?? element)
+        guard let frame = live.frame else {
+            attempts.append(.init(rung: .hardwareInput, outcome: "element has no frame to aim the real cursor at"))
+            // Tagged with the last rung that actually posted anything: nothing was delivered
+            // here, and a `hardwareInput` tag would falsely warn that the cursor was taken.
+            return await finish(
+                action, element, .postedEvent, .unverifiable, nil, nil,
+                focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            )
+        }
+        let aim = CGPoint(x: frame.midX, y: frame.midY)
+
+        switch action {
+        case let .setText(text):
+            await HardwareInput.click(at: aim)
+            try? await Task.sleep(for: .milliseconds(200))
+            await HardwareInput.type(text)
+            try? await Task.sleep(for: .milliseconds(400))
+            // Same read-back discipline as rung 2: only the aimed-at element counts, and a
+            // handle killed by the focus change is re-resolved before it can misreport.
+            let target = live.isValid ? live : (refetch() ?? live)
+            let focused = ElementQuery.focused(pid: pid)
+            let isOurTarget = focused?.signature == target.signature
+            let landed = isOurTarget ? focused?.value : target.value
+            let arrived = text.isEmpty ? (landed?.isEmpty ?? false) : (landed?.contains(text) == true)
+            // Three-way, not two: a field that exposes no readable value cannot refute the
+            // write, and claiming no-effect there would send the caller retrying an action
+            // that may well have landed.
+            let verdict: Evidence.Verdict = arrived ? .confirmed : (landed == nil ? .unverifiable : .noEffect)
+            attempts.append(.init(
+                rung: .hardwareInput,
+                outcome: arrived ? "confirmed by read-back" : (landed == nil ? "typed; target exposes no value to read back" : "typed, did not land in target"),
+            ))
+            return await finish(
+                action, element, .hardwareInput, verdict, landed, nil,
+                focusBefore, focused?.signature,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+
+        case .click, .press:
+            await HardwareInput.click(at: aim)
+            try? await Task.sleep(for: .milliseconds(300))
+            let focusAfter = ElementQuery.focused(pid: pid)?.signature
+            let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
+                ? .confirmed : .unverifiable
+            attempts.append(.init(rung: .hardwareInput, outcome: "clicked with the real cursor"))
+            return await finish(
+                action, element, .hardwareInput, verdict, nil, nil,
+                focusBefore, focusAfter,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+        }
     }
 
     // MARK: - Rungs
@@ -130,7 +194,8 @@ nonisolated struct GhostLadder {
     private func tryAccessibility(
         _ action: Action, _ element: AXElement, _ pid: pid_t,
         _ attempts: inout [Evidence.Attempt],
-        _ cursorBefore: CGPoint, _ frontBefore: String, _ focusBefore: String?
+        _ cursorBefore: CGPoint, _ frontBefore: String, _ focusBefore: String?,
+        _ refetch: () -> AXElement?
     ) async -> Evidence? {
         switch action {
         case let .setText(text):
@@ -141,7 +206,18 @@ nonisolated struct GhostLadder {
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
-            let readback = element.value
+            // A write can kill its own handle — Electron rebuilds elements on focus — and a
+            // dead handle answers nil, which reads as "the field is untouched" and turns a
+            // landed write into a false no-effect. Re-resolve only when provably dead.
+            var readbackSource = element
+            if !element.isValid, let replacement = refetch() {
+                attempts.append(.init(
+                    rung: .accessibility,
+                    outcome: "element handle went stale after the write — re-resolved via the original locator",
+                ))
+                readbackSource = replacement
+            }
+            let readback = readbackSource.value
             // An empty probe would "match" anything, so a cleared field must be verified by
             // emptiness rather than by containment.
             let landed = text.isEmpty ? (readback?.isEmpty ?? false) : (readback?.contains(text) == true)
@@ -199,7 +275,7 @@ nonisolated struct GhostLadder {
         _ action: Action, _ element: AXElement, _ pid: pid_t,
         _ attempts: inout [Evidence.Attempt],
         _ cursorBefore: CGPoint, _ frontBefore: String, _ focusBefore: String?,
-        _ focusDeltaIsUsable: Bool
+        _ focusDeltaIsUsable: Bool, _ refetch: () -> AXElement?
     ) async -> Evidence? {
         switch action {
         case let .setText(text):
@@ -212,16 +288,18 @@ nonisolated struct GhostLadder {
             await EventPoster.type(text, pid: pid)
             try? await Task.sleep(for: .milliseconds(400))
 
-            // Re-resolve through the focused element: in Electron the composer only becomes
-            // reachable once it holds focus, so the original handle can be stale.
+            // The click that focused the field is exactly what makes Electron rebuild the
+            // element, so the handle we aimed with may now be dead — in which case its
+            // signature reads "?|…" and its value nil, misreporting a landed write as lost.
+            let target = element.isValid ? element : (refetch() ?? element)
             // Read back only from the element we aimed at. Posted keys go to whatever the app
             // considers first responder, which may be something else entirely — measured on
             // Safari's address bar, where the text lands in the page instead. Accepting the
             // focused element's value as proof would report "confirmed" for text delivered to
             // the wrong field, which breaks the one promise this tool makes.
             let focused = ElementQuery.focused(pid: pid)
-            let isOurTarget = focused?.signature == element.signature
-            let landed = isOurTarget ? focused?.value : element.value
+            let isOurTarget = focused?.signature == target.signature
+            let landed = isOurTarget ? focused?.value : target.value
             let arrived = text.isEmpty ? (landed?.isEmpty ?? false) : (landed?.contains(text) == true)
             guard arrived else {
                 let elsewhere = !isOurTarget && focused?.value?.contains(text) == true
@@ -271,10 +349,15 @@ nonisolated struct GhostLadder {
     /// Re-captures the same rectangle and reports how much of it moved. The element is
     /// re-read for its frame because a confirmed action may have resized or moved it; if it
     /// did, the rectangles no longer match and the diff correctly declines to answer.
+    /// A dead handle reports no frame at all, which would silently drop the one signal left
+    /// on the no-effect path — so it is re-resolved first, like every other read.
     private func pixelDelta(
-        from baseline: CGImage?, at baselineRect: CGRect?, of element: AXElement
+        from baseline: CGImage?, at baselineRect: CGRect?, of element: AXElement,
+        _ refetch: () -> AXElement?
     ) async -> Double? {
-        guard let baseline, let baselineRect, let frame = element.frame else { return nil }
+        guard let baseline, let baselineRect else { return nil }
+        let source = element.isValid ? element : (refetch() ?? element)
+        guard let frame = source.frame else { return nil }
         // Same size is not the same place. A row that scrolled, or a field shifted by a layout
         // change, yields two equally-sized captures of *different* regions — which diff as a
         // large delta and would read as a confident confirmation.
