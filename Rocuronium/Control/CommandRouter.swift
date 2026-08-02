@@ -332,6 +332,18 @@ final class CommandRouter {
         if let x = request.x, let y = request.y {
             destination = CGPoint(x: x, y: y)
         } else if let bounds = virtualDisplay.virtualScreenBounds {
+            // Parking onto the virtual screen requires holding a lease, even when the screen
+            // already exists. Without this, a window can be moved onto a display nobody is
+            // keeping alive — and when it goes (our teardown, an expiry, or the user quitting
+            // a display they started themselves) the window is stranded somewhere its owner
+            // cannot see or reach. Found by doing exactly that to a real Finder window.
+            guard !virtualDisplay.leases.isEmpty else {
+                return [
+                    "ok": false,
+                    "error": "the virtual display is running but you hold no lease on it — run 'display acquire' first, "
+                        + "so the display cannot disappear out from under the parked window. Pass --x/--y to move a window anyway.",
+                ]
+            }
             // Inset from the corner so the title bar is reachable even if the display's
             // menu bar overlaps its top edge.
             destination = CGPoint(x: bounds.origin.x + 40, y: bounds.origin.y + 40)
