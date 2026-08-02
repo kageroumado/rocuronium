@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import os
+import System
 
 /// A Unix-domain socket the CLI and MCP server talk to.
 ///
@@ -55,6 +56,12 @@ final class ControlServer {
 
         // A stale socket file from a crash would make bind fail with EADDRINUSE.
         unlink(path)
+
+        // bind() creates the socket with 0777 & ~umask, and the chmod below only lands after.
+        // Narrow the window rather than leaving a world-writable socket that can drive the
+        // machine, however briefly.
+        let previousMask = umask(0o177)
+        defer { umask(previousMask) }
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -117,6 +124,17 @@ final class ControlServer {
                 if errno == EBADF || errno == EINVAL { return }
                 continue
             }
+            guard let peer = Peer(descriptor: client), peer.isAuthorized else {
+                let peerDescription = Peer(descriptor: client)?.description ?? "unidentified"
+                log.error("Rejected control connection from \(peerDescription, privacy: .public)")
+                _ = Data(#"{"ok":false,"error":"unauthorized"}"#.utf8).withUnsafeBytes {
+                    write(client, $0.baseAddress, $0.count)
+                }
+                close(client)
+                continue
+            }
+            log.info("Control request from \(peer.description, privacy: .public)")
+
             var on: Int32 = 1
             setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             // Without this, a client that connects and sends nothing blocks the single accept
@@ -126,6 +144,46 @@ final class ControlServer {
             handle(client: client, router: router)
             close(client)
         }
+    }
+
+    /// Who is on the other end of a control connection.
+    ///
+    /// The socket hands out this app's Accessibility grant to whoever can talk to it, so
+    /// "same uid" — which is all `chmod 0600` establishes — is exactly the boundary TCC exists
+    /// not to trust. This is the first half of closing that: identify and record the caller,
+    /// and refuse anything not running as this user.
+    ///
+    /// **Known gap.** The second half is verifying the peer's code signature so that only known
+    /// binaries can drive the machine. That is deliberately not done yet because the CLI ships
+    /// unsigned from SwiftPM, and a check it cannot pass would be theatre. Until then every
+    /// caller is logged with its pid and executable path, so an unexpected client is at least
+    /// attributable after the fact.
+    private nonisolated struct Peer: CustomStringConvertible {
+        let pid: pid_t
+        let uid: uid_t
+        let executablePath: String
+
+        init?(descriptor: Int32) {
+            var credentials = xucred()
+            var size = socklen_t(MemoryLayout<xucred>.size)
+            guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERCRED, &credentials, &size) == 0 else { return nil }
+            uid = credentials.cr_uid
+
+            var peerPID: pid_t = 0
+            var pidSize = socklen_t(MemoryLayout<pid_t>.size)
+            pid = getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &pidSize) == 0 ? peerPID : -1
+
+            var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            executablePath = pid > 0 && proc_pidpath(pid, &buffer, UInt32(MAXPATHLEN)) > 0
+                ? String(cString: buffer)
+                : "unknown"
+        }
+
+        /// Only this user. A different uid cannot reach a 0600 socket anyway, so this is
+        /// defense in depth against a permissions mistake rather than the primary control.
+        var isAuthorized: Bool { uid == getuid() }
+
+        var description: String { "pid \(pid) uid \(uid) — \(executablePath)" }
     }
 
     private nonisolated static func handle(client: Int32, router: CommandRouter) {
