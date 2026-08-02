@@ -147,6 +147,26 @@ nonisolated struct GhostLadder {
         }
         let aim = CGPoint(x: frame.midX, y: frame.midY)
 
+        // A real HID click goes to whatever window is topmost at the coordinate, unlike
+        // `postToPid`, which reaches a process through any amount of occlusion. Clicking an
+        // occluded target would take the user's cursor and click *somebody else's* app.
+        // Refuse instead, and name what is in the way. (Parking the target on the virtual
+        // display is the reliable way to make this check pass.)
+        if let owner = HardwareInput.ownerOfWindow(at: aim), owner != pid {
+            let occluder = await MainActor.run {
+                NSRunningApplication(processIdentifier: owner)?.localizedName ?? "pid \(owner)"
+            }
+            attempts.append(.init(
+                rung: .hardwareInput,
+                outcome: "refused: '\(occluder)' covers the target at (\(Int(aim.x)), \(Int(aim.y))) — a real click there would hit it, not us",
+            ))
+            return await finish(
+                action, element, .postedEvent, .noEffect, nil, nil,
+                focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                cursorBefore, frontBefore, attempts, pid, referral: referral,
+            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+        }
+
         switch action {
         case let .setText(text):
             await HardwareInput.click(at: aim)
