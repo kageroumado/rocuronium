@@ -40,6 +40,9 @@ nonisolated struct Evidence: Codable, Sendable {
     /// Proof the cursor was not stolen. Sampled around every action, never assumed.
     let cursorMoved: Bool
     let frontmostChanged: Bool
+    /// Whether the app we were driving is the one that came forward. Distinguishes us
+    /// activating a target from the user (or an unrelated launch) switching apps.
+    let frontmostBecameTarget: Bool
 
     /// Rungs that were tried and fell through, with why. Makes a fallback to hardware input
     /// visible instead of silent.
@@ -65,6 +68,10 @@ nonisolated struct Evidence: Codable, Sendable {
     /// actively at the machine, not a warning.
     var cursorMovedByUser: Bool { cursorMoved && rung != .hardwareInput }
 
+    /// Focus we took. Unlike the cursor, an action genuinely can raise its target — so the
+    /// test is whether the *target* came forward, not merely that something did.
+    var focusTakenByUs: Bool { frontmostChanged && frontmostBecameTarget }
+
     /// Folds a visual measurement into an existing verdict.
     ///
     /// Only ever *upgrades* `unverifiable`: a read-back that already confirmed or refuted the
@@ -78,6 +85,7 @@ nonisolated struct Evidence: Codable, Sendable {
             readback: readback, pixelDelta: delta,
             focusBefore: focusBefore, focusAfter: focusAfter,
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts,
         )
     }

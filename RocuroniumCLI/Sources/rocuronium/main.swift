@@ -158,7 +158,8 @@ default:
     // people to ignore the one warning that matters.
     if reply["cursorMovedByUs"] as? Bool == true { print("⚠︎ the cursor was taken") }
     else if reply["cursorMovedByUser"] as? Bool == true { print("(cursor moved — yours, not ours)") }
-    if reply["frontmostChanged"] as? Bool == true { print("⚠︎ the frontmost app changed") }
+    if reply["focusTakenByUs"] as? Bool == true { print("⚠︎ focus was taken — the target app came forward") }
+    else if reply["frontmostChanged"] as? Bool == true { print("(frontmost changed — not to our target, so not ours)") }
     if let attempts = reply["attempts"] as? [[String: Any]] {
         for attempt in attempts { print("  · \(attempt["rung"] ?? "?"): \(attempt["outcome"] ?? "")") }
     }
