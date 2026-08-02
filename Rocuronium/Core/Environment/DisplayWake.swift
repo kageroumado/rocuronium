@@ -52,4 +52,45 @@ nonisolated enum DisplayWake {
     /// Whether perception can be trusted right now. Callers should refuse to report "this app
     /// has no such element" while this is false — the correct answer is "I cannot see."
     static var perceptionIsReliable: Bool { !displayIsAsleep }
+
+    /// Holds the display awake for the lifetime of the object, releasing on deinit.
+    ///
+    /// Waking once is not enough for a long task: the display can sleep again mid-run and take
+    /// every accessibility tree with it. This is the assertion to hold — **not** the system
+    /// one. `PreventUserIdleSystemSleep` keeps the machine running while letting the panel
+    /// sleep, which is exactly the state that blinds the engine; it is the right choice for a
+    /// headless coding agent and the wrong one for anything that looks at the screen.
+    ///
+    /// An assertion is used rather than spawning `caffeinate`: a child process leaks if we
+    /// crash, can be killed independently, and clutters the process list, while an assertion
+    /// dies with us.
+    final class Hold {
+        private var assertion: IOPMAssertionID = 0
+        private(set) var isHeld = false
+
+        /// Apple defines these assertion types as `CFSTR(...)` macros, which do not import as
+        /// constants, so the raw string is the only way to name them.
+        private static let preventDisplaySleep = "PreventUserIdleDisplaySleep" as CFString
+
+        init?(reason: String) {
+            let result = IOPMAssertionCreateWithName(
+                Self.preventDisplaySleep,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                reason as CFString,
+                &assertion,
+            )
+            guard result == kIOReturnSuccess else { return nil }
+            isHeld = true
+        }
+
+        func release() {
+            guard isHeld else { return }
+            IOPMAssertionRelease(assertion)
+            isHeld = false
+        }
+
+        deinit {
+            if isHeld { IOPMAssertionRelease(assertion) }
+        }
+    }
 }

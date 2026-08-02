@@ -31,6 +31,21 @@ nonisolated struct GhostLadder {
         let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
         let focusBefore = ElementQuery.focused(pid: pid)?.signature
 
+        // Preflight the grant, because the failure without it is silent. An ungranted
+        // CGEvent post returns no error and simply does nothing, which would surface here as
+        // an ordinary "no effect" verdict and send the caller hunting for a bug in the app it
+        // is driving. This is the single most common way tools like this appear broken.
+        guard AXIsProcessTrusted() else {
+            attempts.append(.init(
+                rung: .accessibility,
+                outcome: "Accessibility is not granted — the system discards synthesized input silently",
+            ))
+            return await finish(
+                action, element, .accessibility, .unverifiable, nil, nil,
+                focusBefore, focusBefore, cursorBefore, frontBefore, attempts, pid,
+            )
+        }
+
         // Rung 0 — without this the tree below is a fiction.
         let wake = await DisplayWake.ensureAwake()
         attempts.append(.init(rung: .displayWake, outcome: wake.rawValue))
