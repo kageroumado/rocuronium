@@ -20,6 +20,8 @@ final class ControlServer {
     private nonisolated enum Constants {
         static let maximumRequestBytes = 1 << 20
         static let socketPermissions: mode_t = 0o600
+        /// Generous: a deep walk of a large Electron tree legitimately takes over a second.
+        static let replyTimeout: TimeInterval = 30
     }
 
     static var socketPath: String {
@@ -125,13 +127,21 @@ final class ControlServer {
 
         // The engine is main-actor bound; this is a socket thread. Hand the work over and wait
         // for the reply rather than touching any engine state from here.
+        // The semaphore both blocks this thread and establishes the happens-before edge that
+        // makes the cross-thread write to `reply` safe.
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var reply = Data()
         Task { @MainActor in
             reply = await router.route(request)
             semaphore.signal()
         }
-        semaphore.wait()
+        // Bounded: a wedged app (an unresponsive target can hold an AX call for seconds) must
+        // not strand this thread forever. The accept loop is single-threaded, so one stuck
+        // request would otherwise deadlock every future client.
+        if semaphore.wait(timeout: .now() + Constants.replyTimeout) == .timedOut {
+            writeAll(Data(#"{"ok":false,"error":"timed out waiting for the engine"}"#.utf8) + [0x0A], to: client)
+            return
+        }
 
         var payload = reply
         payload.append(0x0A)

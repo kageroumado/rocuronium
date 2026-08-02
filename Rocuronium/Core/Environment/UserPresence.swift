@@ -62,7 +62,8 @@ nonisolated enum UserPresence {
     }
 
     static func read() -> Reading {
-        let idle = idleSeconds()
+        // Corrected, not raw: our own synthetic input resets the system's idle timer.
+        let idle = InputAttribution.shared.humanIdleSeconds(rawIdle: idleSeconds())
         let locked = screenIsLocked
         let asleep = DisplayWake.displayIsAsleep
 

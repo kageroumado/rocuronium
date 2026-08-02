@@ -52,11 +52,12 @@ final class VirtualDisplayBridge {
 
     /// The screen the virtual display registered as, if it is attached.
     ///
-    /// Identified by being the screen that is not the main one — the virtual display is
-    /// positioned beside the primary screen rather than mirroring it.
+    /// Matched by name rather than by "the one that is not main": with a real external monitor
+    /// attached, the naive test picks the user's second display and parks agent windows on a
+    /// screen they are looking at — the exact opposite of the intent.
     var virtualScreen: NSScreen? {
-        guard isRunning, NSScreen.screens.count > 1 else { return nil }
-        return NSScreen.screens.first { $0 != NSScreen.main }
+        guard isRunning else { return nil }
+        return NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains("Test Display") }
     }
 
     // MARK: - Lease lifecycle
@@ -77,8 +78,16 @@ final class VirtualDisplayBridge {
         }
 
         if runningApplication == nil {
-            try await launch()
+            // Claim ownership *before* awaiting attachment: launch() can throw after the app
+            // has already started (attach timeout), and a throw between start and this line
+            // would strand a virtual display nobody believes they own.
             startedByUs = true
+            do {
+                try await launch()
+            } catch {
+                release()
+                throw error
+            }
         }
 
         guard virtualScreen != nil else { throw BridgeError.displayNeverAttached }
