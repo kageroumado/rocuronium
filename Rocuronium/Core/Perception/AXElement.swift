@@ -107,6 +107,14 @@ nonisolated struct AXElement {
         ((attribute(kAXWindowsAttribute) as? [AXUIElement]) ?? []).map(AXElement.init)
     }
 
+    /// One step up the ancestor chain. Used to recognize containment (web areas) — not to
+    /// hand elements around, which stays forbidden.
+    var parent: AXElement? {
+        guard let value = attribute(kAXParentAttribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(value as! AXUIElement)
+    }
+
     /// The window the app considers primary, which is a better default target than
     /// `windows.first` — that ordering is arbitrary and can surface a palette or an
     /// inspector ahead of the document.

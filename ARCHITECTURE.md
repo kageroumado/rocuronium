@@ -129,12 +129,23 @@ needs no special transport, only correct traversal. `ChromiumSupport` adds:
 
 **CDP is deliberately not the default.** Attaching requires relaunching the target with
 `--remote-debugging-port`, which is a hostile thing to do to a user's running Discord, and
-production builds may refuse it. Where the app *is* launched by us, CDP gives exact DOM
-control and becomes rung 3. Discord's `127.0.0.1:6463` is its RPC/game-integration socket, not
-CDP — not usable for this.
+production builds may refuse it. Discord's `127.0.0.1:6463` is its RPC/game-integration
+socket, not CDP — not usable for this.
 
-For WebKit (Safari, Refrax) rung 3 means `refrax-ctl` and WebDriver, since OS-level input
-cannot reach the separate WebContent process at all.
+For WebKit (Safari, Refrax) the browser's own channel — `refrax-ctl`, WebDriver, Safari's
+scripting — is the only path, since OS-level input cannot reach the separate WebContent
+process at all.
+
+**Rung 3 is therefore a referral, not an adapter** (decided 2026-08-02). When the ladder is
+exhausted on a target inside an `AXWebArea`, `WebContent` identifies the engine — Refrax and
+Safari by bundle id, Chromium by id prefix, Electron structurally by its embedded framework —
+and the evidence carries a structured `referral` naming the channel that can reach it and the
+concrete next move. The calling agent composes that tool itself: it holds the task context and
+the launch flags, an adapter here would couple this app to external binaries, and the
+automatic fall-through an adapter promises is hollow when CDP needs a flag only a relaunch
+can provide. Native controls in browsers (the address bar) never trigger a referral — the
+test is `AXWebArea` ancestry, not app identity — and Electron composers that succeed on
+rung 2 never reach it.
 
 ## 7. Local models — storage and role
 
