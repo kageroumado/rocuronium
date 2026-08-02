@@ -133,7 +133,9 @@ final class ControlServer {
                 close(client)
                 continue
             }
-            log.info("Control request from \(peer.description, privacy: .public)")
+            // .notice, not .info: info-level entries are memory-only and vanish, and the
+            // point of recording the caller is that it survives long enough to be read.
+            log.notice("Control request from \(peer.description, privacy: .public)")
 
             var on: Int32 = 1
             setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
