@@ -35,6 +35,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
   rocuronium mcp        (serve these commands as MCP tools over stdio)
+  rocuronium guide      (print the operator's manual — evidence, presence, refusals)
 
 Options:
   --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
@@ -65,6 +66,13 @@ arguments.removeFirst()
 func value(for flag: String) -> String? {
     guard let index = arguments.firstIndex(of: "--\(flag)"), index + 1 < arguments.count else { return nil }
     return arguments[index + 1]
+}
+
+// The operator's manual, embedded at build time from README.md. Needs no socket and no
+// running app: an agent holding nothing but this binary can learn the contract.
+if command == "guide" {
+    print(Guide.text)
+    exit(0)
 }
 
 // MCP mode: a stdio tool server for agent harnesses. Register with e.g.

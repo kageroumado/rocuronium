@@ -1,0 +1,140 @@
+// Generated from README.md by Scripts/embed-guide.sh — edit the README, not this.
+enum Guide {
+    static let text = ##"""
+# rocuronium — drive this Mac without taking the cursor
+
+A menu bar app, a CLI, and an MCP server that let an agent see and operate macOS while a
+human keeps their cursor, their focus, and their trust. Every action returns **evidence**
+— what observably happened, verified by read-back or pixels — because return codes lie
+(`AXSetValue` reports success on WebKit while changing nothing).
+
+This file is the operator's manual. It ships inside the binary: `rocuronium guide`
+prints it, so an agent holding nothing but the CLI can learn the contract.
+
+## The shape of things
+
+`Rocuronium.app` holds the Accessibility grant and does all the work; the `rocuronium`
+CLI (at `Rocuronium.app/Contents/Resources/rocuronium`) is a thin client that speaks
+JSON over an authenticated local socket. `rocuronium mcp` serves the same verbs as MCP
+tools. Add `--json` to any command for the full reply.
+
+    status · diag · guide                      what can I do right now
+    apps · windows · find · read · wait        observe (read-only)
+    launch · activate                          lifecycle
+    type · click · scroll · shortcut · menu    act
+    display · park · screenshot               isolation + pixels
+
+## Evidence: the three verdicts
+
+Every acting verb replies with a `verdict`. Trust it over the exit code, over the
+summary, over your expectations.
+
+- **confirmed** — something observably changed: a read-back matched what was written, a
+  scroll bar moved, an element's frame moved, pixels changed in a window that was
+  provably still. Proceed.
+- **noEffect** — the call reported success and *nothing observably changed*. This is the
+  most important verdict in the system: it is how WebKit's lies, background AppKit
+  menus, and ignored wheel events surface. Do not retry the same call harder; change
+  mechanism (see the referral, activate the target, or park it).
+- **unverifiable** — the target exposes nothing to read back and pixels could not
+  testify (no capture permission, or the window animates on its own). **Do not retry
+  blindly**: the action may well have landed, and a retry types it twice or presses it
+  twice. Verify through another channel first — `read` the state, take a `screenshot`.
+
+Replies also carry `attempts` (each ladder rung tried and why it fell through),
+`cursorMovedByUs` / `focusTakenByUs` (the promises, as measurements), and sometimes a
+`referral` — a structured pointer to the channel that *can* reach a target the ghost
+rungs cannot (web page content wants `refrax-ctl`, CDP, or Safari's own scripting). A
+referral means "compose that tool yourself"; rocuronium deliberately does not shell out.
+
+## Presence: who else is at this Mac
+
+Every reply includes a `presence` block: `state` (`present` / `idle` / `away` /
+`unknown`), `canSee`, `mayTakeCursor`, and a sentence of advice. Unknown is treated as
+present, because that is the cautious reading.
+
+What gates on it:
+
+- **`activate`** — refused unless `away` (or `confirm: true`): raising an app takes
+  focus out of a human's hands.
+- **Hardware input** (`allowHardwareInput`) — the advice tells you whether taking the
+  cursor is acceptable; the engine additionally refuses it outright while the screen is
+  locked or the aim point is covered by another app's window.
+- Everything else is ghost-safe by construction: rungs 0–3 never move the cursor and
+  never change the frontmost app, so they are fine while a human is typing.
+
+## Display asleep is blindness; screen locked is not
+
+When the display sleeps, **every app's accessibility tree collapses** — windows vanish,
+fields disappear, and a naive tool concludes "this app exposes nothing" and reports
+confident nonsense. Rocuronium refuses instead: perception verbs answer "I cannot see"
+and acting verbs wake the display first (rung 0).
+
+A locked screen with an awake display is harmless: full trees are readable and ghost
+input works. Only hardware input is refused there — synthetic keystrokes would land in
+the login window's password field.
+
+## The refusal catalog
+
+Refusals are rails, not failures. Each one names a flag, and passing the flag is a
+deliberate, legitimate act when the situation genuinely calls for it:
+
+- **`submit`** (`type`) — a newline or tab in a composer sends the message or moves
+  focus. Refused by default so text can never submit by accident; pass `submit: true`
+  when sending is the point. An absent `text` is likewise refused — pass `""` explicitly
+  to clear a field, because clearing is unrecoverable.
+- **`confirm`** (`shortcut`, `menu`) — every app's menu bar includes the Apple menu, so
+  `cmd+shift+q` resolves to "Log Out" from any target. Items that end the session or
+  destroy data are refused with the consequence named; `confirm: true` presses anyway.
+  Use `resolveOnly: true` to audit what a shortcut or path would press, before the fact.
+- **`confirm`** (`activate`) — see presence above.
+- **`allowHardwareInput`** (`type`, `click`) — permits rung 4, the one mechanism that
+  moves the real cursor. Legitimate when nobody is present and the ghost rungs have
+  demonstrably failed; the evidence will say `cursorMovedByUs: true` and the reply
+  refuses if another window covers the target (see the park pattern).
+- **lease** (`park`) — parking a window onto the virtual display without holding a lease
+  is refused: the display could vanish out from under the window and strand it where no
+  one can see it. `display acquire` first; the lease has a reason and an expiry so a
+  crashed agent cannot leak a screen.
+- **`timeout` > 25** (`wait`) — the socket cancels requests at 30 s. A timed-out wait
+  replies `callAgain: true`; loop on it rather than asking for a longer block.
+
+## The park-then-hardware pattern
+
+Rung 4 clicks whatever window is topmost at the coordinate — unlike ghost rungs, which
+reach a process through any occlusion. So a hardware click on an occluded target is
+refused with the occluder named. The reliable sequence when hardware input is truly
+needed:
+
+    display acquire --reason "why" → park --app X → act with --allow-hardware-input
+    → park back (the reply carried the window's previous position) → display release
+
+Windows on the virtual display occupy none of the pixels a human sees, which satisfies
+both the occlusion check and the politeness contract.
+
+## Reading and scrolling, honestly
+
+`read` dumps an app's text through accessibility — orders of magnitude cheaper than a
+screenshot, and it works behind a locked screen. Bounded (elements, characters, and an
+18 s wall clock) with truncation always reported: "stopped looking" and "nothing there"
+are different answers. A web area that yields no text is reported as **hidden, not
+blank**, with a referral to the channel that can read the DOM.
+
+`scroll` prefers `label`: the app is asked to bring that element into view
+(`AXScrollToVisible`), confirmed by the element's frame moving — the one cursor-free
+scroll that works (measured; posted wheel events are ignored by every toolkit, so a bare
+`--dy` will usually earn an honest `noEffect`). `--to 0..1` writes the scroll bar where
+one exists; Chromium and Electron never expose one.
+
+`wait` polls for an element (`--gone` for disappearance) and is the right primitive
+after `launch`, after a click that opens a dialog, or before reading a slow view.
+
+## Background apps
+
+Ghost delivery to background apps is dependable for AX writes and unicode text, and
+best-effort for menu presses: background AppKit apps never validate their menus, so a
+press can return success, do nothing, and be reported `unverifiable` with the item's
+disabled state noted. When the verdict matters and the target is AppKit-in-background,
+`activate` it first (gated, honest) — that is exactly what the verb exists for.
+"""##
+}
