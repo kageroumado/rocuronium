@@ -34,6 +34,9 @@ xcodebuild -project Rocuronium.xcodeproj -scheme Rocuronium -configuration Relea
 APP="$BUILD_DIR/DerivedData/Build/Products/Release/$APP_NAME"
 [ -d "$APP" ] || { echo "no app produced at $APP"; exit 1; }
 
+echo "==> Embedding the operator guide"
+"$PROJECT_DIR/Scripts/embed-guide.sh"
+
 echo "==> Building the CLI (release)"
 (cd RocuroniumCLI && swift build -c release >"$BUILD_DIR/swiftbuild.log" 2>&1) ||
     { tail -30 "$BUILD_DIR/swiftbuild.log"; exit 1; }
