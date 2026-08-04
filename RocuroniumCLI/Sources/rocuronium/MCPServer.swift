@@ -31,6 +31,72 @@ enum MCPServer {
             ], required: ["app"],
         ),
         tool(
+            "read",
+            """
+            Read an app's text via accessibility — static text, field values, button titles, \
+            checked states — with no pixels and no model. Orders of magnitude cheaper than a \
+            screenshot for text-shaped questions, and it works while the screen is locked \
+            (though not while the display sleeps; the reply refuses honestly then). Give \
+            `label` to read one element's subtree; omit it for the whole main window. \
+            Web page content that exposes no accessibility text is reported with a referral \
+            naming the channel that can read the DOM — an empty dump there means 'hidden', \
+            never 'blank page'.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
+            ], required: ["app"],
+        ),
+        tool(
+            "apps",
+            "List running apps (the set a human would see in the Dock): name, bundle id, pid, frontmost, hidden. Read-only.",
+            properties: [:], required: [],
+        ),
+        tool(
+            "windows",
+            "List an app's windows: title, frame, minimized, main, which display each is on and whether that is the virtual one. Read-only. Use before aiming a click, park, or capture.",
+            properties: [
+                "app": ["type": "string"],
+            ], required: ["app"],
+        ),
+        tool(
+            "wait",
+            """
+            Block until an element appears (or with `gone`, disappears), polling accessibility. \
+            `timeout` caps at 25 seconds because the control socket cancels requests at 30 — a \
+            timed-out reply sets callAgain:true and is not an error to retry differently; just \
+            call again to keep waiting. `ok` mirrors whether the condition was met.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "label": ["type": "string", "description": "Substring of the element's label to watch for"],
+                "gone": ["type": "boolean", "description": "Wait for the element to disappear instead"],
+                "timeout": ["type": "number", "description": "Seconds to block, 1–25 (default 10)"],
+            ], required: ["app", "label"],
+        ),
+        tool(
+            "launch",
+            "Launch an app without taking focus, and return only once its accessibility tree answers — ready:true means 'you can drive it now', not merely 'the process started'. Reports alreadyRunning when it was.",
+            properties: [
+                "app": ["type": "string", "description": "App name, bundle id, or full path"],
+            ], required: ["app"],
+        ),
+        tool(
+            "activate",
+            """
+            Bring an app to the foreground, taking focus — the one thing the ghost verbs \
+            promise never to do, offered deliberately as a named, gated verb. Refused while a \
+            human is present or recently active unless `confirm` is true. Use when background \
+            delivery is not dependable (AppKit apps never validate menus in the background) \
+            and bringing the app forward is the honest option. Read-back confirms whether the \
+            target actually came forward.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "confirm": ["type": "boolean", "description": "Take focus even though someone is at the Mac"],
+            ], required: ["app"],
+        ),
+        tool(
             "type",
             "Type text into an app without taking the cursor or focus. Confirmed by read-back; control characters are refused unless `submit` is true, so a newline cannot send a message by accident. Pass empty text explicitly to clear a field.",
             properties: [
@@ -68,6 +134,43 @@ enum MCPServer {
                 "resolveOnly": ["type": "boolean", "description": "Report the menu item without pressing it"],
                 "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
             ], required: ["app", "keys"],
+        ),
+        tool(
+            "scroll",
+            """
+            Reach off-screen content without touching the cursor. Prefer `label` + any `dy`: \
+            the app is asked to bring that element into view (AXScrollToVisible — the one \
+            cursor-free scroll mechanism that works, measured), confirmed by the element's \
+            frame moving. `to` (0=top … 1=bottom) writes the vertical scroll bar where one \
+            exists — some AppKit views expose one; Chromium/Electron never do. Bare `dy`/`dx` \
+            falls back to posted wheel events, which every toolkit measured so far ignores — \
+            an honest noEffect there means "use label instead", not "retry harder".
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "label": ["type": "string", "description": "Element to bring into view (the mechanism that actually works)"],
+                "dy": ["type": "number", "description": "Vertical pixel delta; positive reveals content below"],
+                "dx": ["type": "number", "description": "Horizontal pixel delta"],
+                "to": ["type": "number", "description": "Absolute vertical position, 0 (top) to 1 (bottom)"],
+            ], required: ["app"],
+        ),
+        tool(
+            "menu",
+            """
+            Press a menu item by title path, e.g. path "File > Export" ("▸" works too; \
+            matching is case-insensitive and a trailing "…" is optional). Reaches every \
+            command that has no keyboard shortcut. Same rails as `shortcut`: dependable on \
+            the frontmost app, best-effort in the background (trust the verdict, not the \
+            return); session- or data-destroying items are refused unless `confirm` is true; \
+            `resolveOnly` reports the resolved item without pressing. A path that names a \
+            submenu is refused with its items listed — go one level deeper.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "path": ["type": "string", "description": "Menu title path, levels separated by '>' or '▸'"],
+                "resolveOnly": ["type": "boolean", "description": "Report the resolved item without pressing it"],
+                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
+            ], required: ["app", "path"],
         ),
         tool(
             "display",

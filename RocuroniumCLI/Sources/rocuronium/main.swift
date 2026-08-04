@@ -18,10 +18,19 @@ let usage = """
 rocuronium — drive this Mac without taking the cursor
 
   rocuronium status
+  rocuronium apps
+  rocuronium windows    --app <name>
   rocuronium find       --app <name> [--label <text>]
+  rocuronium read       --app <name> [--label <text>]
+  rocuronium wait       --app <name> --label <text> [--gone] [--timeout <s, max 25>]
   rocuronium type       --app <name> --text <text> [--label <text>]
   rocuronium click      --app <name> [--label <text>] [--x <n> --y <n>]
+  rocuronium scroll     --app <name> --label <text> --dy <px>   (bring element into view)
+  rocuronium scroll     --app <name> (--dy <px> [--dx <px>] | --to <0..1>)
   rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
+  rocuronium menu       --app <name> --path "File > Export" [--resolve-only] [--confirm]
+  rocuronium launch     --app <name>
+  rocuronium activate   --app <name> [--confirm]
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
@@ -31,9 +40,14 @@ Options:
   --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
   --json                   print the raw reply
 
-'display' leases the headless virtual screen; 'park' moves an app's window onto it (or to an
-explicit point — the reply carries the previous position, which is how you put it back).
-'screenshot' hands the pixels to you, the caller: your model does the looking.
+'read' dumps an app's text via accessibility — no pixels, works behind a locked screen.
+'wait' blocks until the element appears (--gone: disappears); a timed-out reply says to
+call again, because the socket cancels requests at 30 s. 'launch' starts an app without
+taking focus and returns once it can be driven; 'activate' takes focus on purpose and is
+refused while a human is present unless --confirm. 'display' leases the headless virtual
+screen; 'park' moves an app's window onto it (or to an explicit point — the reply carries
+the previous position, which is how you put it back). 'screenshot' hands the pixels to
+you, the caller: your model does the looking.
 
 Every reply reports whether a human is present; hardware input stays off unless asked for.
 """
@@ -69,7 +83,7 @@ if command == "display", let action = arguments.first, !action.hasPrefix("-") {
 for flag in ["app", "label", "text", "reason", "lease", "path", "keys"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes"] {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "to"] {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -83,6 +97,7 @@ for flag in ["x", "y", "w", "h", "minutes"] {
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--submit") { payload["submit"] = true }
+if arguments.contains("--gone") { payload["gone"] = true }
 // `shortcut` can reach Log Out from any app, so seeing what a shortcut resolves to is a
 // first-class operation, and pressing a destructive item takes a deliberate second flag.
 if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
@@ -182,6 +197,49 @@ case "find":
     }
     print("\n\(matches.count) shown · \(reply["elementsVisited"] ?? 0) elements visited"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
+
+case "read":
+    for line in reply["lines"] as? [[String: Any]] ?? [] {
+        let indent = String(repeating: "  ", count: line["depth"] as? Int ?? 0)
+        let title = line["title"] as? String ?? ""
+        let value = line["value"] as? String ?? ""
+        let role = line["role"] as? String ?? "?"
+        // Static text reads as prose; anything interactive keeps its role visible so the
+        // reader knows it can be acted on.
+        let annotation = role == "AXStaticText" ? "" : "  [\(role)]"
+        let text = [title, value].filter { !$0.isEmpty }.joined(separator: ": ")
+        print("\(indent)\(text)\(annotation)")
+    }
+    print("\nread \(reply["scope"] as? String ?? "?") · \(reply["characters"] ?? 0) chars · \(reply["elementsVisited"] ?? 0) elements"
+        + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED: \(reply["truncationReason"] as? String ?? "?")" : ""))
+    if let referral = reply["referral"] as? [String: Any] {
+        print("→ \(referral["reason"] ?? "")")
+        print("→ use \(referral["channel"] ?? "?"): \(referral["advice"] ?? "")")
+    }
+
+case "apps":
+    for app in reply["apps"] as? [[String: Any]] ?? [] {
+        let marks = [
+            app["frontmost"] as? Bool == true ? "  (frontmost)" : "",
+            app["hidden"] as? Bool == true ? "  (hidden)" : "",
+        ].joined()
+        print("\(app["name"] ?? "?")  ·  \(app["bundleID"] ?? "?")  ·  pid \(app["pid"] ?? "?")\(marks)")
+    }
+
+case "windows":
+    for window in reply["windows"] as? [[String: Any]] ?? [] {
+        let frame = window["frame"] as? [String: Any] ?? [:]
+        let geometry = frame.isEmpty ? "no frame" :
+            "@(\(Int(frame["x"] as? Double ?? 0)),\(Int(frame["y"] as? Double ?? 0))) "
+            + "\(Int(frame["w"] as? Double ?? 0))x\(Int(frame["h"] as? Double ?? 0))"
+        let marks = [
+            window["main"] as? Bool == true ? "  [main]" : "",
+            window["minimized"] as? Bool == true ? "  [minimized]" : "",
+            window["onVirtualDisplay"] as? Bool == true ? "  [virtual display]" : "",
+            window["onAnyDisplay"] as? Bool == false ? "  [ON NO DISPLAY]" : "",
+        ].joined()
+        print("'\(window["title"] ?? "")'  \(geometry)\(marks)")
+    }
 
 case "display":
     print(reply["summary"] as? String ?? "done")

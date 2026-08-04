@@ -142,6 +142,26 @@ nonisolated struct AXElement {
     /// act on selection (Select All and friends), which otherwise have no readable effect.
     var selectedText: String? { string(kAXSelectedTextAttribute) }
 
+    /// The value as a number — scroll bars report their position this way, 0 to 1.
+    var numberValue: Double? {
+        (attribute(kAXValueAttribute) as? NSNumber)?.doubleValue
+    }
+
+    /// The element's vertical scroll bar, on scroll areas that expose one. Its `numberValue`
+    /// is normalized position: 0 at the top, 1 at the bottom.
+    var verticalScrollBar: AXElement? {
+        guard let bar = attribute(kAXVerticalScrollBarAttribute),
+              CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(bar as! AXUIElement)
+    }
+
+    /// Writes a numeric value. Same rule as the string overload: the return code is not
+    /// evidence, and callers read back.
+    @discardableResult
+    func setValue(_ number: Double) -> AXError {
+        AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, NSNumber(value: number))
+    }
+
     var isEditable: Bool {
         ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role)
     }
