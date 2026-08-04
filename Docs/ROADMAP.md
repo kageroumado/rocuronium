@@ -20,63 +20,42 @@ return code is never evidence; new delivery mechanisms re-derive every assumptio
 
 ---
 
-## Phase 1 — Verb parity (unblocks everything; ~2–3 days)
+## Phase 1 — Verb parity — **DONE 2026-08-04** (04f6c6f), loose ends below
 
-The act-side is complete; the observe/navigate side is thin. Priority within the phase is
-usage frequency, measured against what actually gets done in a Peekaboo session today.
+All six items shipped and were verified by running the installed build; the per-item
+specs moved to the Done section. What the session measured, and what it left open:
 
-### 1.1 `read` — text out of an app without pixels
+- **Walks needed to be interruptible in *serial* operation, not just for a future
+  concurrent server.** Finder (desktop window full of icons) exceeded the socket's 30 s
+  inside the 60k element budget, and an abandoned walk kept the engine busy so every
+  queued request starved behind it — two Finder walks poisoned the socket for a minute.
+  Walks now observe `Task.isCancelled` and an 18 s wall-clock deadline and report
+  truncation. Finder remains the pathological target: a full-tree label query gives 18 s
+  of truncated walk, and which window the walk enters first is not deterministic.
+- **Posted scroll-wheel events do not exist as a ghost mechanism** (experiment log §6):
+  ignored in pixel and line units by AppKit and Chromium alike. `scroll`'s primary
+  mechanism is therefore `AXScrollToVisible` on a labeled element (verified working on
+  Chromium, frame read-back as evidence); scroll-bar value writes (`--to`) work only
+  where a bar is exposed (rare — overlay scrollers hide it; Chromium never has one), and
+  bare `--dy` posts wheels that will honestly report `noEffect`.
 
-The most-used verb the tool doesn't have. Dump the AX text of an element (by `--label`) or
-a whole window: static text, field values, button titles, checked states. ~1000× cheaper
-in tokens than screenshot+vision and works while the screen is locked.
+### Phase-1 loose ends (small, ordered)
 
-- Bound the output (element count + character cap) the way `MenuQuery` bounds its walk —
-  per-child, not per-entry (item 31's lesson).
-- Same `DisplayWake` guard as every perception path: display asleep ⇒ "I cannot see", not
-  an empty result.
-- WebKit lies (returns success while exposing nothing): when the walk lands in an
-  `AXWebArea` with no text, say so and refer to the rung-3 referral, mirroring
-  `WebContent.swift`.
-
-### 1.2 `apps` / `windows` — what is running, what windows exist
-
-`NSWorkspace.runningApplications` (regular activation policy) for apps;
-per-app AX window list (title, frame, minimized, on which display) for windows. Read-only,
-no presence implications. Kills the `lsappinfo`-in-bash prelude every session does now.
-
-### 1.3 `menu` — press an arbitrary menu item by path
-
-`menu --app X --path "File ▸ Export…"` (accept `>` and `▸`). `MenuQuery` already walks
-the tree; this adds path matching next to shortcut matching. Hazard rails, `confirm`, and
-`resolveOnly` carry over verbatim. Reaches everything that has no shortcut; measured
-limits from review item 16 apply (dependable frontmost, best-effort background —
-the verdict already says which).
-
-### 1.4 `scroll` — reach off-screen content
-
-Ladder-shaped like everything else: try `AXScrollBar`/`AXScrollArea` value writes first
-(read position back — the write returning success is nothing), fall through to posted
-`scrollWheel` events to the pid. **Measure before building**: whether Electron/WebKit
-honor posted scroll events at all is unknown — same measurement discipline as the
-ghost-input experiments, results recorded in the experiment log before the design is
-fixed. Evidence: scroll position delta when a scrollbar exposes one, pixel diff otherwise.
-
-### 1.5 `wait` — a polling primitive
-
-`wait --app X --label Y [--gone] [--timeout N]`. Blocks until the element appears (or
-disappears), polling the cached tree. **Constraint that shapes it**: the control socket
-cancels requests at 30 s (review item 23), so `--timeout` caps at 25 s and the reply says
-"timed out, call again" — the caller loops, the socket stays responsive.
-
-### 1.6 `launch` / `activate` — app lifecycle
-
-`launch`: `NSWorkspace.openApplication`, then poll until the AX tree answers (launch
-without readiness is a lie — the reply must mean "you can drive it now"). `activate`
-raises an app and **takes focus, so it is presence-gated**: refused while a human is
-present unless `confirm: true`, same shape as the other rails. Needed because background
-delivery is best-effort on Electron (item 16) — sometimes bringing the app forward is the
-honest option, and it should be a named, gated verb rather than a side effect.
+1. `find`/`named()` matches **labels only**, but the text an agent sees in `read` output
+   is often a *value* (note bodies, static text). A label that exists only as a value is
+   unfindable and un-scrollable-to. Decide: extend `named()` to values (noisy?) or add a
+   `--value` match flag.
+2. `--to` could find scroll bars by **role walk** when the `AXVerticalScrollBar`
+   attribute is absent — Notes exposes an `AXScrollBar` element (value 0) that the
+   attribute does not surface.
+3. `activate --confirm` success path deliberately unverified: presence read `present`
+   (idle 0 s) all session, and stealing focus from a present human to test the
+   anti-focus-stealing tool was declined. Verify in the next away window.
+4. `AXScrollToVisible` moved-frame path verified on Chromium only via the
+   already-visible branch; exercise a genuinely off-screen target (needs a target whose
+   off-screen rows materialize in AX — Notes' list virtualizes them away).
+5. WebKit (Safari/Refrax) scroll + read-referral behavior unmeasured — Safari was not
+   running and opening windows on a present user's screen was declined.
 
 ## Phase 2 — Operator docs + the actual switch (~1 day)
 
@@ -146,4 +125,14 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 
 ## Done
 
-*(move items here with date + commit as they land)*
+- **2026-08-04 · 04f6c6f — Phase 1, verb parity.** `read` (bounded text dump; silent
+  `AXWebArea` reported as hidden-not-blank with a read referral), `apps`/`windows`
+  (window rows carry display + virtual-display + on-no-display), `menu` (path press
+  through the same machinery as `shortcut`; refusals list the level's real items),
+  `wait` (25 s cap, `callAgain`), `launch` (activates:false + drivability poll, 0.9 s
+  cold Calculator), `activate` (presence-gated, read-back verdict), `scroll`
+  (`AXScrollToVisible` primary after measurement killed posted wheels — log §6).
+  Interruptible walks: `Task.isCancelled` + 18 s deadline in every tree walk, after two
+  abandoned Finder walks starved the socket for a minute. Verified by execution on the
+  installed build: Finder, Notes, Mail, Discord, Calculator. Loose ends listed in the
+  Phase 1 section.
