@@ -46,8 +46,19 @@ specs moved to the Done section. What the session measured, and what it left ope
    unfindable and un-scrollable-to. Decide: extend `named()` to values (noisy?) or add a
    `--value` match flag.
 2. `--to` could find scroll bars by **role walk** when the `AXVerticalScrollBar`
-   attribute is absent — Notes exposes an `AXScrollBar` element (value 0) that the
-   attribute does not surface.
+   attribute is absent. Measured 2026-08-04 in Notes: the note body's text area has a
+   sibling `AXScrollBar` element (numeric value exposed, read 0.000) while the enclosing
+   scroll area answers nothing for the `AXVerticalScrollBar` *attribute* — so
+   `scroll --to` refuses on a view that in fact has a writable bar. Overlay scrollers
+   (the default since 10.7) are the suspected reason the attribute is absent, which
+   makes this the common case on modern AppKit, not a Notes quirk (Mail's scroll area
+   also had no attribute). Implementation shape: in `Engine.scroll`'s `toFraction`
+   path, when `area.verticalScrollBar` is nil, walk the area's children (bounded, one
+   level or two) for `role == "AXScrollBar"` with a numeric value and prefer the one
+   whose frame is taller than wide — horizontal bars have the same role. Write and
+   read back exactly as now; the verdict machinery needs no change. Re-measure whether
+   the write actually moves overlay-scroller content or just the bar: the read-back
+   plus window-true pixel diff already distinguishes those two outcomes.
 3. `activate --confirm` success path deliberately unverified: presence read `present`
    (idle 0 s) all session, and stealing focus from a present human to test the
    anti-focus-stealing tool was declined. Verify in the next away window.
