@@ -18,6 +18,11 @@ nonisolated enum ElementQuery {
         /// Discord's full tree is ~5,300 elements and takes ~1.2 s. The budget is a runaway
         /// guard, not a target.
         static let elementBudget = 60_000
+        /// Wall-clock bound on a walk. The element budget bounds memory, not time — each
+        /// element costs several AX IPC round trips, and Finder with a desktop full of icons
+        /// blew past the control socket's 30 s on a walk well inside the element budget.
+        /// Truncated results before the socket gives up beat complete results after.
+        static let timeBudget: Duration = .seconds(18)
     }
 
     struct Match {
@@ -71,9 +76,21 @@ nonisolated enum ElementQuery {
         var matches: [Match] = []
         var visited = 0
         var seenSignatures = Set<String>()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Constants.timeBudget)
+        var outOfTime = false
 
         func visit(_ element: AXElement, depth: Int, path: String) {
-            guard visited < budget, depth <= maxDepth else { return }
+            guard visited < budget, depth <= maxDepth, !outOfTime else { return }
+            // Both stops matter and they are different: the deadline keeps this walk inside
+            // the socket's reply window, and the cancellation check stops a walk whose caller
+            // has already been told "timed out" — without it the walk keeps burning the
+            // engine actor, and every queued request behind it times out too (measured: two
+            // abandoned Finder walks poisoned the socket for a full minute).
+            if Task.isCancelled || clock.now >= deadline {
+                outOfTime = true
+                return
+            }
             visited += 1
             if predicate(element), seenSignatures.insert(element.signature).inserted {
                 matches.append(Match(element: element, depth: depth, path: path))
@@ -83,7 +100,7 @@ nonisolated enum ElementQuery {
             // trip each, thousands of them on a large tree.
             let parentRole = element.role
             for (index, child) in element.children.enumerated() {
-                guard visited < budget else { return }
+                guard visited < budget, !outOfTime else { return }
                 guard child.role != "AXApplication" else { continue }
                 visit(child, depth: depth + 1, path: "\(path)/\(parentRole)[\(index)]")
             }
@@ -102,7 +119,7 @@ nonisolated enum ElementQuery {
         return Results(
             matches: matches,
             elementsVisited: visited,
-            truncated: visited >= budget,
+            truncated: visited >= budget || outOfTime,
         )
     }
 

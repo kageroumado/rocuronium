@@ -52,6 +52,15 @@ final class CommandRouter {
         var resolveOnly: Bool?
         /// Press a shortcut that resolves to a session- or data-destroying menu item.
         var confirm: Bool?
+        /// For `wait`: wait for the element to disappear rather than appear.
+        var gone: Bool?
+        /// For `wait`: seconds to block, at most 25 — the socket cancels requests at 30.
+        var timeout: Double?
+        /// For `scroll`: pixel deltas. Positive dy reveals content further down.
+        var dx: Double?
+        var dy: Double?
+        /// For `scroll`: absolute position, 0 (top) to 1 (bottom), via the scroll bar.
+        var to: Double?
     }
 
     /// Bounds every number that arrives over the socket, before it reaches arithmetic that
@@ -117,9 +126,17 @@ final class CommandRouter {
         case "diag": await diagnose()
         case "request-capture": requestCapture()
         case "find": try await find(request)
+        case "read": try await read(request)
+        case "apps": apps()
+        case "windows": try await windows(request)
         case "type": try await typeCommand(request)
         case "click": try await act(request, action: .click)
+        case "scroll": try await scroll(request)
         case "shortcut": try await shortcut(request)
+        case "menu": try await menu(request)
+        case "wait": try await wait(request)
+        case "launch": try await launch(request)
+        case "activate": try await activate(request)
         case "display": try await display(request)
         case "park": try await park(request)
         case "screenshot": try await screenshot(request)
@@ -226,6 +243,94 @@ final class CommandRouter {
         ]
     }
 
+    /// Text out of an app without pixels — the most-used observe verb. Orders of magnitude
+    /// cheaper in tokens than screenshot-plus-vision, and it works behind a locked screen.
+    private func read(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let outcome = try await engine.read(pid: pid, label: request.label)
+        var reply: [String: Any] = [
+            "ok": true,
+            "scope": outcome.scope,
+            "lines": outcome.lines.map { line -> [String: Any] in
+                var row: [String: Any] = ["role": line.role, "depth": line.depth]
+                if !line.title.isEmpty { row["title"] = line.title }
+                if !line.value.isEmpty { row["value"] = line.value }
+                return row
+            },
+            "elementsVisited": outcome.elementsVisited,
+            "characters": outcome.characters,
+            "truncated": outcome.truncated,
+            "presence": presenceBlock(),
+        ]
+        if let reason = outcome.truncationReason { reply["truncationReason"] = reason }
+        if let referral = outcome.referral {
+            reply["referral"] = [
+                "channel": referral.channel,
+                "reason": referral.reason,
+                "advice": referral.advice,
+            ]
+        }
+        return reply
+    }
+
+    /// The running apps a human would recognize as running — regular activation policy, the
+    /// set the Dock and the ⌘-Tab switcher show.
+    private func apps() -> [String: Any] {
+        let rows = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .map { application -> [String: Any] in
+                [
+                    "name": application.localizedName ?? "?",
+                    "bundleID": application.bundleIdentifier ?? "?",
+                    "pid": application.processIdentifier,
+                    "frontmost": application.isActive,
+                    "hidden": application.isHidden,
+                ]
+            }
+            .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+        return [
+            "ok": true,
+            "apps": rows,
+            "count": rows.count,
+            "summary": "\(rows.count) apps running",
+            "presence": presenceBlock(),
+        ]
+    }
+
+    private func windows(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let list = try await engine.windowList(pid: pid)
+        let displays = virtualDisplay.displayBounds
+        let virtualBounds = virtualDisplay.virtualScreenBounds
+        let rows = list.map { window -> [String: Any] in
+            var row: [String: Any] = [
+                "title": window.title,
+                "minimized": window.minimized,
+                "main": window.isMain,
+            ]
+            if let frame = window.frame {
+                row["frame"] = block(for: frame)
+                let center = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+                if let display = displays.first(where: { $0.contains(center) }) {
+                    row["display"] = block(for: display)
+                    row["onVirtualDisplay"] = display == virtualBounds
+                } else {
+                    // A window whose center is on no display is exactly the stranding the
+                    // park lease rules exist to prevent — say so rather than omitting it.
+                    row["onAnyDisplay"] = false
+                }
+            }
+            return row
+        }
+        return [
+            "ok": true,
+            "windows": rows,
+            "count": rows.count,
+            "summary": "\(rows.count) window(s)",
+            "presence": presenceBlock(),
+        ]
+    }
+
     private func act(_ request: Request, action: GhostLadder.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
         // A coordinate is answered by a hit-test and a label by a search; neither falls back to
@@ -245,6 +350,43 @@ final class CommandRouter {
             allowHardwareInput: request.allowHardwareInput ?? false,
         )
         return evidenceReply(evidence)
+    }
+
+    /// Scrolls a scroll area: `to` positions absolutely via the scroll bar (read back as
+    /// evidence), `dy`/`dx` post wheel events and let the bar or pixels testify.
+    private func scroll(_ request: Request) async throws -> [String: Any] {
+        guard request.to != nil || request.dx != nil || request.dy != nil else {
+            return [
+                "ok": false,
+                "error": "'scroll' requires --dy/--dx (pixels; positive dy reveals content below) or --to (0=top … 1=bottom)",
+                "presence": presenceBlock(),
+            ]
+        }
+        if let to = request.to {
+            guard to.isFinite, (0.0 ... 1.0).contains(to) else {
+                return ["ok": false, "error": "'to' must be between 0 (top) and 1 (bottom)"]
+            }
+        }
+        for (name, value) in [("dx", request.dx), ("dy", request.dy)] where value != nil {
+            guard let value, value.isFinite, abs(value) <= Bounds.extent else {
+                return ["ok": false, "error": "'\(name)' must be a finite pixel delta within ±\(Int(Bounds.extent))"]
+            }
+        }
+        let pid = try resolve(request)
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.scroll(
+            pid: pid,
+            label: request.label,
+            deltaX: request.dx ?? 0,
+            deltaY: request.dy ?? 0,
+            toFraction: request.to,
+        )
+        var reply = evidenceReply(result.evidence)
+        if let before = result.barBefore { reply["scrollbarBefore"] = before }
+        if let after = result.barAfter { reply["scrollbarAfter"] = after }
+        return reply
     }
 
     /// Delivers a keyboard shortcut by pressing its menu item — no CGEvent, no focus change,
@@ -269,14 +411,44 @@ final class CommandRouter {
         isDriving = true
         defer { isDriving = false }
         let result = try await engine.pressShortcut(pid: pid, keys: keys, mode: mode)
+        return menuPressReply(result, resolving: "'\(keys)'")
+    }
 
+    /// Presses an arbitrary menu item by title path — the way to reach everything that has no
+    /// shortcut. Same rails as `shortcut`: hazards refuse without `confirm`, `resolveOnly`
+    /// audits before acting, and the enabled-state caveats carry over verbatim.
+    private func menu(_ request: Request) async throws -> [String: Any] {
+        guard let path = request.path else {
+            return [
+                "ok": false,
+                "error": "'menu' requires --path, e.g. --path \"File > Export\" ('▸' works too)",
+                "presence": presenceBlock(),
+            ]
+        }
+        let pid = try resolve(request)
+        let mode: Engine.ShortcutMode = if request.resolveOnly == true {
+            .resolveOnly
+        } else if request.confirm == true {
+            .pressConfirmed
+        } else {
+            .press
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.pressMenuPath(pid: pid, path: path, mode: mode)
+        return menuPressReply(result, resolving: "'\(path)'")
+    }
+
+    /// The shared back half of `shortcut` and `menu` — one press mechanism, one reply shape.
+    private func menuPressReply(_ result: Engine.MenuPressResult, resolving: String) -> [String: Any] {
         guard let evidence = result.evidence else {
             // Resolve-only: what would be pressed, without pressing it.
             var reply: [String: Any] = [
                 "ok": true,
                 "menuItem": result.menuPath,
                 "enabled": result.itemReportedEnabled,
-                "summary": "'\(keys)' resolves to '\(result.menuPath)' (not pressed)",
+                "summary": "\(resolving) resolves to '\(result.menuPath)' (not pressed)",
                 "presence": presenceBlock(),
             ]
             if let hazard = result.hazard {
@@ -289,7 +461,7 @@ final class CommandRouter {
         var reply = evidenceReply(evidence)
         reply["menuItem"] = result.menuPath
         if let hazard = result.hazard { reply["hazard"] = hazard }
-        if !result.itemReportedEnabled, result.evidence != nil {
+        if !result.itemReportedEnabled {
             // Measured both ways on 2026-08-02: a background AppKit app (TextEdit) reports
             // disabled and the press is a silent no-op that still returns success; a
             // background Electron app (Postman) reports enabled and the press works.
@@ -301,6 +473,152 @@ final class CommandRouter {
                 + "first is what makes AppKit menus live."
         }
         return reply
+    }
+
+    /// Blocks until an element appears (or disappears). The cap exists because the control
+    /// socket cancels requests at 30 s; rather than racing that timeout and losing, the verb
+    /// stays under it and tells the caller to loop.
+    private func wait(_ request: Request) async throws -> [String: Any] {
+        guard let label = request.label else {
+            return [
+                "ok": false,
+                "error": "'wait' requires --label <text> to watch for",
+                "presence": presenceBlock(),
+            ]
+        }
+        let seconds = request.timeout ?? Constants.defaultWaitSeconds
+        guard seconds > 0, seconds <= Constants.maximumWaitSeconds else {
+            return [
+                "ok": false,
+                "error": "'timeout' must be 1–\(Int(Constants.maximumWaitSeconds)) seconds — the control socket "
+                    + "cancels requests at 30. For longer waits, call again when the reply says callAgain.",
+                "presence": presenceBlock(),
+            ]
+        }
+        let pid = try resolve(request)
+        let gone = request.gone == true
+        let outcome = try await engine.waitFor(pid: pid, label: label, gone: gone, timeout: .seconds(seconds))
+        return [
+            // ok mirrors the condition so scripts can branch on the exit code directly.
+            "ok": outcome.satisfied,
+            "satisfied": outcome.satisfied,
+            "callAgain": !outcome.satisfied,
+            "elapsedSeconds": (outcome.elapsedSeconds * 10).rounded() / 10,
+            "polls": outcome.polls,
+            "matches": outcome.matches.map { ["role": $0.role, "label": $0.label] },
+            "summary": outcome.satisfied
+                ? "'\(label)' \(gone ? "gone" : "present") after \(String(format: "%.1f", outcome.elapsedSeconds))s"
+                : "timed out after \(Int(seconds))s — '\(label)' still \(gone ? "present" : "absent"); call again to keep waiting",
+            "presence": presenceBlock(),
+        ]
+    }
+
+    /// Launches an app without stealing focus and waits until it can actually be driven.
+    /// "The process started" and "you can send it commands" are different claims; the reply
+    /// only says ready once the accessibility tree answers.
+    private func launch(_ request: Request) async throws -> [String: Any] {
+        guard let name = request.app else { throw RouterError.missingApp }
+
+        if let pid = try? resolve(request) {
+            let readiness = await engine.waitUntilDrivable(pid: pid, timeout: .seconds(Constants.relaunchReadySeconds))
+            return [
+                "ok": true,
+                "pid": pid,
+                "alreadyRunning": true,
+                "ready": readiness.ready,
+                "windows": readiness.windows,
+                "summary": readiness.ready
+                    ? "'\(name)' was already running and is drivable (\(readiness.windows) window(s))"
+                    : "'\(name)' is running but its accessibility tree is not answering",
+                "presence": presenceBlock(),
+            ]
+        }
+
+        guard let url = applicationURL(named: name) else {
+            return [
+                "ok": false,
+                "error": "no app named '\(name)' found — tried /Applications, /System/Applications, "
+                    + "~/Applications, and bundle-id lookup. Pass a full path to launch from elsewhere.",
+                "presence": presenceBlock(),
+            ]
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        // Ghost discipline: launching must not steal focus any more than typing does.
+        configuration.activates = false
+        let application = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        let pid = application.processIdentifier
+
+        isDriving = true
+        defer { isDriving = false }
+        let readiness = await engine.waitUntilDrivable(pid: pid, timeout: .seconds(Constants.launchReadySeconds))
+        return [
+            "ok": readiness.ready,
+            "pid": pid,
+            "alreadyRunning": false,
+            "ready": readiness.ready,
+            "windows": readiness.windows,
+            "elapsedSeconds": (readiness.elapsedSeconds * 10).rounded() / 10,
+            "summary": readiness.ready
+                ? "'\(name)' is running and drivable (\(readiness.windows) window(s), \(String(format: "%.1f", readiness.elapsedSeconds))s)"
+                : "'\(name)' launched but its accessibility tree has not answered after \(Int(readiness.elapsedSeconds))s — it may still be starting; check with 'windows'",
+            "presence": presenceBlock(),
+        ]
+    }
+
+    /// Brings an app to the foreground — deliberately, as a named verb, because sometimes
+    /// that is the honest option (background AppKit menus never validate). Taking focus is
+    /// the one thing the ghost rungs promise never to do, so doing it on purpose is
+    /// presence-gated exactly like hardware input.
+    private func activate(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let presence = UserPresence.read()
+        guard presence.state == .away || request.confirm == true else {
+            return [
+                "ok": false,
+                "error": "presence is '\(presence.state.rawValue)' — 'activate' would take focus out of a "
+                    + "human's hands. Pass confirm:true if that is genuinely intended.",
+                "presence": presenceBlock(),
+            ]
+        }
+        guard let application = NSRunningApplication(processIdentifier: pid) else {
+            throw RouterError.appNotRunning(request.app ?? "?")
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        application.activate()
+        try? await Task.sleep(for: .milliseconds(500))
+        // Read-back, not the call's return: whether the target actually came forward.
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let landed = frontmost?.processIdentifier == pid
+        return [
+            "ok": landed,
+            "frontmost": frontmost?.localizedName ?? "?",
+            "focusTakenByUs": landed,
+            "summary": landed
+                ? "'\(application.localizedName ?? "?")' is frontmost and holds focus"
+                : "activate did not land — '\(frontmost?.localizedName ?? "?")' is still frontmost",
+            "presence": presenceBlock(),
+        ]
+    }
+
+    /// Where an app by this name lives. Deliberately predictable rather than clever: the
+    /// standard directories, then bundle-id lookup, then an explicit path.
+    private func applicationURL(named name: String) -> URL? {
+        if name.contains("/") {
+            let url = URL(fileURLWithPath: (name as NSString).expandingTildeInPath).standardizedFileURL
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        let directories = [
+            "/Applications", "/Applications/Utilities",
+            "/System/Applications", "/System/Applications/Utilities",
+            (NSHomeDirectory() as NSString).appendingPathComponent("Applications"),
+        ]
+        for directory in directories {
+            let candidate = URL(fileURLWithPath: directory).appending(path: "\(name).app")
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: name)
     }
 
     private func evidenceReply(_ evidence: Evidence) -> [String: Any] {
@@ -636,6 +954,14 @@ final class CommandRouter {
         /// Long enough for an agent to read a capture it just took and for a human to find it
         /// afterwards; short enough that a day of automation does not leave a screen archive.
         static let captureRetention: TimeInterval = 24 * 60 * 60
+        /// The socket cancels requests at 30 s; staying 5 under means a timed-out wait is
+        /// reported as such, with "call again", instead of racing the cancellation and losing.
+        static let maximumWaitSeconds = 25.0
+        static let defaultWaitSeconds = 10.0
+        /// A cold launch can legitimately take this long on a big Electron app.
+        static let launchReadySeconds = 20.0
+        /// An already-running app should answer almost immediately.
+        static let relaunchReadySeconds = 5.0
     }
 
     private func block(for rect: CGRect) -> [String: Any] {

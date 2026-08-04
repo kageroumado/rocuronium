@@ -60,6 +60,40 @@ nonisolated enum WebContent {
         return .unknown
     }
 
+    /// The referral for a *read* that found a web area exposing no text. The actuation
+    /// referral below explains why input cannot land; this one explains why the page looks
+    /// empty when it is not, and names the channel that can read the DOM instead.
+    static func readReferral(for element: AXElement, pid: pid_t) -> Evidence.Referral? {
+        guard isWebContent(element) else { return nil }
+        let reason = "the window contains web page content whose accessibility tree exposes no text — an empty dump here means 'hidden', not 'blank page'"
+        return switch family(of: pid) {
+        case .refrax:
+            .init(
+                channel: "refrax-ctl",
+                reason: reason,
+                advice: "read the page with refrax-ctl — page_text or page_exec return the DOM's actual content",
+            )
+        case .safari:
+            .init(
+                channel: "safari-js",
+                reason: reason,
+                advice: "read the page with osascript 'do JavaScript' (enable Develop ▸ Developer settings ▸ Allow JavaScript from Apple Events) or safaridriver",
+            )
+        case .chromium, .electron:
+            .init(
+                channel: "cdp",
+                reason: reason,
+                advice: "Chromium normally exposes its tree once AXManualAccessibility is set — retry once; for DOM-level reads relaunch with --remote-debugging-port=<port> and use the DevTools protocol",
+            )
+        case .unknown:
+            .init(
+                channel: "unknown",
+                reason: reason,
+                advice: "no OS-level read path exists for this web content — find the app's own automation channel",
+            )
+        }
+    }
+
     /// The referral itself, or nil when the target is not web content and the ladder's
     /// failure needs a different explanation.
     static func referral(for element: AXElement, pid: pid_t) -> Evidence.Referral? {

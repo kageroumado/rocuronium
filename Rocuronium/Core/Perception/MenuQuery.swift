@@ -106,6 +106,80 @@ nonisolated enum MenuQuery {
         return search(menuBar, shortcut: shortcut, path: [], depth: 0, visited: &visited)
     }
 
+    // MARK: - Path matching
+
+    /// Splits "File ▸ Export…" (or "File > Export") into components. Both separators are
+    /// accepted because "▸" is what this tool prints and ">" is what a human types.
+    static func parsePath(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0 == ">" || $0 == "▸" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// How a path lookup ended. Failure carries what *was* at the failing level, because the
+    /// caller is an agent guessing menu titles from memory — the fix is in the listing.
+    enum PathResolution {
+        case found(Match)
+        case notFound(component: String, available: [String])
+        /// The path names a submenu container. Pressing one only opens it visually — it runs
+        /// nothing — so it is refused, with its items listed so the caller can go one deeper.
+        case submenu(path: String, items: [String])
+    }
+
+    /// Resolves a title path level by level. Matching is case-insensitive and ignores a
+    /// trailing ellipsis, so "File > Export" finds "Export…" without the caller typing "…".
+    static func item(atPath components: [String], in menuBar: AXElement) -> PathResolution {
+        var current = menuBar
+        var canonical: [String] = []
+        for component in components {
+            let wanted = normalize(component)
+            let candidates = menuChildren(of: current)
+            guard let match = candidates.first(where: {
+                normalize($0.string(kAXTitleAttribute) ?? "") == wanted
+            }) else {
+                return .notFound(
+                    component: component,
+                    available: candidates
+                        .compactMap { $0.string(kAXTitleAttribute) }
+                        .filter { !$0.isEmpty },
+                )
+            }
+            canonical.append(match.string(kAXTitleAttribute) ?? component)
+            current = match
+        }
+        let path = canonical.joined(separator: " ▸ ")
+        let below = menuChildren(of: current)
+        guard current.role == "AXMenuItem", below.isEmpty else {
+            return .submenu(
+                path: path,
+                items: below.compactMap { $0.string(kAXTitleAttribute) }.filter { !$0.isEmpty },
+            )
+        }
+        let enabled = (current.attribute(kAXEnabledAttribute) as? Bool) ?? true
+        return .found(Match(element: current, path: path, enabled: enabled))
+    }
+
+    /// The pressable/openable things one level down. Menu bars hold `AXMenuBarItem`s
+    /// directly; menu bar items and submenu items interpose a single `AXMenu` whose children
+    /// are the actual items — that wrapper is transparent to a human reading the menu, so it
+    /// is transparent to path matching too.
+    private static func menuChildren(of element: AXElement) -> [AXElement] {
+        let children = element.children
+        if children.count == 1, children[0].role == "AXMenu" {
+            return children[0].children
+        }
+        return children
+    }
+
+    private static func normalize(_ title: String) -> String {
+        var text = title.trimmingCharacters(in: .whitespaces)
+        while text.hasSuffix("…") || text.hasSuffix("...") {
+            text.removeLast(text.hasSuffix("…") ? 1 : 3)
+            text = text.trimmingCharacters(in: .whitespaces)
+        }
+        return text.lowercased()
+    }
+
     private static func search(
         _ element: AXElement, shortcut: Shortcut, path: [String], depth: Int, visited: inout Int
     ) -> Match? {
