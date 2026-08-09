@@ -105,7 +105,7 @@ a line in the trial log below — those lines are the Phase-1 gaps that were mis
 - 2026-08-09 · same task · `menu` flagged "Refrax ▸ Restart to Update — v99.0…" as "would reboot the Mac" — the Restart heuristic fires on app-menu items, not just Apple ▸ · confirm:true (correctly overridable, but the hazard label was wrong)
 - 2026-08-09 · same task · the confirmed menu press returned ok:false / verdict "unverifiable" even though the action fully succeeded (app quit, updated, relaunched) — a press that closes the app can never verify, and reporting it as an error invites a dangerous retry
 
-**All six trial-log gaps addressed 2026-08-09 (f623d3a)** (verified by execution on the
+**All six trial-log gaps addressed 2026-08-09 (c89eefa)** (verified by execution on the
 installed build; the trial continues — new fallback moments still get lines above):
 
 - *Bare keys* → new `key` verb: named keys (escape, return, tab, arrows, home/end,
