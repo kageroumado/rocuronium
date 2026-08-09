@@ -1,36 +1,39 @@
 #!/bin/bash
 # The away-window verification batch — roadmap loose ends 3, 4, 5, and 6.
 #
-# These four verifications need presence to genuinely read `away`, which cannot be
-# simulated from the keyboard: touching anything resets the idle clock, and faking the
-# reading would test the fake instead of the gate. So this script waits for the real
-# thing — lock the screen (Ctrl-Cmd-Q) to trigger it deliberately, or leave the Mac for
-# 15 minutes — then runs unattended and writes everything it saw to the log.
+# These verifications need presence to genuinely read `away` with the screen UNLOCKED
+# (the 15-minutes-idle path). The locked regime was measured 2026-08-09 and is a
+# different animal: activate cannot land (loginwindow keeps the console), background
+# menus are dead on some apps and half-alive on others, and nothing frontmost exists
+# for a dialog test. This script waits for the unlocked kind and runs unattended.
 #
 #   Scripts/away-experiment.sh          run in foreground (blocks until away, then runs)
 #   Scripts/away-experiment.sh --arm    detach via nohup; prints the pid to disarm with
 #
-# Everything is ghost-rung except `activate`, whose away-gated success path is exactly
-# what loose end 3 wants verified. Every step re-checks presence and bails politely if
-# someone returns mid-run. Gives up after 12 hours.
+# Politeness rules learned from the first run, the hard way:
+#   - activate comes FIRST, and if it does not land the script stops — every later step
+#     assumes a frontmost target, and blundering on in the background navigated the
+#     user's real Safari tab and then quit Safari.
+#   - Apps the script did not launch are never quit; work happens in windows the script
+#     opened itself, verified open before use.
+# Every step re-checks presence and bails if someone returns. Gives up after 12 hours.
 
 set -u
 
 R="/Applications/Rocuronium.app/Contents/Resources/rocuronium"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG="$REPO/Docs/away-experiment-$(date +%Y-%m-%d).log"
+LOG="$REPO/Docs/away-experiment-$(date +%Y-%m-%d-%H%M).log"
 WIKI_URL="https://en.wikipedia.org/wiki/Rocuronium_bromide"
 
 if [ "${1:-}" = "--arm" ]; then
     nohup "$0" >>"$LOG" 2>&1 &
     echo "armed as pid $! — disarm with: kill $!"
-    echo "results will land in $LOG"
+    echo "results will land in $LOG (gitignored: raw replies carry session details)"
     exit 0
 fi
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-# Run a rocuronium command, log the full JSON reply, and leave it in $REPLY_JSON.
 run() {
     log "\$ rocuronium $*"
     REPLY_JSON="$("$R" "$@" --json 2>&1)"
@@ -39,92 +42,116 @@ run() {
 
 field() { echo "$REPLY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('$1',''))" 2>/dev/null; }
 
-presence_state() { "$R" status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('presence',''))" 2>/dev/null; }
+status_field() { "$R" status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('$1',''))" 2>/dev/null; }
 
-# Bail out if a human came back mid-experiment. Partial results still count.
 require_away() {
-    local state; state="$(presence_state)"
-    if [ "$state" = "present" ]; then
-        log "ABORT: presence flipped to present mid-run — stopping here; partial results above stand"
+    if [ "$(status_field presence)" = "present" ]; then
+        log "ABORT: presence flipped to present mid-run — partial results above stand"
         exit 0
     fi
 }
 
-log "=== away-experiment armed; polling until presence reads away (lock the screen to trigger) ==="
+window_count() { "$R" windows --app "$1" --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('count',0))" 2>/dev/null; }
+
+log "=== armed; waiting for UNLOCKED away (walk away for 15 min; locking triggers the already-measured regime) ==="
 DEADLINE=$(( $(date +%s) + 12 * 3600 ))
 while :; do
-    STATE="$(presence_state)"
-    if [ "$STATE" = "away" ]; then break; fi
+    if [ "$(status_field presence)" = "away" ] && [ "$(status_field screenLocked)" = "False" ]; then break; fi
     if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-        log "gave up: presence never read away within 12 h"
+        log "gave up: no unlocked away window within 12 h"
         exit 1
     fi
     sleep 30
 done
 
-log "=== presence reads away — starting ==="
+log "=== presence reads away, screen unlocked — starting ==="
 run status
 
-# --- Loose end 3: activate's success path, no --confirm ------------------------------
-log "--- loose end 3: activate without confirm while away ---"
+# --- Loose end 3: activate without confirm while away -------------------------------
+log "--- loose end 3: activate without confirm ---"
 run launch --app TextEdit
+TEXTEDIT_WAS_RUNNING="$(field alreadyRunning)"
 require_away
 run activate --app TextEdit
-ACTIVATE_OK="$(field ok)"
-log "activate landed: $ACTIVATE_OK (frontmost read-back is in the reply above)"
+if [ "$(field ok)" != "True" ]; then
+    log "ABORT: activate did not land even though presence is away+unlocked — that itself is"
+    log "the loose-end-3 result; everything downstream assumes a frontmost target. Stopping."
+    exit 0
+fi
+log "activate landed without confirm — loose end 3 verified"
 
-# --- Loose end 6: key to a FRONTMOST dialog -----------------------------------------
-# Background delivery was measured no-effect on 2026-08-09; this is the real case.
+# --- Loose end 6: key escape against a FRONTMOST save sheet -------------------------
 log "--- loose end 6: key escape against a frontmost save sheet ---"
 require_away
+BEFORE=$(window_count TextEdit)
 run menu --app TextEdit --path "File > New"
-run type --app TextEdit --text "away experiment scratch"
-run shortcut --app TextEdit --keys cmd+s
 sleep 1
-run find --app TextEdit --role sheet
-SHEET_BEFORE="$(field matches)"
-run key --app TextEdit --keys escape
-sleep 1
-run find --app TextEdit --role sheet
-log "sheet before escape: ${SHEET_BEFORE:0:60} / after: see reply above (empty matches = dismissed)"
+AFTER=$(window_count TextEdit)
+log "TextEdit windows: $BEFORE before File>New, $AFTER after"
+if [ "${AFTER:-0}" -le "${BEFORE:-0}" ]; then
+    log "SKIP sheet test: File>New opened no window even frontmost — record and move on"
+else
+    run type --app TextEdit --text "away experiment scratch"
+    run shortcut --app TextEdit --keys cmd+s
+    sleep 1
+    run find --app TextEdit --role sheet
+    run key --app TextEdit --keys escape
+    sleep 1
+    run find --app TextEdit --role sheet
+    log "sheet-after-escape above: empty matches = escape dismissed a frontmost sheet"
+    require_away
+    run click --app TextEdit --label "close button"
+    sleep 1
+    run click --app TextEdit --label "Delete" --role button
+fi
+if [ "$TEXTEDIT_WAS_RUNNING" != "True" ]; then
+    run shortcut --app TextEdit --keys cmd+q
+fi
 
-# Cleanup: close the scratch document, discarding it.
-require_away
-run click --app TextEdit --label "close button"
-sleep 1
-run click --app TextEdit --label "Delete" --role button
-run shortcut --app TextEdit --keys cmd+q
-
-# --- Loose ends 4 + 5: WebKit scroll + read referral --------------------------------
-log "--- loose ends 4+5: Safari (WebKit) read, referral, and scroll behavior ---"
+# --- Loose ends 4 + 5: WebKit read, referral, and scroll ----------------------------
+log "--- loose ends 4+5: Safari (WebKit), in a window this script opens itself ---"
 require_away
 run launch --app Safari
+SAFARI_WAS_RUNNING="$(field alreadyRunning)"
 run activate --app Safari
+if [ "$(field ok)" != "True" ]; then
+    log "SKIP Safari batch: activate did not land; not operating on background Safari again"
+    exit 0
+fi
+BEFORE=$(window_count Safari)
 run menu --app Safari --path "File > New Window"
 sleep 1
+AFTER=$(window_count Safari)
+log "Safari windows: $BEFORE before New Window, $AFTER after"
+if [ "${AFTER:-0}" -le "${BEFORE:-0}" ]; then
+    log "SKIP Safari batch: no window of our own to work in — refusing to touch existing tabs"
+    exit 0
+fi
 run shortcut --app Safari --keys cmd+l
 run type --app Safari --text "$WIKI_URL"
 run key --app Safari --keys return
-run wait --app Safari --label "References" --timeout 20
+run wait --app Safari --label "Pharmacology" --role heading --timeout 20
 require_away
 
-log "read: does WebKit expose text, or a silent web area with a referral?"
+log "read: does WebKit expose page text, or a silent web area with a referral?"
 run read --app Safari
 
-log "scroll to an off-screen labeled target (AXScrollToVisible on WebKit, genuinely off-screen)"
-run scroll --app Safari --label "References" --dy 100
+log "scroll to an off-screen labeled target (AXScrollToVisible on WebKit)"
+run scroll --app Safari --label "External links" --dy 100
 
 log "absolute scroll: does WebKit expose a scroll bar (attribute or role walk)?"
-run scroll --app Safari --to 0
 run scroll --app Safari --to 1
+run scroll --app Safari --to 0
 
-log "bare posted wheels on WebKit (expected honest noEffect, but unmeasured until now)"
+log "bare posted wheels on WebKit"
 run scroll --app Safari --dy 400
 
-# Cleanup: close our window, quit Safari (session restore keeps prior windows).
+# Cleanup: close only the window this script opened; quit only what it launched.
 require_away
 run shortcut --app Safari --keys cmd+w
-run shortcut --app Safari --keys cmd+q
+if [ "$SAFARI_WAS_RUNNING" != "True" ]; then
+    run shortcut --app Safari --keys cmd+q
+fi
 
 log "=== done — fold these results into Docs/ROADMAP.md loose ends 3–6 ==="
 run status

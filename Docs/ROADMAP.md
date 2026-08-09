@@ -52,19 +52,29 @@ specs moved to the Done section. What the session measured, and what it left ope
    overlay scroller): write read back 0.615 → 0.900. **The open measurement is answered:
    the value write moves the actual content, not just the bar** — a 119-line document
    screenshotted at `--to 0` showed lines 1–27 and at `--to 1` lines 92–119.
-3. `activate --confirm` success path deliberately unverified: presence read `present`
-   (idle 0 s) all session (again 2026-08-09), and stealing focus from a present human to
-   test the anti-focus-stealing tool was declined. Verify in the next away window.
-   **Staged 2026-08-09: `Scripts/away-experiment.sh` covers loose ends 3–6 unattended** —
-   it polls until presence genuinely reads away (lock the screen to trigger, or 15 min
-   idle), then runs the batch and logs to `Docs/away-experiment-<date>.log`. Armed via
-   `--arm` (nohup); re-arm the same way if the Mac restarts first. Whoever reads the
-   log folds the results back into these entries.
+3. `activate` success path still unverified — but the **locked-away regime is now
+   measured** (`Scripts/away-experiment.sh` first run, 2026-08-09 03:08, screen locked):
+   `activate` cannot land behind the lock screen; `loginwindow` keeps the console and
+   the read-back said so honestly. The unlocked (15-min-idle) regime remains the open
+   question; the script's v2 waits specifically for that (away *and* unlocked) and
+   bails if activate fails rather than operating on background apps. Re-arm with
+   `Scripts/away-experiment.sh --arm`; logs are gitignored (raw replies carry session
+   details — the first run's log captured menu history).
+   Locked-regime findings worth keeping:
+   - Background menu delivery diverges *per app*: TextEdit's File ▸ New was a dead
+     press, while Safari honored ⌘L in the background — a typed URL plus `key return`
+     navigated the **existing front tab** (and quit-on-cleanup then closed Safari;
+     v2's politeness rules exist because of exactly this).
+   - Rung-0 display wake works behind the lock (display slept mid-run; `launch` woke
+     it and the trees came back).
 4. `AXScrollToVisible` moved-frame path verified on Chromium only via the
    already-visible branch; exercise a genuinely off-screen target (needs a target whose
    off-screen rows materialize in AX — Notes' list virtualizes them away).
-5. WebKit (Safari/Refrax) scroll + read-referral behavior unmeasured — Safari was not
-   running and opening windows on a present user's screen was declined.
+5. WebKit (Safari/Refrax) scroll + read-referral behavior **still unmeasured** — the
+   locked-regime run attempted it and every probe was invalidated by two bugs it
+   exposed instead: `AXMainWindow` answering with the application element (fixed, see
+   below) and label queries matching *menu items* (loose end 9). The unlocked rerun
+   carries this measurement.
 6. **`key` delivery to background AppKit dialogs measured no-effect** (2026-08-09): a
    posted Escape did not dismiss a background TextEdit save sheet — pixelDelta 0, sheet
    still present, honestly reported `unverifiable`. A background app has no key window
@@ -81,6 +91,20 @@ specs moved to the Done section. What the session measured, and what it left ope
 8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
    call, but the refusal's advice (target by bundle id) has nothing to offer there. If
    this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.
+9. **Label queries match menu items** (found 2026-08-09, locked-regime run): the walk
+   seeds the menu bar, so `wait --label References` on Safari matched a History-menu
+   entry whose *title* contained "references" — a false positive that then poisoned the
+   scroll probe (its "scroll area" ascended from a menu item). Menu items are the right
+   matches for nothing except `menu`/`shortcut`, which have their own resolution.
+   Shape of the fix: exclude the menu-bar subtree from `named()`/`wait`/`read` walks
+   (or demote menu matches the way value matches are demoted below label matches).
+   Workaround today: pass `--role` — the Safari rerun uses `--role heading`.
+10. ~~`AXMainWindow` can answer with the application element~~ — **fixed 2026-08-09**:
+   behind the lock screen Safari's `AXMainWindow` attribute returned the app element
+   itself, so `read` dumped 30k characters of menu bar and history instead of the page.
+   `Engine.primaryWindow(of:)` now accepts only window-roled elements and falls back to
+   `AXWindows` (which answered correctly in the same state); `read`, `windowFrame`,
+   `moveWindow`, and scroll-area resolution all go through it.
 
 ## Phase 2 — Operator docs + the actual switch — **2.1–2.3 DONE 2026-08-04**
 
