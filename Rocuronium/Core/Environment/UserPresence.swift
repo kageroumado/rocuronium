@@ -16,11 +16,7 @@ nonisolated enum UserPresence {
         /// Input this recent means hands are on the keyboard right now.
         static let presentWithin: TimeInterval = 60
         /// Beyond this with no input, the person has probably walked away.
-        /// TEMPORARY (2026-08-09, Kiri's call): lowered to 60 so the away-experiment can
-        /// fire in one minute instead of fifteen. Restore to `15 * 60` and reinstall as
-        /// soon as the experiment has run — at 60 s the activate and hardware-input gates
-        /// open on anyone who pauses to read something.
-        static let idleUntil: TimeInterval = 60
+        static let idleUntil: TimeInterval = 15 * 60
     }
 
     enum State: String, Codable, Sendable {

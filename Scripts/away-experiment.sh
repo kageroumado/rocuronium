@@ -60,22 +60,19 @@ window_count() { "$R" windows --app "$1" --json 2>/dev/null | python3 -c "import
 # hold the display awake for the script's whole lifetime (caffeinate -d; removes the
 # display-sleep confound without touching Settings), trigger on idle alone and branch
 # on the lock state after the fact, and heartbeat the readings so a miss is loud.
-# Threshold matches the app's idleUntil constant — TEMPORARILY 60 s (2026-08-09) so
-# the experiment fires in a minute; both go back to 15 min once it has run.
-TRIGGER_IDLE=70
 caffeinate -d -w $$ &
-log "=== armed; display held awake (caffeinate -d, released on exit); waiting for >=${TRIGGER_IDLE}s keyboard idle ==="
+log "=== armed; display held awake (caffeinate -d, released on exit); waiting for >=15 min keyboard idle ==="
 DEADLINE=$(( $(date +%s) + 12 * 3600 ))
 POLLS=0
 while :; do
     IDLE="$(status_field idleSeconds)"
     LOCKED="$(status_field screenLocked)"
     POLLS=$((POLLS + 1))
-    # Loud approach: every reading once idle passes half the trigger, heartbeat every 10 min.
-    if [ "${IDLE:-0}" -ge $((TRIGGER_IDLE / 2)) ] || [ $((POLLS % 20)) -eq 0 ]; then
+    # Loud approach: every reading once idle passes 5 minutes, heartbeat every 10 min.
+    if [ "${IDLE:-0}" -ge 300 ] || [ $((POLLS % 20)) -eq 0 ]; then
         log "poll $POLLS: idleSeconds=[$IDLE] screenLocked=[$LOCKED]"
     fi
-    if [ "${IDLE:-0}" -ge "$TRIGGER_IDLE" ]; then
+    if [ "${IDLE:-0}" -ge 910 ]; then
         if [ "$LOCKED" = "False" ]; then break; fi
         log "idle >=15 min but screen locked — the locked regime is already measured; waiting on"
     fi
