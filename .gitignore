@@ -6,3 +6,7 @@ xcuserdata/
 *.moved-aside
 .swiftpm/
 .build/
+# Raw away-experiment replies include window titles and menu history from the
+# user's real session — browsing history, filenames. Results get distilled into
+# ROADMAP.md; the raw logs never leave this machine.
+Docs/away-experiment-*.log

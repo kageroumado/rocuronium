@@ -194,8 +194,7 @@ actor Engine {
             root = element
             scope = "\(element.role) '\(element.label)'"
         } else {
-            let application = AXElement(pid: pid)
-            guard let window = application.mainWindow ?? application.windows.first else {
+            guard let window = primaryWindow(of: AXElement(pid: pid)) else {
                 throw EngineError.notFound("a window for pid \(pid)")
             }
             root = window
@@ -316,11 +315,23 @@ actor Engine {
         Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
     }
 
+    /// The app's primary window — with the answer's *role* checked, not trusted.
+    ///
+    /// Measured on Safari behind the lock screen (2026-08-09): an inactive app's
+    /// `AXMainWindow` attribute can answer with the **application element itself**, and a
+    /// text dump rooted there walks the menu bar — 30k characters of menus and history
+    /// while the actual page content never appears. Only an element that is actually a
+    /// window counts; `AXWindows` answered correctly in the same state and is the fallback.
+    private func primaryWindow(of application: AXElement) -> AXElement? {
+        let windowRoles = ["AXWindow", "AXSheet", "AXDialog", "AXDrawer"]
+        if let main = application.mainWindow, windowRoles.contains(main.role) { return main }
+        return application.windows.first { windowRoles.contains($0.role) }
+    }
+
     /// The frame of the app's primary window, for aiming a capture at it.
     func windowFrame(pid: pid_t) throws -> ElementDescriptor.Frame {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        let application = AXElement(pid: pid)
-        guard let window = application.mainWindow ?? application.windows.first,
+        guard let window = primaryWindow(of: AXElement(pid: pid)),
               let frame = window.frame
         else { throw EngineError.notFound("a window with a frame for pid \(pid)") }
         return .init(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
@@ -331,8 +342,7 @@ actor Engine {
     /// Moves the app's primary window and reads its frame back as evidence.
     func moveWindow(pid: pid_t, to point: CGPoint) async throws -> WindowMove {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        let application = AXElement(pid: pid)
-        guard let window = application.mainWindow ?? application.windows.first else {
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else {
             throw EngineError.notFound("a window for pid \(pid)")
         }
 
@@ -816,8 +826,7 @@ actor Engine {
             // whatever is under the point, and its scroll container need not be in the tree.
             return firstDescendant(role: "AXScrollArea", under: element) ?? element
         }
-        let application = AXElement(pid: pid)
-        guard let window = application.mainWindow ?? application.windows.first else {
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else {
             throw EngineError.notFound("a window for pid \(pid)")
         }
         return firstDescendant(role: "AXScrollArea", under: window)
