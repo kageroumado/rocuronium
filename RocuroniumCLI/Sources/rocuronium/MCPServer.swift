@@ -195,11 +195,13 @@ enum MCPServer {
             Post a bare named key — escape, return, enter, tab, space, delete, forwarddelete, \
             left/right/up/down, home, end, pageup, pagedown — with optional modifiers \
             ('shift+tab', 'cmd+down'). The gap the other input verbs leave: `type` sends text \
-            only and `shortcut` reaches only keys a menu item carries; a file-picker dialog's \
-            Escape is neither. Delivered per-pid without touching cursor or focus. AppKit \
-            honors posted keycodes; Electron/Chromium ignore them (measured) — an \
-            unverifiable verdict there means exactly that. For printable characters use \
-            `type`; for letter shortcuts use `shortcut`.
+            only and `shortcut` reaches only keys a menu item carries. Delivered per-pid \
+            without touching cursor or focus. Measured reach: lands in the app's focused \
+            text control (`return` in an address bar commits navigation) — but sheet \
+            key-equivalents do NOT actuate: escape will not cancel a save sheet; press the \
+            sheet's button instead (click label 'Cancel' role 'button'). Electron/Chromium \
+            ignore posted keycodes entirely. For printable characters use `type`; for \
+            letter shortcuts use `shortcut`.
             """,
             properties: [
                 "app": ["type": "string"],
