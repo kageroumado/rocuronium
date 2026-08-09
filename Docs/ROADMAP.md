@@ -55,6 +55,11 @@ specs moved to the Done section. What the session measured, and what it left ope
 3. `activate --confirm` success path deliberately unverified: presence read `present`
    (idle 0 s) all session (again 2026-08-09), and stealing focus from a present human to
    test the anti-focus-stealing tool was declined. Verify in the next away window.
+   **Staged 2026-08-09: `Scripts/away-experiment.sh` covers loose ends 3–6 unattended** —
+   it polls until presence genuinely reads away (lock the screen to trigger, or 15 min
+   idle), then runs the batch and logs to `Docs/away-experiment-<date>.log`. Armed via
+   `--arm` (nohup); re-arm the same way if the Mac restarts first. Whoever reads the
+   log folds the results back into these entries.
 4. `AXScrollToVisible` moved-frame path verified on Chromium only via the
    already-visible branch; exercise a genuinely off-screen target (needs a target whose
    off-screen rows materialize in AX — Notes' list virtualizes them away).
