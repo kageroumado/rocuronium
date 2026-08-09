@@ -147,19 +147,54 @@ nonisolated struct Evidence: Codable, Sendable {
         )
     }
 
+    /// The target process exited after the action — the read-back for actions that close
+    /// their own app. Every other channel needs a live process, so a fully successful Quit
+    /// or restart-to-update otherwise reports `unverifiable`, and an unverified-looking
+    /// "error" on a press that worked invites the one retry a just-quit app must not get.
+    func confirmedByProcessExit() -> Evidence {
+        Evidence(
+            action: action, target: target, rung: rung,
+            verdict: .confirmed,
+            readback: "the target process exited after the press",
+            pixelDelta: pixelDelta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts + [.init(
+                rung: rung,
+                outcome: "the target process exited — an action that closes its app cannot read back; the exit is the evidence",
+            )],
+            referral: referral,
+        )
+    }
+
     /// Like `addingVisualEvidence`, but pixels may only **confirm**, never refute.
     ///
-    /// For a click, "nothing changed" is real evidence of failure. For a menu command it is
-    /// not: copy and its siblings succeed while changing no pixels at all, so a quiet window
-    /// after a shortcut must stay `unverifiable` rather than becoming `noEffect`.
+    /// In an *element's* rectangle, "nothing changed" is real evidence a click failed. In a
+    /// whole window it is not: copy and its siblings succeed while changing no pixels at
+    /// all, and a click's consequence can land in a popover outside the captured window —
+    /// so a quiet window never downgrades. It can, however, *overturn* a noEffect: the
+    /// element-rect diff refutes from too small a rectangle when the consequence lands
+    /// elsewhere in the window (measured on Calculator — the pressed button read quiet
+    /// while the display changed).
     func addingConfirmingVisualEvidence(delta: Double?) -> Evidence {
-        guard verdict == .unverifiable, let delta else { return self }
+        guard verdict != .confirmed, let delta else { return self }
         // The measurement is recorded even when it decides nothing: a sub-threshold delta
         // that vanished without trace once read as a mystery, not as a number to reason about.
-        let confirmed = Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta) == .confirmed
+        let visual = Verifier.verdict(expected: nil, readback: nil, pixelDelta: delta)
+        // A mid-band delta on a window that was provably still is conflicting evidence
+        // against an element-rect refutation — the consequence of a real press can be small
+        // at window scale (Calculator's display changing is 0.27% of the window). Refuting
+        // on the element while the window moved would tell the caller "did not happen"
+        // about an action that observably did something; unverifiable is the honest middle.
+        let resolved: Verdict = switch visual {
+        case .confirmed: .confirmed
+        case .unverifiable: verdict == .noEffect ? .unverifiable : verdict
+        case .noEffect: verdict
+        }
         return Evidence(
             action: action, target: target, rung: rung,
-            verdict: confirmed ? .confirmed : verdict,
+            verdict: resolved,
             readback: readback, pixelDelta: delta,
             focusBefore: focusBefore, focusAfter: focusAfter,
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,

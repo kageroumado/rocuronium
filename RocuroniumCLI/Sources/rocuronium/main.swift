@@ -20,15 +20,16 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium status
   rocuronium apps
   rocuronium windows    --app <name>
-  rocuronium find       --app <name> [--label <text>]
-  rocuronium read       --app <name> [--label <text>]
-  rocuronium wait       --app <name> --label <text> [--gone] [--timeout <s, max 25>]
-  rocuronium type       --app <name> --text <text> [--label <text>]
-  rocuronium click      --app <name> [--label <text>] [--x <n> --y <n>]
+  rocuronium find       --app <name> [--label <text>] [--role <button|…>]
+  rocuronium read       --app <name> [--label <text>] [--role <r>]
+  rocuronium wait       --app <name> --label <text> [--role <r>] [--gone] [--timeout <s, max 25>]
+  rocuronium type       --app <name> --text <text> [--label <text>] [--role <r>]
+  rocuronium click      --app <name> [--label <text>] [--role <r>] [--x <n> --y <n>]
   rocuronium scroll     --app <name> --label <text> --dy <px>   (bring element into view)
   rocuronium scroll     --app <name> (--dy <px> [--dx <px>] | --to <0..1>)
   rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
   rocuronium menu       --app <name> --path "File > Export" [--resolve-only] [--confirm]
+  rocuronium key        --app <name> --keys <escape|shift+tab|cmd+down|…>
   rocuronium launch     --app <name>
   rocuronium activate   --app <name> [--confirm]
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
@@ -42,6 +43,10 @@ Options:
   --json                   print the raw reply
 
 'read' dumps an app's text via accessibility — no pixels, works behind a locked screen.
+'key' posts a bare named key (escape, return, tab, arrows, home/end, page up/down) with
+optional modifiers — for what 'type' (text) and 'shortcut' (menu items) cannot send;
+AppKit honors it, Electron ignores posted keycodes. '--role' narrows a label match when
+two roles share the text (a button and a menu item both named "Restart", say).
 'wait' blocks until the element appears (--gone: disappears); a timed-out reply says to
 call again, because the socket cancels requests at 30 s. 'launch' starts an app without
 taking focus and returns once it can be driven; 'activate' takes focus on purpose and is
@@ -88,7 +93,7 @@ if command == "display", let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }
-for flag in ["app", "label", "text", "reason", "lease", "path", "keys"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "to"] {

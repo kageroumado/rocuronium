@@ -49,9 +49,12 @@ actor Engine {
 
     /// How to find the thing to act on. Deliberately explicit: a coordinate and a label are
     /// answered by different mechanisms, and the caller should know which one replied.
+    /// `role` narrows a label match when two roles share the text — a button and a menu item
+    /// both titled "Restart to update" was the measured case that had no answer but raw
+    /// coordinates.
     enum Locator: Sendable {
         case focused
-        case named(String)
+        case named(String, role: String?)
         case point(x: Double, y: Double)
     }
 
@@ -91,6 +94,7 @@ actor Engine {
         case notFound(String)
         case ambiguous(String, [String])
         case unparseableShortcut(String)
+        case unparseableKey(String)
         case hazardousShortcut(String, String)
         case menuPathNotFound(component: String, available: [String])
         case menuPathIsSubmenu(path: String, items: [String])
@@ -105,6 +109,11 @@ actor Engine {
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
             case let .unparseableShortcut(keys):
                 "Could not parse '\(keys)' — use forms like cmd+a, cmd+shift+z, cmd+left."
+            case let .unparseableKey(keys):
+                "Could not parse '\(keys)' as a named key. 'key' sends "
+                    + "escape, return, tab, space, delete, forwarddelete, left/right/up/down, "
+                    + "home, end, pageup, pagedown — with optional modifiers, e.g. shift+tab. "
+                    + "For printable characters use 'type'; for letter shortcuts use 'shortcut'."
             case let .hazardousShortcut(path, consequence):
                 "That shortcut resolves to '\(path)', which \(consequence). Pass confirm:true if that is genuinely intended. (Every app's menu bar includes the Apple menu, so session-wide items are reachable from any target.)"
             case let .menuPathNotFound(component, available):
@@ -122,15 +131,22 @@ actor Engine {
 
     // MARK: - Perception
 
-    func find(pid: pid_t, query: String?) throws -> FindOutcome {
+    func find(pid: pid_t, query: String?, role: String? = nil) throws -> FindOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
 
         // Chromium builds its tree lazily; ask once, cheap and harmless elsewhere.
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
-        let results = cache.results(for: pid, key: "find:\(query ?? "*")") {
-            if let query { ElementQuery.named(query, pid: pid) } else { ElementQuery.editables(pid: pid) }
+        let results = cache.results(for: pid, key: cacheKey(query, role: role)) {
+            if let query {
+                ElementQuery.named(query, role: role, pid: pid)
+            } else if let role {
+                // A bare role query is a legitimate question ("list the buttons").
+                ElementQuery.search(pid: pid) { ElementQuery.roleMatches($0.role, wanted: role) }
+            } else {
+                ElementQuery.editables(pid: pid)
+            }
         }
         let statistics = cache.statistics
         return FindOutcome(
@@ -165,7 +181,7 @@ actor Engine {
 
     /// Dumps the readable text of an element's subtree (by label) or the main window.
     /// The cheap way to answer "what does the app say right now" — no pixels, no model.
-    func read(pid: pid_t, label: String?) throws -> ReadOutcome {
+    func read(pid: pid_t, label: String?, role: String? = nil) throws -> ReadOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
@@ -174,7 +190,7 @@ actor Engine {
         let scope: String
         if let label {
             // Same cache key as `find`, so a find-then-read pair costs one walk, not two.
-            let element = try resolveNamed(pid: pid, label: label)
+            let element = try resolveNamed(pid: pid, label: label, role: role)
             root = element
             scope = "\(element.role) '\(element.label)'"
         } else {
@@ -232,7 +248,7 @@ actor Engine {
     /// The timeout is the router's problem to bound: the control socket cancels requests at
     /// 30 s, so callers pass at most 25 and loop on a "call again" reply. The poll itself
     /// checks for cancellation so a cancelled request stops burning AX IPC.
-    func waitFor(pid: pid_t, label: String, gone: Bool, timeout: Duration) async throws -> WaitOutcome {
+    func waitFor(pid: pid_t, label: String, role: String? = nil, gone: Bool, timeout: Duration) async throws -> WaitOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         let clock = ContinuousClock()
@@ -241,8 +257,8 @@ actor Engine {
 
         while true {
             polls += 1
-            let matches = cache.results(for: pid, key: "find:\(label)") {
-                ElementQuery.named(label, pid: pid)
+            let matches = cache.results(for: pid, key: cacheKey(label, role: role)) {
+                ElementQuery.named(label, role: role, pid: pid)
             }.matches
             let satisfied = gone ? matches.isEmpty : !matches.isEmpty
             let elapsed = seconds(start.duration(to: clock.now))
@@ -472,7 +488,107 @@ actor Engine {
                 delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
             )
         }
+        // A press that closes its app can never verify through the app: every read-back
+        // channel above needs a live process, so a fully successful "Quit" or "Restart to
+        // Update" came back ok:false / unverifiable — which invites exactly the retry a
+        // just-quit app must not get (measured on Refrax's updater, 2026-08-09). The
+        // process exiting right after the press *is* the read-back; poll briefly because
+        // an orderly quit takes a moment.
+        if evidence.verdict != .confirmed {
+            for _ in 0 ..< 6 where !processHasExited(pid) {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            if processHasExited(pid) {
+                evidence = evidence.confirmedByProcessExit()
+            }
+        }
         return (evidence, match.path, match.enabled, hazard)
+    }
+
+    /// ESRCH from a zero signal is the cheapest liveness probe there is, and it needs no
+    /// main-actor hop. Within the ~1 s window this is polled, pid reuse is not a concern.
+    private nonisolated func processHasExited(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == -1 && errno == ESRCH
+    }
+
+    /// Posts a bare named key (Escape, Return, arrows…) to the process — the verb for keys
+    /// that are neither text (`type`) nor menu-reachable (`shortcut`). The measured need:
+    /// dismissing a native file-picker dialog wants a plain Escape, which no other verb
+    /// could send (trial log, 2026-08-06).
+    ///
+    /// Honesty note baked into the evidence: posted keycode events are delivered per-pid and
+    /// work on AppKit, but Electron/Chromium ignore keycode-only events entirely (measured on
+    /// Discord). Confirmation channels are the focused element changing and window pixels;
+    /// a quiet result stays `unverifiable` rather than `noEffect`, because a key that merely
+    /// moves a caret changes almost nothing a window-scale diff can see.
+    func pressKey(pid: pid_t, keys: String) async throws -> Evidence {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let chord = EventPoster.KeyChord.parse(keys) else {
+            throw EngineError.unparseableKey(keys)
+        }
+
+        let cursorBefore = EventPoster.cursorLocation
+        let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
+        let focusedBefore = ElementQuery.focused(pid: pid)
+        let focusBefore = focusedBefore?.signature
+        let target = focusedBefore.map { "\($0.role) '\($0.label)'" } ?? "pid \(pid)"
+
+        // Same two-capture stillness control as the menu press: a key's consequence lands
+        // somewhere in the window (a dialog closing, a row highlight moving), and a window
+        // with intrinsic motion cannot testify.
+        var baseline: ScreenCapture.WindowCapture?
+        var windowIsStill = false
+        if ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid) {
+            let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+            baseline = try? await ScreenCapture.windowImage(ownedBy: pid, near: rect)
+            if let baseline,
+               let control = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
+               let drift = ScreenDiff.changedFraction(from: baseline.image, to: control.image) {
+                windowIsStill = drift <= Constants.intrinsicMotionTolerance
+            }
+        }
+
+        await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, pid: pid)
+        try? await Task.sleep(for: .milliseconds(300))
+        cache.invalidate(pid: pid)
+
+        let focusAfter = ElementQuery.focused(pid: pid)?.signature
+        let focusChanged = focusAfter != focusBefore
+        let attempts: [Evidence.Attempt] = [.init(
+            rung: .postedEvent,
+            outcome: focusChanged
+                ? "key posted; the focused element changed"
+                : "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)",
+        )]
+
+        let cursorAfter = EventPoster.cursorLocation
+        let frontAfter = await MainActor.run { EventPoster.frontmostBundleID }
+        let targetBundle = await MainActor.run {
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        }
+        var evidence = Evidence(
+            action: "key(\(chord.name))",
+            target: target,
+            rung: .postedEvent,
+            verdict: focusChanged ? .confirmed : .unverifiable,
+            readback: nil,
+            pixelDelta: nil,
+            focusBefore: focusBefore,
+            focusAfter: focusAfter,
+            cursorMoved: hypot(cursorAfter.x - cursorBefore.x, cursorAfter.y - cursorBefore.y) >= 1,
+            frontmostChanged: frontAfter != frontBefore,
+            frontmostBecameTarget: frontAfter != frontBefore && frontAfter == targetBundle,
+            attempts: attempts,
+            referral: nil,
+        )
+        if evidence.verdict == .unverifiable, windowIsStill, let baseline,
+           let after = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
+           after.windowFrame == baseline.windowFrame {
+            evidence = evidence.addingConfirmingVisualEvidence(
+                delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
+            )
+        }
+        return evidence
     }
 
     /// Scrolls a scroll area — the way to reach off-screen content. Ladder-shaped like
@@ -484,6 +600,7 @@ actor Engine {
     func scroll(
         pid: pid_t,
         label: String?,
+        role: String? = nil,
         deltaX: Double,
         deltaY: Double,
         toFraction: Double?
@@ -492,12 +609,12 @@ actor Engine {
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
-        let area = try resolveScrollArea(pid: pid, label: label)
+        let area = try resolveScrollArea(pid: pid, label: label, role: role)
         let target = "\(area.role) '\(area.label)'"
         // Chromium and Electron expose no AXScrollArea at all (measured on Discord: the
         // whole window is AXWebArea/AXList/AXGroup), so `bar` being nil is a normal state,
         // not an error — it just means pixels are the only read-back channel.
-        let bar = area.verticalScrollBar
+        let bar = verticalScrollBar(of: area)
         let barBefore = bar?.numberValue
         var attempts: [Evidence.Attempt] = []
         let cursorBefore = EventPoster.cursorLocation
@@ -558,7 +675,7 @@ actor Engine {
         // (pixel *and* line units, location set) were ignored by AppKit and Chromium alike,
         // presumably because wheel routing belongs to the window server. The frame moving
         // afterwards is the read-back.
-        if let label, let element = try? resolveNamed(pid: pid, label: label),
+        if let label, let element = try? resolveNamed(pid: pid, label: label, role: role),
            element.actionNames.contains("AXScrollToVisible") {
             let before = element.frame
             let code = element.perform("AXScrollToVisible")
@@ -685,9 +802,9 @@ actor Engine {
     /// itself. The fallbacks exist because Chromium and Electron expose **no scroll areas at
     /// all** (measured on Discord — the content is AXWebArea/AXList/AXGroup throughout), and
     /// refusing to scroll them would fail exactly the apps that need scrolling most.
-    private func resolveScrollArea(pid: pid_t, label: String?) throws -> AXElement {
+    private func resolveScrollArea(pid: pid_t, label: String?, role: String? = nil) throws -> AXElement {
         if let label {
-            let element = try resolveNamed(pid: pid, label: label)
+            let element = try resolveNamed(pid: pid, label: label, role: role)
             if element.role == "AXScrollArea" { return element }
             var current = element
             for _ in 0 ..< 30 {
@@ -708,6 +825,30 @@ actor Engine {
             ?? window
     }
 
+    /// The vertical scroll bar of an area, by attribute or by role walk.
+    ///
+    /// Overlay scrollers (the default since 10.7) are the suspected reason the
+    /// `AXVerticalScrollBar` *attribute* is absent on modern AppKit — measured 2026-08-04 in
+    /// Notes and Mail: the enclosing scroll area answers nothing for the attribute while a
+    /// child `AXScrollBar` element sits right there with a numeric value. So the attribute is
+    /// tried first, then a bounded two-level walk of the area's children. Taller-than-wide
+    /// picks the vertical bar; horizontal bars carry the same role.
+    private func verticalScrollBar(of area: AXElement) -> AXElement? {
+        if let bar = area.verticalScrollBar { return bar }
+        var candidates: [AXElement] = []
+        for child in area.children {
+            if child.role == "AXScrollBar" {
+                candidates.append(child)
+            } else {
+                candidates.append(contentsOf: child.children.filter { $0.role == "AXScrollBar" })
+            }
+        }
+        return candidates.first { bar in
+            guard bar.numberValue != nil, let frame = bar.frame else { return false }
+            return frame.height > frame.width
+        }
+    }
+
     private func firstDescendant(role: String, under root: AXElement) -> AXElement? {
         var visited = 0
         func visit(_ element: AXElement, depth: Int) -> AXElement? {
@@ -725,13 +866,36 @@ actor Engine {
         return visit(root, depth: 0)
     }
 
+    /// A hit test answers with the *deepest* element at the point, and on SwiftUI that is
+    /// routinely a plain AXGroup inside the actual control — measured on Refrax: the button's
+    /// coordinate resolved to a group with no press action, so the ghost click had nothing to
+    /// press and the posted event was a no-effect. For click-shaped actions the enclosing
+    /// pressable is what the caller meant; for text the deepest element is right, so the
+    /// ascent is per-action, not part of resolution.
+    private nonisolated func ascendToPressable(_ element: AXElement) -> AXElement {
+        if element.actionNames.contains(kAXPressAction) { return element }
+        var current = element
+        for _ in 0 ..< 5 {
+            guard let parent = current.parent else { break }
+            // A window or the app itself is never the button the caller aimed at.
+            if ["AXWindow", "AXSheet", "AXApplication"].contains(parent.role) { break }
+            if parent.actionNames.contains(kAXPressAction) { return parent }
+            current = parent
+        }
+        return element
+    }
+
     func act(
         pid: pid_t,
         locator: Locator,
         action: GhostLadder.Action,
         allowHardwareInput: Bool
     ) async throws -> Evidence {
-        let element = try resolve(locator, pid: pid)
+        var element = try resolve(locator, pid: pid)
+        let wantsPress = if case .setText = action { false } else { true }
+        if wantsPress, case .point = locator {
+            element = ascendToPressable(element)
+        }
         // How the ladder recovers when the handle dies mid-action (Electron rebuilds elements
         // on focus): re-run the *original* locator and accept the answer only when its role
         // matches what we were acting on. An equivalent element is a guess — Codex's own
@@ -745,34 +909,76 @@ actor Engine {
         // what distinguishes two same-role fields in one app, and a rebuilt-in-place element
         // still matches it.
         let originalSignature = element.signature
-        let refetch: () -> AXElement? = {
+        let refetch: () -> AXElement? = { [wantsPress] in
             func accept(_ candidate: AXElement?) -> AXElement? {
                 candidate?.signature == originalSignature ? candidate : nil
             }
             return switch locator {
             case .focused: accept(ElementQuery.focused(pid: pid))
-            case let .point(x, y): accept(ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid))
-            case let .named(label):
+            case let .point(x, y):
+                // The same ascent as resolution, so the refetched candidate is compared
+                // against the element actually acted on, not the deep group under the point.
+                accept(ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid).map {
+                    wantsPress ? self.ascendToPressable($0) : $0
+                })
+            case let .named(label, role):
                 {
-                    let matches = ElementQuery.named(label, pid: pid).matches
+                    let matches = ElementQuery.named(label, role: role, pid: pid).matches
                     return matches.count == 1 ? accept(matches[0].element) : nil
                 }()
             }
         }
+        // Window-level visual evidence for click-shaped actions, exactly as the menu press
+        // takes it. The ladder diffs the *element's* rectangle, and a button's own pixels
+        // return to rest immediately while the consequence lands elsewhere in the window —
+        // measured on Calculator: pressing '1' changed the display, the button's rect read
+        // quiet, and the verdict came back a false noEffect. Same two-capture stillness
+        // control; a window animating on its own cannot testify.
+        var baseline: ScreenCapture.WindowCapture?
+        var windowIsStill = false
+        if wantsPress, ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid) {
+            let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+            baseline = try? await ScreenCapture.windowImage(ownedBy: pid, near: rect)
+            if let baseline,
+               let control = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
+               let drift = ScreenDiff.changedFraction(from: baseline.image, to: control.image) {
+                windowIsStill = drift <= Constants.intrinsicMotionTolerance
+            }
+        }
+
         let ladder = GhostLadder(allowHardwareInput: allowHardwareInput)
-        let evidence = await ladder.perform(action, on: element, pid: pid, refetch: refetch)
+        var evidence = await ladder.perform(action, on: element, pid: pid, refetch: refetch)
         // The interface just changed; anything cached about this process is now suspect.
         cache.invalidate(pid: pid)
+
+        if evidence.verdict != .confirmed, windowIsStill, let baseline,
+           let after = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
+           after.windowFrame == baseline.windowFrame {
+            // Confirm-only, unlike the element-rect channel: the element's own quiet pixels
+            // may refute a click, but a quiet *window* must not — the consequence of a
+            // legitimate click can be a popover on another window or no pixels at all.
+            evidence = evidence.addingConfirmingVisualEvidence(
+                delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
+            )
+        }
         return evidence
     }
 
     // MARK: - Internals — everything below touches non-Sendable elements
 
+    /// One key shape for every label walk, so a find-then-read-then-act chain over the same
+    /// query costs one walk however the verbs are mixed.
+    private nonisolated func cacheKey(_ query: String?, role: String?) -> String {
+        "find:\(role ?? "*"):\(query ?? "*")"
+    }
+
     /// Label to element, through the cache, with the ambiguity refusal every verb shares:
-    /// acting on (or reading) whichever lookalike sorted first would be a coin flip.
-    private func resolveNamed(pid: pid_t, label: String) throws -> AXElement {
-        let matches = cache.results(for: pid, key: "find:\(label)") {
-            ElementQuery.named(label, pid: pid)
+    /// acting on (or reading) whichever lookalike sorted first would be a coin flip. The
+    /// refusal names each candidate's role, so the caller's next move is `role:`, not
+    /// coordinates.
+    private func resolveNamed(pid: pid_t, label: String, role: String? = nil) throws -> AXElement {
+        let matches = cache.results(for: pid, key: cacheKey(label, role: role)) {
+            ElementQuery.named(label, role: role, pid: pid)
         }.matches
         guard matches.count <= 1 else {
             throw EngineError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
@@ -795,8 +1001,8 @@ actor Engine {
             }
             return element
 
-        case let .named(label):
-            let matches = ElementQuery.named(label, pid: pid).matches
+        case let .named(label, role):
+            let matches = ElementQuery.named(label, role: role, pid: pid).matches
             // Matching is by substring, so "delete" can name several controls. Acting on
             // whichever sorted first would be a coin flip on a possibly destructive button.
             guard matches.count <= 1 else {

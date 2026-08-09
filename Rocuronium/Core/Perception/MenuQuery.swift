@@ -27,10 +27,13 @@ nonisolated enum MenuQuery {
         let modifiers: Int
 
         /// Keys that carry no command character and match by virtual keycode instead.
-        private static let namedKeys: [String: Int] = [
+        /// Shared with the `key` verb, which posts these same keycodes as bare keystrokes.
+        static let namedKeys: [String: Int] = [
             "return": 0x24, "enter": 0x24, "tab": 0x30, "space": 0x31,
             "delete": 0x33, "backspace": 0x33, "escape": 0x35, "esc": 0x35,
             "left": 0x7B, "right": 0x7C, "down": 0x7D, "up": 0x7E,
+            "home": 0x73, "end": 0x77, "pageup": 0x74, "pagedown": 0x79,
+            "forwarddelete": 0x75,
         ]
 
         /// Parses "cmd+a", "cmd+shift+z", "cmd+left". Returns nil for no key or no such
@@ -77,21 +80,35 @@ nonisolated enum MenuQuery {
         /// `type` already refuses a bare newline for the same reason — a verb that can send or
         /// destroy must say so before it acts, not report it afterwards.
         ///
+        /// Session-wide consequences live only in the Apple menu, so those patterns check the
+        /// path's first component — an app menu's "Restart to Update" restarts the *app*, and
+        /// flagging it as "would reboot the Mac" (measured on Refrax 2026-08-09) teaches
+        /// callers to pass confirm reflexively, which defeats the rail. Data-destroying
+        /// patterns stay global: "Move to Trash" is hazardous wherever it appears.
+        ///
         /// Quit is deliberately absent: it is app-scoped, ordinary, and the app's own
         /// save prompts still apply. This list is for the session and the filesystem.
         var hazard: String? {
             let title = path.lowercased()
-            let patterns = [
-                "log out": "would end the login session",
-                "shut down": "would power off the Mac",
-                "restart": "would reboot the Mac",
-                "sleep": "would put the Mac to sleep",
-                "lock screen": "would lock the screen",
+            let inAppleMenu = path.components(separatedBy: " ▸ ").first == "Apple"
+            if inAppleMenu {
+                let sessionPatterns = [
+                    "log out": "would end the login session",
+                    "shut down": "would power off the Mac",
+                    "restart": "would reboot the Mac",
+                    "sleep": "would put the Mac to sleep",
+                    "lock screen": "would lock the screen",
+                ]
+                for (needle, consequence) in sessionPatterns where title.contains(needle) {
+                    return consequence
+                }
+            }
+            let dataPatterns = [
                 "empty trash": "would permanently delete the Trash",
                 "move to trash": "would delete the selected items",
                 "erase": "would erase data",
             ]
-            for (needle, consequence) in patterns where title.contains(needle) {
+            for (needle, consequence) in dataPatterns where title.contains(needle) {
                 return consequence
             }
             return nil

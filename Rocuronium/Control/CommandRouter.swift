@@ -25,6 +25,9 @@ final class CommandRouter {
         let command: String
         var app: String?
         var label: String?
+        /// Narrows a label match by element role ("button" or "AXButton") — the answer when
+        /// two roles share the same text and "be more specific" has no more-specific label.
+        var role: String?
         var text: String?
         var x: Double?
         var y: Double?
@@ -134,6 +137,7 @@ final class CommandRouter {
         case "scroll": try await scroll(request)
         case "shortcut": try await shortcut(request)
         case "menu": try await menu(request)
+        case "key": try await key(request)
         case "wait": try await wait(request)
         case "launch": try await launch(request)
         case "activate": try await activate(request)
@@ -220,7 +224,7 @@ final class CommandRouter {
 
     private func find(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
-        let outcome = try await engine.find(pid: pid, query: request.label)
+        let outcome = try await engine.find(pid: pid, query: request.label, role: request.role)
         return [
             "ok": true,
             "matches": outcome.elements.map { element -> [String: Any] in
@@ -247,7 +251,7 @@ final class CommandRouter {
     /// cheaper in tokens than screenshot-plus-vision, and it works behind a locked screen.
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
-        let outcome = try await engine.read(pid: pid, label: request.label)
+        let outcome = try await engine.read(pid: pid, label: request.label, role: request.role)
         var reply: [String: Any] = [
             "ok": true,
             "scope": outcome.scope,
@@ -338,7 +342,7 @@ final class CommandRouter {
         let locator: Engine.Locator = if let x = request.x, let y = request.y {
             .point(x: x, y: y)
         } else if let label = request.label {
-            .named(label)
+            .named(label, role: request.role)
         } else {
             .focused
         }
@@ -379,6 +383,7 @@ final class CommandRouter {
         let result = try await engine.scroll(
             pid: pid,
             label: request.label,
+            role: request.role,
             deltaX: request.dx ?? 0,
             deltaY: request.dy ?? 0,
             toFraction: request.to,
@@ -440,6 +445,25 @@ final class CommandRouter {
         return menuPressReply(result, resolving: "'\(path)'")
     }
 
+    /// Posts a bare named key (Escape, Return, arrows…) with optional modifiers. The gap the
+    /// other input verbs leave: `type` is text-only and `shortcut` only reaches keys that a
+    /// menu item carries — a file-picker dialog's Escape is neither.
+    private func key(_ request: Request) async throws -> [String: Any] {
+        guard let keys = request.keys else {
+            return [
+                "ok": false,
+                "error": "'key' requires --keys, e.g. --keys escape or --keys shift+tab",
+                "presence": presenceBlock(),
+            ]
+        }
+        let pid = try resolve(request)
+
+        isDriving = true
+        defer { isDriving = false }
+        let evidence = try await engine.pressKey(pid: pid, keys: keys)
+        return evidenceReply(evidence)
+    }
+
     /// The shared back half of `shortcut` and `menu` — one press mechanism, one reply shape.
     private func menuPressReply(_ result: Engine.MenuPressResult, resolving: String) -> [String: Any] {
         guard let evidence = result.evidence else {
@@ -497,7 +521,9 @@ final class CommandRouter {
         }
         let pid = try resolve(request)
         let gone = request.gone == true
-        let outcome = try await engine.waitFor(pid: pid, label: label, gone: gone, timeout: .seconds(seconds))
+        let outcome = try await engine.waitFor(
+            pid: pid, label: label, role: request.role, gone: gone, timeout: .seconds(seconds),
+        )
         return [
             // ok mirrors the condition so scripts can branch on the exit code directly.
             "ok": outcome.satisfied,
@@ -922,13 +948,25 @@ final class CommandRouter {
 
     // MARK: - Resolution
 
+    /// Name to pid, refusing ambiguity. Two same-named apps genuinely happen — a debug and a
+    /// release build of the same product ran side by side (measured 2026-08-09), and `first`
+    /// silently drove whichever the workspace listed first. A verb aimed at "the app named X"
+    /// when two exist is a coin flip on somebody's real windows, so it is refused with the
+    /// candidates listed; bundle ids are the disambiguator, and they are matched exactly.
     private func resolve(_ request: Request) throws -> pid_t {
         guard let name = request.app else { throw RouterError.missingApp }
         let applications = NSWorkspace.shared.runningApplications
-        let match = applications.first { $0.localizedName == name }
-            ?? applications.first { $0.localizedName?.lowercased() == name.lowercased() }
-            ?? applications.first { ($0.bundleIdentifier ?? "").lowercased() == name.lowercased() }
-        guard let match else { throw RouterError.appNotRunning(name) }
+
+        let exactBundle = applications.filter { ($0.bundleIdentifier ?? "").lowercased() == name.lowercased() }
+        let exactName = applications.filter { $0.localizedName == name }
+        let looseName = applications.filter { $0.localizedName?.lowercased() == name.lowercased() }
+        let matches = exactBundle.isEmpty ? (exactName.isEmpty ? looseName : exactName) : exactBundle
+        guard let match = matches.first else { throw RouterError.appNotRunning(name) }
+        guard matches.count == 1 else {
+            throw RouterError.ambiguousApp(name, matches.map {
+                "'\($0.localizedName ?? "?")' (bundle \($0.bundleIdentifier ?? "?"), pid \($0.processIdentifier))"
+            })
+        }
         return match.processIdentifier
     }
 
@@ -990,6 +1028,7 @@ final class CommandRouter {
         case missingApp
         case appNotRunning(String)
         case ambiguous(String, [String])
+        case ambiguousApp(String, [String])
         case captureWriteFailed(String)
         case captureNotPNG(String)
         case captureExists(String)
@@ -1001,6 +1040,9 @@ final class CommandRouter {
             case let .appNotRunning(name): "'\(name)' is not running."
             case let .ambiguous(query, candidates):
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
+            case let .ambiguousApp(name, candidates):
+                "\(candidates.count) running apps are named '\(name)': \(candidates.joined(separator: "; ")). "
+                    + "Target one by its bundle id — acting on whichever listed first would drive the wrong app."
             case let .captureWriteFailed(path): "Could not write the capture to \(path)."
             case let .captureNotPNG(name):
                 "'\(name)' is not a .png path — captures are PNG, and writing one over a file of another type would destroy it."
