@@ -128,14 +128,45 @@ nonisolated enum ElementQuery {
         search(pid: pid) { $0.isEditable }
     }
 
-    /// Resolves a loose human description to candidate elements by matching against labels.
-    /// Deliberately dumb: exact and substring matching only. Anything fuzzier is the vision
-    /// layer's job, and pretending otherwise here would hide which component actually guessed.
-    static func named(_ query: String, pid: pid_t) -> Results {
+    /// Resolves a loose human description to candidate elements. Deliberately dumb: exact and
+    /// substring matching only. Anything fuzzier is the vision layer's job, and pretending
+    /// otherwise here would hide which component actually guessed.
+    ///
+    /// Labels first, values as the fallback — in one walk. The text an agent sees in `read`
+    /// output is often a *value* (note bodies, static text), and a label-only match made that
+    /// text unfindable and un-scrollable-to. But values are noisy — a query like "save" sits
+    /// inside any document mentioning saving — so a value match never competes with a label
+    /// match: it is used only when no label matched at all.
+    ///
+    /// `role` narrows by element role when several roles share a label (a button and a menu
+    /// item both titled "Restart to update" — measured on Refrax). "button" and "AXButton"
+    /// both work; matching is case-insensitive.
+    static func named(_ query: String, role: String? = nil, pid: pid_t) -> Results {
         let needle = query.lowercased()
-        return search(pid: pid) { element in
+        func labelMatches(_ element: AXElement) -> Bool {
             let label = element.label.lowercased()
             return !label.isEmpty && (label == needle || label.contains(needle))
         }
+        let results = search(pid: pid) { element in
+            guard roleMatches(element.role, wanted: role) else { return false }
+            return labelMatches(element) || element.value?.lowercased().contains(needle) == true
+        }
+        // Re-reading the label here costs one IPC round trip per *match* (bounded and small),
+        // not per element visited — the price of distinguishing the two tiers in a single walk.
+        let labelTier = results.matches.filter { labelMatches($0.element) }
+        return Results(
+            matches: labelTier.isEmpty ? results.matches : labelTier,
+            elementsVisited: results.elementsVisited,
+            truncated: results.truncated,
+        )
+    }
+
+    /// Role comparison for the `role` filter: nil matches everything, and the "AX" prefix is
+    /// optional because nobody types it.
+    static func roleMatches(_ role: String, wanted: String?) -> Bool {
+        guard let wanted else { return true }
+        let have = role.lowercased()
+        let want = wanted.lowercased()
+        return have == want || have == "ax" + want
     }
 }

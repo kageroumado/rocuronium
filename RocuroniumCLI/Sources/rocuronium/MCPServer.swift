@@ -24,10 +24,16 @@ enum MCPServer {
         ),
         tool(
             "find",
-            "List interactive elements of a running app via accessibility. Give `label` to search by visible text/placeholder; omit it to list editable fields.",
+            """
+            List interactive elements of a running app via accessibility. Give `label` to \
+            search by visible text/placeholder (labels first; element *values* as the \
+            fallback, so text seen in `read` output is findable); give `role` alone to list \
+            all elements of a role; omit both to list editable fields.
+            """,
             properties: [
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
                 "label": ["type": "string", "description": "Substring of the element's label/placeholder"],
+                "role": ["type": "string", "description": "Element role filter, e.g. 'button' or 'AXButton'"],
             ], required: ["app"],
         ),
         tool(
@@ -45,6 +51,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
+                "role": ["type": "string", "description": "Narrow the label match by element role"],
             ], required: ["app"],
         ),
         tool(
@@ -70,6 +77,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Substring of the element's label to watch for"],
+                "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "gone": ["type": "boolean", "description": "Wait for the element to disappear instead"],
                 "timeout": ["type": "number", "description": "Seconds to block, 1–25 (default 10)"],
             ], required: ["app", "label"],
@@ -103,16 +111,24 @@ enum MCPServer {
                 "app": ["type": "string"],
                 "text": ["type": "string"],
                 "label": ["type": "string", "description": "Target field's label; the focused element when omitted"],
+                "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "submit": ["type": "boolean", "description": "Allow Return/Tab in the text"],
                 "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking rung as a last resort"],
             ], required: ["app", "text"],
         ),
         tool(
             "click",
-            "Click an element by label or screen point, ghost-first (no cursor movement). The reply's verdict says what observably happened; `cursorMovedByUs` reports any takeover.",
+            """
+            Click an element by label or screen point, ghost-first (no cursor movement). The \
+            reply's verdict says what observably happened; `cursorMovedByUs` reports any \
+            takeover. When a label matches several roles (button and menu item sharing a \
+            title), pass `role` to disambiguate. A point that lands on a plain group ascends \
+            to the enclosing pressable control (SwiftUI wraps buttons this way).
+            """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string"],
+                "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
                 "x": ["type": "number"], "y": ["type": "number"],
                 "allowHardwareInput": ["type": "boolean"],
             ], required: ["app"],
@@ -149,6 +165,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Element to bring into view (the mechanism that actually works)"],
+                "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "dy": ["type": "number", "description": "Vertical pixel delta; positive reveals content below"],
                 "dx": ["type": "number", "description": "Horizontal pixel delta"],
                 "to": ["type": "number", "description": "Absolute vertical position, 0 (top) to 1 (bottom)"],
@@ -171,6 +188,23 @@ enum MCPServer {
                 "resolveOnly": ["type": "boolean", "description": "Report the resolved item without pressing it"],
                 "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
             ], required: ["app", "path"],
+        ),
+        tool(
+            "key",
+            """
+            Post a bare named key — escape, return, enter, tab, space, delete, forwarddelete, \
+            left/right/up/down, home, end, pageup, pagedown — with optional modifiers \
+            ('shift+tab', 'cmd+down'). The gap the other input verbs leave: `type` sends text \
+            only and `shortcut` reaches only keys a menu item carries; a file-picker dialog's \
+            Escape is neither. Delivered per-pid without touching cursor or focus. AppKit \
+            honors posted keycodes; Electron/Chromium ignore them (measured) — an \
+            unverifiable verdict there means exactly that. For printable characters use \
+            `type`; for letter shortcuts use `shortcut`.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "keys": ["type": "string", "description": "escape, shift+tab, cmd+down, ..."],
+            ], required: ["app", "keys"],
         ),
         tool(
             "display",

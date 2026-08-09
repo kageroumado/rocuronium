@@ -41,32 +41,41 @@ specs moved to the Done section. What the session measured, and what it left ope
 
 ### Phase-1 loose ends (small, ordered)
 
-1. `find`/`named()` matches **labels only**, but the text an agent sees in `read` output
-   is often a *value* (note bodies, static text). A label that exists only as a value is
-   unfindable and un-scrollable-to. Decide: extend `named()` to values (noisy?) or add a
-   `--value` match flag.
-2. `--to` could find scroll bars by **role walk** when the `AXVerticalScrollBar`
-   attribute is absent. Measured 2026-08-04 in Notes: the note body's text area has a
-   sibling `AXScrollBar` element (numeric value exposed, read 0.000) while the enclosing
-   scroll area answers nothing for the `AXVerticalScrollBar` *attribute* — so
-   `scroll --to` refuses on a view that in fact has a writable bar. Overlay scrollers
-   (the default since 10.7) are the suspected reason the attribute is absent, which
-   makes this the common case on modern AppKit, not a Notes quirk (Mail's scroll area
-   also had no attribute). Implementation shape: in `Engine.scroll`'s `toFraction`
-   path, when `area.verticalScrollBar` is nil, walk the area's children (bounded, one
-   level or two) for `role == "AXScrollBar"` with a numeric value and prefer the one
-   whose frame is taller than wide — horizontal bars have the same role. Write and
-   read back exactly as now; the verdict machinery needs no change. Re-measure whether
-   the write actually moves overlay-scroller content or just the bar: the read-back
-   plus window-true pixel diff already distinguishes those two outcomes.
+1. ~~`find`/`named()` matches labels only~~ — **DONE 2026-08-09.** `named()` matches
+   labels first and element *values* as the fallback tier, in one walk — a value match
+   never competes with a label match, which keeps the noise out. Verified on Mail: a
+   subject string that existed only as a static-text value (label was the role
+   description "text") resolved through the fallback.
+2. ~~`--to` scroll bars by role walk~~ — **DONE 2026-08-09.** `Engine.verticalScrollBar(of:)`
+   tries the attribute, then a bounded two-level child walk for `AXScrollBar` with a
+   numeric value, preferring taller-than-wide. Verified on TextEdit (attribute absent,
+   overlay scroller): write read back 0.615 → 0.900. **The open measurement is answered:
+   the value write moves the actual content, not just the bar** — a 119-line document
+   screenshotted at `--to 0` showed lines 1–27 and at `--to 1` lines 92–119.
 3. `activate --confirm` success path deliberately unverified: presence read `present`
-   (idle 0 s) all session, and stealing focus from a present human to test the
-   anti-focus-stealing tool was declined. Verify in the next away window.
+   (idle 0 s) all session (again 2026-08-09), and stealing focus from a present human to
+   test the anti-focus-stealing tool was declined. Verify in the next away window.
 4. `AXScrollToVisible` moved-frame path verified on Chromium only via the
    already-visible branch; exercise a genuinely off-screen target (needs a target whose
    off-screen rows materialize in AX — Notes' list virtualizes them away).
 5. WebKit (Safari/Refrax) scroll + read-referral behavior unmeasured — Safari was not
    running and opening windows on a present user's screen was declined.
+6. **`key` delivery to background AppKit dialogs measured no-effect** (2026-08-09): a
+   posted Escape did not dismiss a background TextEdit save sheet — pixelDelta 0, sheet
+   still present, honestly reported `unverifiable`. A background app has no key window
+   to route key events to, the same class of limit as background menu validation. The
+   verb's real case (the frontmost app an agent is driving, or after `activate`) needs
+   an away-window verification.
+7. **An element that vanishes because the press worked reads as failure** (2026-08-09):
+   ghost-pressing a save sheet's Cancel dismissed the sheet, but the verdict was
+   `noEffect` — focus never changed and the pressed button no longer existed to testify.
+   The element-level sibling of the process-exit evidence: "target provably gone after a
+   dismissal-shaped press" is evidence of success. Not implemented yet because Electron
+   rebuilds elements on focus (a dead handle there is routine, and refetch-fails is not
+   proof of disappearance) — needs a design that doesn't false-confirm on Electron.
+8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
+   call, but the refusal's advice (target by bundle id) has nothing to offer there. If
+   this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.
 
 ## Phase 2 — Operator docs + the actual switch — **2.1–2.3 DONE 2026-08-04**
 
@@ -89,7 +98,48 @@ a line in the trial log below — those lines are the Phase-1 gaps that were mis
 
 **Trial log** *(append: date · task · what rocuronium couldn't do · which tool did it)*
 
-- *(no fallbacks yet)*
+- 2026-08-06 · dismiss a native file-picker dialog in Refrax · no way to send a bare key (Escape) — `type` is text-only, `shortcut` only resolves menu-bar items · `mcp__peekaboo__hotkey` escape
+- 2026-08-09 · target the debug Refrax while release Refrax also ran · `find` with app:"Refrax" silently picked one of the two same-named apps (no ambiguity warning) · bundle-ID targeting worked — but a warning or error on ambiguous names would prevent driving the wrong app
+- 2026-08-09 · click Refrax's sidebar "Restart to update" button · `click` by label matched 2 elements (AXButton + AXMenuItem share the label) and accepts no role filter — only app/label/x/y — so "be more specific" left coordinates as the sole option · coordinate click (which then failed, next line)
+- 2026-08-09 · same task · coordinate ghost click resolved to an AXGroup ("element exposes no press action") and the posted event was noEffect — SwiftUI button, app not frontmost · `menu` path instead
+- 2026-08-09 · same task · `menu` flagged "Refrax ▸ Restart to Update — v99.0…" as "would reboot the Mac" — the Restart heuristic fires on app-menu items, not just Apple ▸ · confirm:true (correctly overridable, but the hazard label was wrong)
+- 2026-08-09 · same task · the confirmed menu press returned ok:false / verdict "unverifiable" even though the action fully succeeded (app quit, updated, relaunched) — a press that closes the app can never verify, and reporting it as an error invites a dangerous retry
+
+**All six trial-log gaps addressed 2026-08-09 (f623d3a)** (verified by execution on the
+installed build; the trial continues — new fallback moments still get lines above):
+
+- *Bare keys* → new `key` verb: named keys (escape, return, tab, arrows, home/end,
+  page up/down, delete) with optional modifiers, posted per-pid, menu-press-style window
+  pixel evidence. Delivery to *background* AppKit dialogs measured no-effect — honest
+  verdict, and loose end 6 tracks the frontmost-case verification.
+- *Ambiguous app names* → `resolve` refuses when several running apps share the name,
+  listing name/bundle/pid for each; bundle ids are matched exactly and win. Verified
+  with two TextEdit instances (`open -n`).
+- *No role filter* → `--role` on find/read/wait/type/click/scroll ("button" or
+  "AXButton"); `find --role button` with no label lists a role. Verified on Notes:
+  "New Note" refused as 2 elements, resolved with `--role button`.
+- *Coordinate click hits an AXGroup* → click-shaped actions ascend from the hit-test
+  element to the nearest pressable ancestor (bounded, stops at windows). Verified on
+  Calculator: a raw-coordinate click resolved and pressed `AXButton '1'`.
+- *Restart heuristic too broad* → session-wide hazard patterns (log out, shut down,
+  restart, sleep, lock screen) now require the path to start at **Apple ▸**;
+  data-destroying patterns stay global. Verified three ways: Apple ▸ Restart… still
+  refuses, Simulator's Device ▸ Restart no longer does, Finder's File ▸ Move to Trash
+  still does.
+- *Press that closes the app reads as error* → when a menu/shortcut press's verdict is
+  not confirmed, the engine polls ~1.2 s for the target process exiting; an exit is the
+  read-back (`confirmed`, "the target process exited after the press"). Verified:
+  cmd+q on background TextEdit came back ok:true confirmed.
+
+Also found and fixed while verifying: `click`'s evidence only diffed the *element's*
+rectangle, so a press whose consequence lands elsewhere in the window read as a false
+`noEffect` (Calculator: display changed, button rect quiet). Click-shaped actions now
+take the same window-true two-capture evidence as menu presses. Measured calibration
+consequence: a real consequence can be small at window scale (the display change was
+0.27%, under the 2% confirmed threshold), so on a provably-still window a mid-band
+delta softens an element-rect `noEffect` to `unverifiable` — conflicting evidence never
+leaves a refutation standing. Getting such clicks all the way to `confirmed` needs a
+semantic channel, which is phase 4's vision tier.
 
 ## Phase 3 — Display hold (overnight capability; ~3 days, mostly in adrafinil)
 

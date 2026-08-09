@@ -50,6 +50,38 @@ nonisolated enum EventPoster {
         }
     }
 
+    /// A bare keystroke for the `key` verb: a named key plus modifier flags.
+    ///
+    /// Named keys only, deliberately. A printable character belongs to `type` (which posts
+    /// the unicode payload every toolkit honors), and a modifier-plus-letter chord belongs to
+    /// `shortcut` (which presses the menu item and therefore works on Chromium). This parser
+    /// covers the remaining gap: the keys that are neither text nor menu-reachable — Escape
+    /// on a file-picker dialog was the trial-week case that had no verb at all.
+    struct KeyChord {
+        let keyCode: CGKeyCode
+        let flags: CGEventFlags
+        /// Canonical "cmd+escape" spelling, for the evidence.
+        let name: String
+
+        /// Parses "escape", "cmd+down", "shift+tab". Returns nil for unknown keys and
+        /// unknown modifiers — including printable characters, which have better verbs.
+        static func parse(_ text: String) -> KeyChord? {
+            var tokens = text.lowercased().split(separator: "+", omittingEmptySubsequences: true).map(String.init)
+            guard let key = tokens.popLast(), let keyCode = MenuQuery.Shortcut.namedKeys[key] else { return nil }
+            var flags: CGEventFlags = []
+            for token in tokens {
+                switch token {
+                case "cmd", "command", "⌘": flags.insert(.maskCommand)
+                case "shift", "⇧": flags.insert(.maskShift)
+                case "opt", "option", "alt", "⌥": flags.insert(.maskAlternate)
+                case "ctrl", "control", "⌃": flags.insert(.maskControl)
+                default: return nil
+                }
+            }
+            return KeyChord(keyCode: CGKeyCode(keyCode), flags: flags, name: (tokens + [key]).joined(separator: "+"))
+        }
+    }
+
     /// Sends a keycode with optional modifiers.
     ///
     /// Works for AppKit targets. **Does not work for Electron** — measured: Backspace and

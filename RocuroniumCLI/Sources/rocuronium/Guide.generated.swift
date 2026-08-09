@@ -18,11 +18,18 @@ CLI (at `Rocuronium.app/Contents/Resources/rocuronium`) is a thin client that sp
 JSON over an authenticated local socket. `rocuronium mcp` serves the same verbs as MCP
 tools. Add `--json` to any command for the full reply.
 
-    status · diag · guide                      what can I do right now
-    apps · windows · find · read · wait        observe (read-only)
-    launch · activate                          lifecycle
-    type · click · scroll · shortcut · menu    act
-    display · park · screenshot               isolation + pixels
+    status · diag · guide                          what can I do right now
+    apps · windows · find · read · wait            observe (read-only)
+    launch · activate                              lifecycle
+    type · click · scroll · shortcut · menu · key  act
+    display · park · screenshot                    isolation + pixels
+
+Targeting: `--app` takes a name or a bundle id. Two running apps with the same name (a
+debug and a release build, say) are refused with both candidates listed — pass the
+bundle id. A label that matches elements of several roles is likewise refused; pass
+`--role` (e.g. `--role button`) to say which one you meant. Label matching tries labels
+first and element *values* as the fallback, so text you saw in `read` output is findable
+and scrollable-to even when it exists only as a value.
 
 ## Evidence: the three verdicts
 
@@ -84,9 +91,11 @@ deliberate, legitimate act when the situation genuinely calls for it:
   when sending is the point. An absent `text` is likewise refused — pass `""` explicitly
   to clear a field, because clearing is unrecoverable.
 - **`confirm`** (`shortcut`, `menu`) — every app's menu bar includes the Apple menu, so
-  `cmd+shift+q` resolves to "Log Out" from any target. Items that end the session or
-  destroy data are refused with the consequence named; `confirm: true` presses anyway.
-  Use `resolveOnly: true` to audit what a shortcut or path would press, before the fact.
+  `cmd+shift+q` resolves to "Log Out" from any target. Items that end the session are
+  refused only under **Apple ▸** (an app menu's "Restart to Update" restarts the app,
+  not the Mac); data-destroying items (trash, erase) are refused wherever they appear.
+  The consequence is named; `confirm: true` presses anyway. Use `resolveOnly: true` to
+  audit what a shortcut or path would press, before the fact.
 - **`confirm`** (`activate`) — see presence above.
 - **`allowHardwareInput`** (`type`, `click`) — permits rung 4, the one mechanism that
   moves the real cursor. Legitimate when nobody is present and the ghost rungs have
@@ -124,10 +133,28 @@ blank**, with a referral to the channel that can read the DOM.
 (`AXScrollToVisible`), confirmed by the element's frame moving — the one cursor-free
 scroll that works (measured; posted wheel events are ignored by every toolkit, so a bare
 `--dy` will usually earn an honest `noEffect`). `--to 0..1` writes the scroll bar where
-one exists; Chromium and Electron never expose one.
+one exists — found by attribute or, for the overlay scrollers modern AppKit hides from
+the attribute, by role walk; Chromium and Electron never expose one either way.
 
 `wait` polls for an element (`--gone` for disappearance) and is the right primitive
 after `launch`, after a click that opens a dialog, or before reading a slow view.
+
+## Keys that are neither text nor shortcuts
+
+`key` posts a bare named key — escape, return, tab, space, delete, arrows, home/end,
+page up/down — with optional modifiers (`shift+tab`, `cmd+down`). It exists for the gap
+the other input verbs leave: dismissing a file-picker dialog wants a plain Escape, which
+`type` (text only) and `shortcut` (menu items only) cannot send. Per-pid, no cursor, no
+focus change. AppKit honors posted keycodes; **Electron/Chromium ignore them** (measured)
+— an `unverifiable` verdict there means exactly that, not "retry".
+
+## Actions that close their own app
+
+A press that quits or restarts its app (Quit, an updater's "Restart to Update") can
+never verify through the app — every read-back channel needs a live process. The engine
+treats the target process *exiting* as the read-back: the verdict is `confirmed` with
+the exit named. An unverifiable press on an app that is still running really is
+unverified; do not retry a quit-shaped action without checking `apps` first.
 
 ## Background apps
 
