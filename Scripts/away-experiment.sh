@@ -53,12 +53,20 @@ require_away() {
 
 window_count() { "$R" windows --app "$1" --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('count',0))" 2>/dev/null; }
 
-log "=== armed; waiting for UNLOCKED away (walk away for 15 min; locking triggers the already-measured regime) ==="
+# The trigger is raw keyboard idle, not the presence state. On this Mac the display
+# sleeps at 10 minutes, and display-asleep reads `away` — but the experiment's first
+# act is waking the display, after which presence recomputes from idle alone. Firing
+# on the early display-sleep away would wake up into `idle` (10 < 15 min) and activate
+# would refuse. Waiting for 15 min of true idle means the state survives the wake —
+# unless waking itself resets HIDIdleTime, which is exactly phase-3 measurement 1; if
+# activate refuses right after the wake here, that measurement has its answer.
+log "=== armed; waiting for >=15 min keyboard idle with the screen unlocked ==="
 DEADLINE=$(( $(date +%s) + 12 * 3600 ))
 while :; do
-    if [ "$(status_field presence)" = "away" ] && [ "$(status_field screenLocked)" = "False" ]; then break; fi
+    IDLE="$(status_field idleSeconds)"
+    if [ "${IDLE:-0}" -ge 910 ] && [ "$(status_field screenLocked)" = "False" ]; then break; fi
     if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-        log "gave up: no unlocked away window within 12 h"
+        log "gave up: no unlocked >=15-min-idle window within 12 h"
         exit 1
     fi
     sleep 30
