@@ -134,7 +134,8 @@ blank**, with a referral to the channel that can read the DOM.
 scroll that works (measured; posted wheel events are ignored by every toolkit, so a bare
 `--dy` will usually earn an honest `noEffect`). `--to 0..1` writes the scroll bar where
 one exists — found by attribute or, for the overlay scrollers modern AppKit hides from
-the attribute, by role walk; Chromium and Electron never expose one either way.
+the attribute, by role walk. Safari's web content exposes a writable bar (measured:
+`--to` round-trips confirmed); Chromium and Electron never expose one.
 
 `wait` polls for an element (`--gone` for disappearance) and is the right primitive
 after `launch`, after a click that opens a dialog, or before reading a slow view.
@@ -143,10 +144,13 @@ after `launch`, after a click that opens a dialog, or before reading a slow view
 
 `key` posts a bare named key — escape, return, tab, space, delete, arrows, home/end,
 page up/down — with optional modifiers (`shift+tab`, `cmd+down`). It exists for the gap
-the other input verbs leave: dismissing a file-picker dialog wants a plain Escape, which
+the other input verbs leave: committing a focused field wants a plain Return, which
 `type` (text only) and `shortcut` (menu items only) cannot send. Per-pid, no cursor, no
-focus change. AppKit honors posted keycodes; **Electron/Chromium ignore them** (measured)
-— an `unverifiable` verdict there means exactly that, not "retry".
+focus change. Measured reach: keys land in the app's **focused text control** — `key
+return` in a focused address bar commits navigation — but sheet key-equivalents do
+**not** actuate (`key escape` will not cancel a save sheet, even frontmost; press the
+sheet's button instead: `click --label Cancel --role button`). Electron/Chromium ignore
+posted keycodes entirely. An `unverifiable` verdict means exactly that, not "retry".
 
 ## Actions that close their own app
 

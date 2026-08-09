@@ -52,42 +52,48 @@ specs moved to the Done section. What the session measured, and what it left ope
    overlay scroller): write read back 0.615 → 0.900. **The open measurement is answered:
    the value write moves the actual content, not just the bar** — a 119-line document
    screenshotted at `--to 0` showed lines 1–27 and at `--to 1` lines 92–119.
-3. `activate` success path still unverified — but the **locked-away regime is now
-   measured** (`Scripts/away-experiment.sh` first run, 2026-08-09 03:08, screen locked):
-   `activate` cannot land behind the lock screen; `loginwindow` keeps the console and
-   the read-back said so honestly. The unlocked (15-min-idle) regime remains the open
-   question; the script's v2 waits specifically for that (away *and* unlocked) and
-   bails if activate fails rather than operating on background apps. Re-arm with
-   `Scripts/away-experiment.sh --arm`; logs are gitignored (raw replies carry session
-   details — the first run's log captured menu history).
-   Locked-regime findings worth keeping:
-   - Background menu delivery diverges *per app*: TextEdit's File ▸ New was a dead
-     press, while Safari honored ⌘L in the background — a typed URL plus `key return`
-     navigated the **existing front tab** (and quit-on-cleanup then closed Safari;
-     v2's politeness rules exist because of exactly this).
-   - Rung-0 display wake works behind the lock (display slept mid-run; `launch` woke
-     it and the trees came back).
-4. `AXScrollToVisible` moved-frame path verified on Chromium only via the
-   already-visible branch; exercise a genuinely off-screen target (needs a target whose
-   off-screen rows materialize in AX — Notes' list virtualizes them away).
-5. WebKit (Safari/Refrax) scroll + read-referral behavior **still unmeasured** — the
-   locked-regime run attempted it and every probe was invalidated by two bugs it
-   exposed instead: `AXMainWindow` answering with the application element (fixed, see
-   below) and label queries matching *menu items* (loose end 9). The unlocked rerun
-   carries this measurement.
-6. **`key` delivery to background AppKit dialogs measured no-effect** (2026-08-09): a
-   posted Escape did not dismiss a background TextEdit save sheet — pixelDelta 0, sheet
-   still present, honestly reported `unverifiable`. A background app has no key window
-   to route key events to, the same class of limit as background menu validation. The
-   verb's real case (the frontmost app an agent is driving, or after `activate`) needs
-   an away-window verification.
-7. **An element that vanishes because the press worked reads as failure** (2026-08-09):
-   ghost-pressing a save sheet's Cancel dismissed the sheet, but the verdict was
-   `noEffect` — focus never changed and the pressed button no longer existed to testify.
-   The element-level sibling of the process-exit evidence: "target provably gone after a
-   dismissal-shaped press" is evidence of success. Not implemented yet because Electron
-   rebuilds elements on focus (a dead handle there is routine, and refetch-fails is not
-   proof of disappearance) — needs a design that doesn't false-confirm on Electron.
+3. ~~`activate` success path~~ — **VERIFIED 2026-08-09 04:29** (unlocked away run,
+   temporary 60 s gate, reverted after): `activate` without confirm landed on TextEdit
+   and Safari — `frontmost` read back as the target, `focusTakenByUs: true`. Both
+   regimes now measured: unlocked-away activates; locked-away is refused by the system
+   (`loginwindow` keeps the console — first run, 03:08).
+   Findings the two runs left behind:
+   - Background delivery diverges per app *and lies in both directions*: TextEdit's
+     background File ▸ New + typed text looked dead but **actually landed** (the text
+     surfaced in the document an hour later); Safari honored background ⌘L and
+     navigated the user's real front tab. Treat every unverifiable background press as
+     "may have happened", not "didn't".
+   - Rung-0 display wake works behind the lock; display-asleep away windows never
+     satisfied an "unlocked + idle" trigger until the script held the display awake
+     (`caffeinate -d`) — kept as the experiment pattern.
+4. `AXScrollToVisible` off-screen path still unmeasured: on the loaded Wikipedia page
+   "External links" matched **no element** even though `read` returned the full page
+   untruncated — the section heading simply is not in the AX tree (likely below the
+   rendered viewport). Needs a target whose off-screen content materializes in AX.
+5. ~~WebKit scroll + read behavior~~ — **MEASURED 2026-08-09 04:30** on frontmost
+   Safari: `read` returns real page text (14,808 chars, untruncated, no referral
+   needed — the silent-web-area case did not occur); **Safari exposes a writable
+   vertical scroll bar** and `--to` round-tripped 0 → 1 → 0 confirmed; bare posted
+   wheels are ignored (honest noEffect + the safari-js referral). WebKit is therefore
+   the *best*-behaved web toolkit for `scroll --to`, not the worst.
+6. **`key` reaches focused text controls but not sheet key-equivalents** (measured
+   2026-08-09 04:29, frontmost): `key return` into Safari's focused address field
+   committed navigation (confirmed; page loaded in 1.3 s) — but `key escape` did not
+   cancel a frontmost TextEdit save sheet (posted per-pid, sheet persisted, honest
+   unverifiable). Escape/cancel routes through key-equivalent dispatch that per-pid
+   posted events evidently do not reach. Agent guidance (now in the guide): press the
+   sheet's button by label (`click --label Cancel --role button` — verified working)
+   instead of Escape. Possible future rung: a session-level key post while the target
+   is frontmost, gated like hardware input since it hits global focus.
+7. **An action whose consequence is a window or element appearing/vanishing reads as
+   failure** (2026-08-09, reconfirmed in the away run): Cancel dismissing its own sheet
+   read `noEffect`; File ▸ New and File ▸ New Window read `unverifiable` while opening
+   windows (the away script proved them with its own window-count check); a close
+   button closing its window read `unverified`. The family: consequences that change
+   the *window list* are invisible to element-rect, selection, and same-window pixel
+   evidence. Window-count-before/after is cheap and the away script already uses it as
+   an external check — promoting it into the press evidence would close the whole
+   family at once. Electron caveat from the element-vanish case still applies there.
 8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
    call, but the refusal's advice (target by bundle id) has nothing to offer there. If
    this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.
