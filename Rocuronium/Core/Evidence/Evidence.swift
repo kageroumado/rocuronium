@@ -168,6 +168,31 @@ nonisolated struct Evidence: Codable, Sendable {
         )
     }
 
+    /// The target's on-screen window count moved — the read-back for the family of actions
+    /// whose consequence *is* the window list changing: File ▸ New opening a window, a close
+    /// button closing its own, Cancel dismissing its own sheet, Escape killing a dialog.
+    /// Element-rect, selection, and same-window pixel evidence are all structurally blind to
+    /// these (the rectangle they watch vanishes or the change lands outside it), so they
+    /// read as noEffect or unverifiable for presses that fully worked — which invites the
+    /// one retry a "make a new window" action must not get. The count is discrete, cheap,
+    /// and window-server-truthful; it overturns both weaker verdicts.
+    func confirmedByWindowCountChange(before: Int, after: Int) -> Evidence {
+        Evidence(
+            action: action, target: target, rung: rung,
+            verdict: .confirmed,
+            readback: "the target's on-screen window count changed \(before) → \(after)",
+            pixelDelta: pixelDelta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts + [.init(
+                rung: rung,
+                outcome: "window count \(before) → \(after) — the consequence landed at the window level, where element evidence cannot see",
+            )],
+            referral: referral,
+        )
+    }
+
     /// Like `addingVisualEvidence`, but pixels may only **confirm**, never refute.
     ///
     /// In an *element's* rectangle, "nothing changed" is real evidence a click failed. In a
