@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>glass.kagerou.rocuronium</string>
+	<key>Program</key>
+	<string>/Applications/Rocuronium.app/Contents/MacOS/Rocuronium</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- SuccessfulExit=false: a crash or kill respawns the daemon, while Quit from the
+	     menu bar (a clean exit) stays quit — Quit must mean the agent's hands are off. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<string>glass.kagerou.rocuronium</string>
+</dict>
+</plist>

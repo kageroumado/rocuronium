@@ -70,10 +70,16 @@ spctl -a -vvv -t exec "$APP" 2>&1 || true
 
 if [ "${1:-}" = "--install" ]; then
     echo "==> Installing to /Applications"
-    pkill -f "$APP_NAME" 2>/dev/null || true
+    # -x, not -f "$APP_NAME": the -f pattern also matches every CLI/MCP process whose
+    # *path* contains Rocuronium.app, killing clients that would have reconnected anyway.
+    launchctl bootout "gui/$UID/glass.kagerou.rocuronium" 2>/dev/null || true
+    pkill -x Rocuronium 2>/dev/null || true
     sleep 1
+    # The old bundle must go first: ditto *merges* into an existing directory, and files
+    # from a previous build left inside a sealed bundle fail strict signature validation.
+    trash "/Applications/$APP_NAME" 2>/dev/null || true
     ditto "$APP" "/Applications/$APP_NAME"
-    open "/Applications/$APP_NAME"
+    "$PROJECT_DIR/Scripts/install-launchagent.sh"
 fi
 
 echo
