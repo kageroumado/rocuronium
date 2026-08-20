@@ -99,14 +99,16 @@ specs moved to the Done section. What the session measured, and what it left ope
 8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
    call, but the refusal's advice (target by bundle id) has nothing to offer there. If
    this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.
-9. **Label queries match menu items** (found 2026-08-09, locked-regime run): the walk
-   seeds the menu bar, so `wait --label References` on Safari matched a History-menu
-   entry whose *title* contained "references" — a false positive that then poisoned the
-   scroll probe (its "scroll area" ascended from a menu item). Menu items are the right
-   matches for nothing except `menu`/`shortcut`, which have their own resolution.
-   Shape of the fix: exclude the menu-bar subtree from `named()`/`wait`/`read` walks
-   (or demote menu matches the way value matches are demoted below label matches).
-   Workaround today: pass `--role` — the Safari rerun uses `--role heading`.
+9. ~~Label queries match menu items~~ — **DONE 2026-08-20.** Exclusion, not demotion:
+   demoting menu matches below label matches would not have fixed the measured case
+   (`wait --label References` matched the History-menu entry precisely because no
+   window match existed yet). `ElementQuery.search` no longer seeds the menu bar and
+   skips `AXMenuBar` children in the `AXChildren` seed (the bar arrives through both).
+   `menu`/`shortcut` are untouched — MenuQuery has its own resolution — and `read`
+   without a label already rooted at the window. Verified by execution: TextEdit
+   `find --label Undo` matched `AXMenuItem 'Undo' @(0,1440)` before (the meaningless
+   closed-menu frame) and reports "no matches" after, while
+   `menu --resolve-only --path "Edit > Undo"` still resolves.
 10. ~~`AXMainWindow` can answer with the application element~~ — **fixed 2026-08-09**:
    behind the lock screen Safari's `AXMainWindow` attribute returned the app element
    itself, so `read` dumped 30k characters of menu bar and history instead of the page.
