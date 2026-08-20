@@ -64,6 +64,20 @@ final class CommandRouter {
         var dy: Double?
         /// For `scroll`: absolute position, 0 (top) to 1 (bottom), via the scroll bar.
         var to: Double?
+        /// For `move`/`drag`: path points as "x,y" strings — start, destination, and
+        /// intermediate waypoints ("x,y x,y …") the curve passes through.
+        var start: String?
+        var end: String?
+        var via: String?
+        /// For `move`/`drag`: gesture length in seconds. Distance-based default otherwise.
+        var duration: Double?
+        /// For `move`/`drag`: linear, ease-in, ease-out, or ease-in-out (the default).
+        var easing: String?
+        /// For `drag`: which button is held — left (the default) or right.
+        var button: String?
+        /// For `move`/`drag`: put the cursor back where it was after the gesture. Off by
+        /// default — a hover only means something while the cursor stays on the target.
+        var restore: Bool?
     }
 
     /// Bounds every number that arrives over the socket, before it reaches arithmetic that
@@ -138,6 +152,8 @@ final class CommandRouter {
         case "shortcut": try await shortcut(request)
         case "menu": try await menu(request)
         case "key": try await key(request)
+        case "move": try await trace(request, dragging: false)
+        case "drag": try await trace(request, dragging: true)
         case "wait": try await wait(request)
         case "launch": try await launch(request)
         case "activate": try await activate(request)
@@ -462,6 +478,166 @@ final class CommandRouter {
         defer { isDriving = false }
         let evidence = try await engine.pressKey(pid: pid, keys: keys)
         return evidenceReply(evidence)
+    }
+
+    /// `move` (hover, glide) and `drag` (button held along the path) — the cursor-path
+    /// verbs. Hardware-rung by measurement: per-pid posted motion is dropped wholesale by
+    /// the window server (cursor-paths experiment, 2026-08-20), so these take the real
+    /// cursor, and they are presence-gated exactly like `activate`.
+    private func trace(_ request: Request, dragging: Bool) async throws -> [String: Any] {
+        let verb = dragging ? "drag" : "move"
+        let presence = UserPresence.read()
+        guard !presence.screenLocked else {
+            return [
+                "ok": false,
+                "error": "the screen is locked — the cursor belongs to the login window right now",
+                "presence": presenceBlock(),
+            ]
+        }
+        guard presence.state == .away || request.confirm == true else {
+            return [
+                "ok": false,
+                "error": "presence is '\(presence.state.rawValue)' — '\(verb)' takes the real cursor out of a "
+                    + "human's hands. Pass confirm:true if that is genuinely intended.",
+                "presence": presenceBlock(),
+            ]
+        }
+
+        func parsePoint(_ text: String, flag: String) throws -> CGPoint {
+            let parts = text.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 2, let x = parts[0], let y = parts[1],
+                  Self.finite(x, limit: Bounds.coordinate) != nil,
+                  Self.finite(y, limit: Bounds.coordinate) != nil else {
+                throw Engine.EngineError.pathRefused("'--\(flag)' must be a finite \"x,y\" point, got '\(text)'")
+            }
+            return CGPoint(x: x, y: y)
+        }
+
+        var waypoints: [CGPoint] = []
+        if let start = request.start { waypoints.append(try parsePoint(start, flag: "from")) }
+        if dragging, waypoints.isEmpty {
+            return [
+                "ok": false,
+                "error": "'drag' requires --from x,y — a drag from \"wherever the cursor happens to be\" presses the button somewhere the caller never chose",
+                "presence": presenceBlock(),
+            ]
+        }
+        for pair in (request.via ?? "").split(whereSeparator: { $0 == " " || $0 == ";" }) {
+            waypoints.append(try parsePoint(String(pair), flag: "via"))
+        }
+        if let end = request.end { waypoints.append(try parsePoint(end, flag: "to")) }
+        guard request.end != nil || request.label != nil else {
+            return [
+                "ok": false,
+                "error": "'\(verb)' needs a destination: --to x,y, or --label <text> (with --app) to aim at an element",
+                "presence": presenceBlock(),
+            ]
+        }
+
+        var easing = PathPlan.Easing.easeInOut
+        if let name = request.easing {
+            guard let parsed = PathPlan.Easing(rawValue: name) else {
+                return [
+                    "ok": false,
+                    "error": "unknown easing '\(name)' — one of: \(PathPlan.Easing.allCases.map(\.rawValue).joined(separator: ", "))",
+                    "presence": presenceBlock(),
+                ]
+            }
+            easing = parsed
+        }
+        var duration: Duration?
+        if let seconds = request.duration {
+            guard seconds.isFinite, (0.05 ... 10).contains(seconds) else {
+                return [
+                    "ok": false,
+                    "error": "'duration' is in seconds, 0.05–10 — the control socket cancels requests at 30",
+                    "presence": presenceBlock(),
+                ]
+            }
+            duration = .seconds(seconds)
+        }
+        var button: HardwareInput.MouseButton?
+        if dragging {
+            button = HardwareInput.MouseButton(rawValue: request.button ?? "left")
+            guard button != nil else {
+                return ["ok": false, "error": "'button' is left or right", "presence": presenceBlock()]
+            }
+        }
+        let pid: pid_t? = request.app != nil ? try resolve(request) : nil
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.trace(
+            pid: pid,
+            waypoints: waypoints,
+            label: request.label,
+            role: request.role,
+            duration: duration,
+            easing: easing,
+            button: button,
+            restoreCursor: request.restore == true,
+        )
+
+        // The read-back is the system's own cursor position: the gesture is confirmed when
+        // the pointer provably stands at the planned destination (or back home after a
+        // requested restore). What the motion *caused* is reported alongside — window-count
+        // deltas catch the flyout/menu family that element evidence is blind to.
+        let outcome = result.outcome
+        let landed = request.restore == true || hypot(
+            outcome.cursorEnd.x - result.plannedEnd.x,
+            outcome.cursorEnd.y - result.plannedEnd.y,
+        ) <= 3
+        let verdict: String = if outcome.abortReason != nil {
+            "unverifiable"
+        } else if landed {
+            "confirmed"
+        } else {
+            "unverifiable"
+        }
+        var summary = if let abort = outcome.abortReason {
+            "\(verb) stopped after \(outcome.samplesPosted)/\(outcome.samplesTotal) samples — \(abort)"
+        } else if landed {
+            "\(dragging ? "dragged" : "moved") \(Int(result.pathLength))pt along \(result.sampleCount) samples in \(String(format: "%.2f", result.durationSeconds))s"
+                + (request.restore == true ? ", cursor restored" : "; cursor now at (\(Int(outcome.cursorEnd.x)), \(Int(outcome.cursorEnd.y)))")
+        } else {
+            "\(verb) completed but the cursor reads (\(Int(outcome.cursorEnd.x)), \(Int(outcome.cursorEnd.y))), not the planned (\(Int(result.plannedEnd.x)), \(Int(result.plannedEnd.y))) — a human hand may be on the mouse"
+        }
+        if let before = result.windowsBefore, let after = result.windowsAfter, after != before {
+            summary += " · target windows \(before) → \(after)"
+        }
+
+        var reply: [String: Any] = [
+            "ok": outcome.abortReason == nil && landed,
+            "verdict": verdict,
+            "rung": "hardwareInput",
+            "summary": summary,
+            "cursorMoved": true,
+            "cursorMovedByUs": true,
+            "plannedEnd": ["x": result.plannedEnd.x, "y": result.plannedEnd.y],
+            "cursorEnd": ["x": outcome.cursorEnd.x, "y": outcome.cursorEnd.y],
+            "samples": outcome.samplesPosted,
+            "pathLength": (result.pathLength * 10).rounded() / 10,
+            "durationSeconds": (result.durationSeconds * 100).rounded() / 100,
+            "presence": presenceBlock(),
+        ]
+        if let abort = outcome.abortReason { reply["aborted"] = abort }
+        if let before = result.windowsBefore, let after = result.windowsAfter {
+            reply["targetWindowsBefore"] = before
+            reply["targetWindowsAfter"] = after
+        }
+        if let owner = result.endpointOwner { reply["windowUnderCursorOwnedBy"] = owner }
+        if let pid, !dragging {
+            let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if frontmost != pid {
+                // Measured asymmetry, worth telling the caller every time: AppKit tracking
+                // areas fire on background windows, WebKit web content drops all motion
+                // until the app is frontmost.
+                reply["note"] = "the target app is not frontmost — AppKit hover fires anyway, but "
+                    + "WebKit/WKWebView content ignores motion in inactive windows; 'activate' first "
+                    + "if a web page's hover state does not take"
+            }
+        }
+        return reply
     }
 
     /// The shared back half of `shortcut` and `menu` — one press mechanism, one reply shape.

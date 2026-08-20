@@ -209,6 +209,60 @@ enum MCPServer {
             ], required: ["app", "keys"],
         ),
         tool(
+            "move",
+            """
+            Glide the REAL cursor along a path and leave it on the destination — the verb for \
+            hover menus, tooltips, hover-intent flows, and anything that tracks pointer \
+            motion. There is no ghost variant: per-pid posted motion is dropped by the window \
+            server (measured), so this takes the physical cursor and is refused while a human \
+            is present unless `confirm` is true. Destination is `end` ("x,y" in screen \
+            points) or an element by `label` (+`app`); `via` waypoints bend the path into a \
+            smooth curve through them (glide from a nav tab down into its flyout). Starts \
+            from the current cursor position unless `start` is given. Evidence: the cursor's \
+            actual end position is read back, and with `app` the target's window count \
+            before/after is reported — a flyout appearing is a window appearing. Caveats \
+            measured: hover lands on whatever window is TOPMOST at the point (occlusion is \
+            refused when `app` is given); WebKit/WKWebView pages ignore motion while their \
+            app is not frontmost — `activate` first for web hover.
+            """,
+            properties: [
+                "end": ["type": "string", "description": "Destination \"x,y\" in screen points (top-left origin)"],
+                "app": ["type": "string", "description": "Target app — enables label aiming, occlusion refusal, window-count evidence"],
+                "label": ["type": "string", "description": "Aim at this element's center instead of end"],
+                "role": ["type": "string", "description": "Narrow the label match by element role"],
+                "start": ["type": "string", "description": "Path start \"x,y\"; current cursor position when omitted"],
+                "via": ["type": "string", "description": "Waypoints the curve passes through: \"x,y x,y …\""],
+                "duration": ["type": "number", "description": "Gesture seconds, 0.05–10; distance-based default"],
+                "easing": ["type": "string", "enum": ["linear", "ease-in", "ease-out", "ease-in-out"]],
+                "restore": ["type": "boolean", "description": "Put the cursor back afterwards (defeats hover — default off)"],
+                "confirm": ["type": "boolean", "description": "Take the cursor even though someone is at the Mac"],
+            ], required: [],
+        ),
+        tool(
+            "drag",
+            """
+            Drag along a path with a mouse button held: down at `start`, real motion through \
+            any `via` waypoints, up at `end`. Moves content, sliders, selection ranges, and \
+            windows (title-bar drags work even on background windows, measured). Same \
+            hardware-rung rules as `move`: takes the physical cursor, presence-gated behind \
+            `confirm`, occlusion at the start point refused when `app` is given. An aborted \
+            drag (lock/cancel mid-path) releases the button where it stopped — never left \
+            held. Note: apps reading drag *deltas* get exact double-precision values; apps \
+            reading positions get the same path — both measured working.
+            """,
+            properties: [
+                "start": ["type": "string", "description": "Where the button goes down: \"x,y\""],
+                "end": ["type": "string", "description": "Where it is released: \"x,y\""],
+                "app": ["type": "string", "description": "Target app — enables occlusion refusal and window-count evidence"],
+                "via": ["type": "string", "description": "Waypoints the drag curves through: \"x,y x,y …\""],
+                "button": ["type": "string", "enum": ["left", "right"]],
+                "duration": ["type": "number", "description": "Gesture seconds, 0.05–10; distance-based default"],
+                "easing": ["type": "string", "enum": ["linear", "ease-in", "ease-out", "ease-in-out"]],
+                "restore": ["type": "boolean", "description": "Put the cursor back after releasing"],
+                "confirm": ["type": "boolean", "description": "Take the cursor even though someone is at the Mac"],
+            ], required: ["start", "end"],
+        ),
+        tool(
             "display",
             "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives it back, 'status' reports. Windows parked there are invisible to the person at the Mac.",
             properties: [
