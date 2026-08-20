@@ -218,7 +218,7 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 
 ## Done
 
-- **2026-08-20 — cursor paths: `move` and `drag` (the 2026-08-10 trial-log ask).**
+- **2026-08-20 · 506e187 — cursor paths: `move` and `drag` (the 2026-08-10 trial-log ask).**
   Measurement first (`~/Developer/Experiments/cursor-paths/RESULTS.md`): per-pid posted
   motion is dropped wholesale by the window server — tracking areas, SwiftUI `onHover`,
   WebKit hover, content drags and title-bar drags all silent, background *and* frontmost,
