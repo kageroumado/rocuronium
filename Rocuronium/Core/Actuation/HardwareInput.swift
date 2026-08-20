@@ -78,6 +78,114 @@ nonisolated enum HardwareInput {
         }
     }
 
+    enum MouseButton: String, Sendable {
+        case left, right
+
+        var cgButton: CGMouseButton { self == .left ? .left : .right }
+        var down: CGEventType { self == .left ? .leftMouseDown : .rightMouseDown }
+        var up: CGEventType { self == .left ? .leftMouseUp : .rightMouseUp }
+        var dragged: CGEventType { self == .left ? .leftMouseDragged : .rightMouseDragged }
+    }
+
+    struct TraceOutcome: Sendable {
+        let samplesPosted: Int
+        let samplesTotal: Int
+        /// Where the system says the cursor actually is now — the read-back, not the plan.
+        let cursorEnd: CGPoint
+        /// Why the walk stopped early, when it did. A drag aborted mid-run has already
+        /// released its button at the last posted point; it is never left held.
+        let abortReason: String?
+    }
+
+    /// Walks the real cursor along a planned path, optionally with a button held.
+    ///
+    /// Everything here is a hardware-rung operation by measurement, not by choice: per-pid
+    /// posted motion is dropped wholesale by the window server (cursor-paths experiment,
+    /// 2026-08-20 — tracking areas, `.onHover`, WebKit hover, content drags and title-bar
+    /// drags all stayed silent), so hover and drag exist only with the real pointer.
+    ///
+    /// Two synthetic-event traps the same experiment measured, both handled here:
+    /// - Motion events carry zero `deltaX`/`deltaY` unless stamped, and drag code that reads
+    ///   deltas (games, pane splitters) sees no motion while position-based code works.
+    /// - Integer delta stamping accumulates rounding across a stream (+33% over 40 steps);
+    ///   the fields are written as doubles.
+    static func trace(
+        _ plan: PathPlan, button: MouseButton?, restoreCursor: Bool,
+    ) async -> TraceOutcome {
+        InputAttribution.shared.noteSyntheticInput()
+        let source = CGEventSource(stateID: .hidSystemState)
+        let restore = CGEvent(source: nil)?.location
+        var previous = plan.start
+
+        func post(_ type: CGEventType, at point: CGPoint) {
+            guard let event = CGEvent(
+                mouseEventSource: source, mouseType: type,
+                mouseCursorPosition: point, mouseButton: (button ?? .left).cgButton,
+            ) else { return }
+            if type != button?.down, type != button?.up {
+                event.setDoubleValueField(.mouseEventDeltaX, value: point.x - previous.x)
+                event.setDoubleValueField(.mouseEventDeltaY, value: point.y - previous.y)
+            }
+            if type == button?.down { event.setIntegerValueField(.mouseEventClickState, value: 1) }
+            event.post(tap: .cghidEventTap)
+            previous = point
+        }
+
+        func finish(posted: Int, abort: String?) async -> TraceOutcome {
+            if restoreCursor, let restore {
+                try? await Task.sleep(for: Constants.settleDelay)
+                post(.mouseMoved, at: restore)
+            }
+            return TraceOutcome(
+                samplesPosted: posted,
+                samplesTotal: plan.samples.count,
+                cursorEnd: CGEvent(source: nil)?.location ?? previous,
+                abortReason: abort,
+            )
+        }
+
+        // Arrive, settle, then press — a down on the very first event of a motion stream is
+        // a shape real input never has, and the settle gives the window under the point its
+        // hover state before the button lands.
+        post(.mouseMoved, at: plan.start)
+        try? await Task.sleep(for: Constants.settleDelay)
+        if let button {
+            post(button.down, at: plan.start)
+            try? await Task.sleep(for: Constants.clickHoldDuration)
+        }
+
+        let moveType = button?.dragged ?? CGEventType.mouseMoved
+        let clock = ContinuousClock()
+        let begin = clock.now
+        var posted = 0
+        for sample in plan.samples {
+            // Same mid-run revocation checks as `type`, for the same two reasons: a lock
+            // means the cursor now belongs to the login window, and a cancelled request has
+            // already been reported failed. A held button is released where the walk stopped
+            // — aborting a drag must never leave the system in "button down" limbo.
+            guard consoleIsStillOurs else {
+                InputAttribution.shared.noteSyntheticInput()
+                if let button { post(button.up, at: previous) }
+                return await finish(
+                    posted: posted,
+                    abort: Task.isCancelled
+                        ? "the request was cancelled mid-path"
+                        : "the screen locked mid-path",
+                )
+            }
+            InputAttribution.shared.noteSyntheticInput()
+            post(moveType, at: sample.point)
+            posted += 1
+            try? await clock.sleep(until: begin + sample.offset)
+        }
+
+        if let button {
+            try? await Task.sleep(for: Constants.clickHoldDuration)
+            post(button.up, at: plan.end)
+        }
+        return await finish(posted: posted, abort: nil)
+    }
+
     /// Types into the frontmost first responder, like hands on the keyboard. Same unicode
     /// payload as the ghost variant, for the same measured reason: Chromium reads the
     /// string, not the keycode.

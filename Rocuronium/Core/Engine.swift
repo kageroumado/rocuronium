@@ -98,6 +98,7 @@ actor Engine {
         case hazardousShortcut(String, String)
         case menuPathNotFound(component: String, available: [String])
         case menuPathIsSubmenu(path: String, items: [String])
+        case pathRefused(String)
 
         var errorDescription: String? {
             switch self {
@@ -120,6 +121,8 @@ actor Engine {
                 "No menu item '\(component)' at that level. It offers: \(available.joined(separator: ", "))."
             case let .menuPathIsSubmenu(path, items):
                 "'\(path)' is a submenu, not an item — pressing it would only open it on screen. Name one of its items: \(items.joined(separator: ", "))."
+            case let .pathRefused(reason):
+                reason
             }
         }
     }
@@ -971,6 +974,121 @@ actor Engine {
             )
         }
         return evidence
+    }
+
+    // MARK: - Cursor paths
+
+    struct TraceResult: Sendable {
+        let outcome: HardwareInput.TraceOutcome
+        let plannedEnd: CGPoint
+        let pathLength: Double
+        let durationSeconds: Double
+        let sampleCount: Int
+        /// On-screen window counts for the target app around the gesture — the cheap
+        /// semantic evidence for hover: a flyout or menu appearing is a window appearing.
+        let windowsBefore: Int?
+        let windowsAfter: Int?
+        /// Who owns the topmost window at the action point, when it is not the target.
+        let endpointOwner: String?
+    }
+
+    /// Moves the real cursor along a path (`button: nil`) or drags along it (button held).
+    ///
+    /// Hardware-rung by measurement, not by policy: the cursor-paths experiment (2026-08-20)
+    /// showed per-pid posted motion is dropped wholesale — tracking areas, `.onHover`,
+    /// WebKit hover, content drags and title-bar drags all stayed silent, background and
+    /// frontmost alike. Hover and drag exist only with the real pointer; the presence gate
+    /// lives in the router, like `activate`'s.
+    func trace(
+        pid: pid_t?,
+        waypoints: [CGPoint],
+        label: String?,
+        role: String?,
+        duration: Duration?,
+        easing: PathPlan.Easing,
+        button: HardwareInput.MouseButton?,
+        restoreCursor: Bool,
+    ) async throws -> TraceResult {
+        // The tree is only consulted for a labeled endpoint, but an asleep display voids
+        // the gesture's entire purpose too: nothing tracks a cursor nobody can see.
+        let wake = await DisplayWake.ensureAwake()
+        guard wake != .failed else {
+            throw EngineError.pathRefused("The display is asleep and could not be woken — motion over an invisible screen proves nothing.")
+        }
+        let hold = DisplayWake.Hold(reason: "Rocuronium is tracing a cursor path")
+        defer { hold?.release() }
+
+        var points = waypoints
+        // Destination by label: resolved here so the caller can say "hover the Store tab"
+        // instead of shipping coordinates. Zero-area frames are refused for the same reason
+        // the ladder refuses them — a closed menu item reports (0, bottom-corner) 0×0.
+        if let label {
+            guard let pid else {
+                throw EngineError.pathRefused("A labeled destination needs --app to search in.")
+            }
+            let element = try resolveNamed(pid: pid, label: label, role: role)
+            guard let frame = element.frame, frame.width >= 1, frame.height >= 1 else {
+                throw EngineError.pathRefused("'\(label)' has no on-screen frame to move to.")
+            }
+            points.append(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        // A lone destination starts from wherever the cursor is now.
+        if points.count == 1, let current = CGEvent(source: nil)?.location {
+            points.insert(current, at: 0)
+        }
+        guard let plan = PathPlan(through: points, duration: duration, easing: easing) else {
+            throw EngineError.pathRefused("The path needs two distinct points — a start (or the current cursor) and a destination at least a pixel away.")
+        }
+
+        // The point that acts is the one that must not be occluded: a drag's button lands at
+        // the start, a hover's meaning lives at the end. Same rule as the ladder's hardware
+        // rung — real input goes to whatever window is topmost, and driving somebody else's
+        // window with the user's cursor is the thing this tool promises not to do. The
+        // measured ambush: Refrax's PIP panel silently ate a hover aimed under it.
+        let actionPoint = button != nil ? plan.start : plan.end
+        let ownerPid = HardwareInput.ownerOfWindow(at: actionPoint)
+        var endpointOwner: String?
+        if let ownerPid, ownerPid != pid {
+            endpointOwner = await MainActor.run {
+                NSRunningApplication(processIdentifier: ownerPid)?.localizedName ?? "pid \(ownerPid)"
+            }
+        }
+        if let pid, let ownerPid, ownerPid != pid {
+            throw EngineError.pathRefused(
+                "'\(endpointOwner ?? "?")' covers the target app at (\(Int(actionPoint.x)), \(Int(actionPoint.y))) — the \(button != nil ? "drag" : "hover") would land on it instead. Activate or park first.",
+            )
+        }
+
+        let windowsBefore = pid.map(onScreenWindowCount)
+        let outcome = await HardwareInput.trace(plan, button: button, restoreCursor: restoreCursor)
+        // Give hover-intent timers and flyout animations a beat before counting windows —
+        // the Steam supernav opens ~120 ms after the pointer settles.
+        try? await Task.sleep(for: .milliseconds(400))
+        let windowsAfter = pid.map(onScreenWindowCount)
+        if let pid { cache.invalidate(pid: pid) }
+
+        let seconds = Double(plan.duration.components.seconds)
+            + Double(plan.duration.components.attoseconds) / 1e18
+        return TraceResult(
+            outcome: outcome,
+            plannedEnd: plan.end,
+            pathLength: plan.length,
+            durationSeconds: seconds,
+            sampleCount: plan.samples.count,
+            windowsBefore: windowsBefore,
+            windowsAfter: windowsAfter,
+            endpointOwner: endpointOwner,
+        )
+    }
+
+    /// On-screen windows the system attributes to this process, popup layers included —
+    /// menus and flyouts often live above the normal window layer, and they are exactly
+    /// what a hover conjures.
+    private nonisolated func onScreenWindowCount(_ pid: pid_t) -> Int {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
+        ) as? [[String: Any]] else { return 0 }
+        return windows.count { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid }
     }
 
     // MARK: - Internals — everything below touches non-Sendable elements

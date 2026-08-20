@@ -149,6 +149,32 @@ return` in a focused address bar commits navigation — but sheet key-equivalent
 sheet's button instead: `click --label Cancel --role button`). Electron/Chromium ignore
 posted keycodes entirely. An `unverifiable` verdict means exactly that, not "retry".
 
+## Cursor paths: move and drag
+
+`move` glides the **real** cursor along a path and leaves it on the destination; `drag`
+does the same with a button held (down at `--from`, up at `--to`). There is no ghost
+variant and there will not be one: per-pid posted motion is dropped wholesale by the
+window server (measured 2026-08-20 — tracking areas, SwiftUI `onHover`, WebKit hover,
+content drags and title-bar drags all stayed silent, background and frontmost alike).
+Because these verbs always take the physical cursor, they are presence-gated like
+`activate`: refused while a human is present unless `--confirm`.
+
+The path is a straight line, or a smooth curve **through** `--via` waypoints — built for
+hover-intent chains: glide onto the nav item, pause, then curve down into the flyout
+without leaving the hover region. `--duration` (seconds) and `--easing` shape the timing;
+the default is a distance-based duration with ease-in-out, which is what human motion
+looks like to velocity-watching UI. The destination can be an element
+(`--app X --label Y`) instead of coordinates.
+
+Evidence: the cursor's actual end position is read back (`confirmed` means the pointer
+provably stands on the destination), and with `--app` the reply carries the target's
+window count before/after — a flyout or menu appearing is a window appearing, the
+consequence element-evidence is blind to. Measured caveats, all reported in replies:
+hover lands on whatever window is **topmost** at the point (occlusion refused when
+`--app` is given — park or activate first); WebKit/WKWebView pages ignore all motion
+while their app is inactive (`activate` before web hover); a drag aborted by a mid-path
+lock or cancel releases its button where it stopped, never leaving it held.
+
 ## Actions that close their own app
 
 A press that quits or restarts its app (Quit, an updater's "Restart to Update") can

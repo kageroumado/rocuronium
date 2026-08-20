@@ -30,6 +30,11 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
   rocuronium menu       --app <name> --path "File > Export" [--resolve-only] [--confirm]
   rocuronium key        --app <name> --keys <escape|shift+tab|cmd+down|…>
+  rocuronium move       (--to <x,y> | --app <name> --label <text> [--role <r>])
+                        [--from <x,y>] [--via "<x,y> <x,y>…"] [--duration <s>]
+                        [--easing <linear|ease-in|ease-out|ease-in-out>] [--restore] [--confirm]
+  rocuronium drag       --from <x,y> --to <x,y> [--via …] [--button <left|right>]
+                        [--app <name>] [--duration <s>] [--easing <e>] [--restore] [--confirm]
   rocuronium launch     --app <name>
   rocuronium activate   --app <name> [--confirm]
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
@@ -54,6 +59,14 @@ refused while a human is present unless --confirm. 'display' leases the headless
 screen; 'park' moves an app's window onto it (or to an explicit point — the reply carries
 the previous position, which is how you put it back). 'screenshot' hands the pixels to
 you, the caller: your model does the looking.
+
+'move' glides the REAL cursor along a path (straight line, or a curve through --via
+waypoints) and leaves it on the destination — the way to drive hover menus, tooltips, and
+hover-intent flows; 'drag' does the same with a button held. Both take the physical
+cursor, so both are refused while a human is present unless --confirm, and both leave the
+pointer where the path ends unless --restore. With --app they refuse when another app's
+window covers the action point, and they report the target's window count before/after —
+a flyout appearing is a window appearing.
 
 Every reply reports whether a human is present; hardware input stays off unless asked for.
 """
@@ -93,10 +106,17 @@ if command == "display", let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "to"] {
+// The path verbs speak in points: --from/--to are "x,y" strings there, while scroll's
+// --to is the numeric 0…1 fraction the loop below parses.
+let pathVerb = command == "move" || command == "drag"
+if pathVerb {
+    if let found = value(for: "from") { payload["start"] = found }
+    if let found = value(for: "to") { payload["end"] = found }
+}
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -115,6 +135,7 @@ if arguments.contains("--gone") { payload["gone"] = true }
 // first-class operation, and pressing a destructive item takes a deliberate second flag.
 if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
 if arguments.contains("--confirm") { payload["confirm"] = true }
+if arguments.contains("--restore") { payload["restore"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
