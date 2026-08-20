@@ -85,15 +85,17 @@ specs moved to the Done section. What the session measured, and what it left ope
    sheet's button by label (`click --label Cancel --role button` — verified working)
    instead of Escape. Possible future rung: a session-level key post while the target
    is frontmost, gated like hardware input since it hits global focus.
-7. **An action whose consequence is a window or element appearing/vanishing reads as
-   failure** (2026-08-09, reconfirmed in the away run): Cancel dismissing its own sheet
-   read `noEffect`; File ▸ New and File ▸ New Window read `unverifiable` while opening
-   windows (the away script proved them with its own window-count check); a close
-   button closing its window read `unverified`. The family: consequences that change
-   the *window list* are invisible to element-rect, selection, and same-window pixel
-   evidence. Window-count-before/after is cheap and the away script already uses it as
-   an external check — promoting it into the press evidence would close the whole
-   family at once. Electron caveat from the element-vanish case still applies there.
+7. ~~An action whose consequence is a window or element appearing/vanishing reads as
+   failure~~ — **DONE 2026-08-20.** `Evidence.confirmedByWindowCountChange` is the
+   read-back for the window-list family: `press` (menu/shortcut), `act` (click), and
+   `pressKey` now take the target's on-screen window count before acting and, when the
+   verdict is not confirmed, poll it briefly after (6×200 ms; 3 for `key`, whose caret
+   presses legitimately stay unverifiable). In `press` the poll is merged with the
+   process-exit loop and exit wins — "the app quit" is the message that stops a
+   dangerous retry, and a dead app's count would read "→ 0" anyway. Original measured
+   cases (2026-08-09, away run): Cancel dismissing its own sheet read `noEffect`;
+   File ▸ New read `unverifiable` while opening a window; a close button read
+   `unverified` — all invisible to element-rect, selection, and same-window pixels.
 8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
    call, but the refusal's advice (target by bundle id) has nothing to offer there. If
    this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.

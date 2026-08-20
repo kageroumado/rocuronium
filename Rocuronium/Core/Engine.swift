@@ -478,6 +478,7 @@ actor Engine {
             }
         }
         let selectionBefore = ElementQuery.focused(pid: pid)?.selectedText
+        let windowsBefore = onScreenWindowCount(pid)
 
         // Accessibility only: `AXPress` is the sole meaningful way to actuate a menu item, and
         // the rungs below would aim real clicks at a closed menu's meaningless geometry.
@@ -508,11 +509,22 @@ actor Engine {
         // process exiting right after the press *is* the read-back; poll briefly because
         // an orderly quit takes a moment.
         if evidence.verdict != .confirmed {
-            for _ in 0 ..< 6 where !processHasExited(pid) {
+            // One poll loop, two read-backs. An exited process would also read as "window
+            // count → 0", but "the app quit" is the message that stops a dangerous retry,
+            // so the exit check wins; the count catches the rest of the window-list family
+            // (File ▸ New, a closed sheet, a dismissed dialog) that element-rect, selection,
+            // and same-window pixel evidence are all structurally blind to.
+            var windowsAfter: Int?
+            for _ in 0 ..< 6 {
+                if processHasExited(pid) { break }
+                let now = onScreenWindowCount(pid)
+                if now != windowsBefore { windowsAfter = now; break }
                 try? await Task.sleep(for: .milliseconds(200))
             }
             if processHasExited(pid) {
                 evidence = evidence.confirmedByProcessExit()
+            } else if let windowsAfter {
+                evidence = evidence.confirmedByWindowCountChange(before: windowsBefore, after: windowsAfter)
             }
         }
         return (evidence, match.path, match.enabled, hazard)
@@ -561,6 +573,7 @@ actor Engine {
             }
         }
 
+        let windowsBefore = onScreenWindowCount(pid)
         await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, pid: pid)
         try? await Task.sleep(for: .milliseconds(300))
         cache.invalidate(pid: pid)
@@ -600,6 +613,20 @@ actor Engine {
             evidence = evidence.addingConfirmingVisualEvidence(
                 delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
             )
+        }
+        // Escape's whole job is often a dialog vanishing — the window-list read-back is the
+        // channel that can actually see that (loose end 7). A shorter poll than the press
+        // verbs': arrows and other caret keys legitimately stay unverifiable, and the 300 ms
+        // settle above already covers most dismissal animations.
+        if evidence.verdict != .confirmed {
+            for _ in 0 ..< 3 {
+                let now = onScreenWindowCount(pid)
+                if now != windowsBefore {
+                    evidence = evidence.confirmedByWindowCountChange(before: windowsBefore, after: now)
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
         return evidence
     }
@@ -958,6 +985,10 @@ actor Engine {
             }
         }
 
+        // Taken before the press for the same reason the pixel baseline is: the window-count
+        // read-back below compares against the world as it was, not as the press left it.
+        let windowsBefore = wantsPress ? onScreenWindowCount(pid) : nil
+
         let ladder = GhostLadder(allowHardwareInput: allowHardwareInput)
         var evidence = await ladder.perform(action, on: element, pid: pid, refetch: refetch)
         // The interface just changed; anything cached about this process is now suspect.
@@ -972,6 +1003,21 @@ actor Engine {
             evidence = evidence.addingConfirmingVisualEvidence(
                 delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
             )
+        }
+        // The window-list family: a click whose consequence is a window or sheet appearing
+        // or vanishing is invisible to every channel above — the watched rectangle itself
+        // goes away, or the change lands outside it (loose end 7's measured cases: Cancel
+        // dismissing its own sheet read noEffect, a close button read unverified). Polled
+        // briefly because window creation and dismissal animate.
+        if evidence.verdict != .confirmed, let windowsBefore {
+            for _ in 0 ..< 6 {
+                let now = onScreenWindowCount(pid)
+                if now != windowsBefore {
+                    evidence = evidence.confirmedByWindowCountChange(before: windowsBefore, after: now)
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
         return evidence
     }

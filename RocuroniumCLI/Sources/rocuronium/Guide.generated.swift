@@ -38,7 +38,10 @@ summary, over your expectations.
 
 - **confirmed** — something observably changed: a read-back matched what was written, a
   scroll bar moved, an element's frame moved, pixels changed in a window that was
-  provably still. Proceed.
+  provably still, the target's on-screen **window count** moved (the read-back for
+  presses whose consequence is a window or sheet appearing or vanishing — File ▸ New,
+  Cancel, Escape on a dialog, a close button — which element-rect and pixel evidence are
+  structurally blind to), or the target process exited after a quit-shaped press. Proceed.
 - **noEffect** — the call reported success and *nothing observably changed*. This is the
   most important verdict in the system: it is how WebKit's lies, background AppKit
   menus, and ignored wheel events surface. Do not retry the same call harder; change
@@ -63,7 +66,17 @@ present, because that is the cautious reading.
 What gates on it:
 
 - **`activate`** — refused unless `away` (or `confirm: true`): raising an app takes
-  focus out of a human's hands.
+  focus out of a human's hands. Even when permitted, it can honestly fail: macOS
+  cooperative activation sometimes declines to promote an **accessory (menu-bar /
+  LSUIElement) app** while a regular app holds focus — the reply reads back the truth
+  ("did not land — X is still frontmost") rather than claiming success. `open` on an
+  accessory app never activates it either. When an un-activatable app must be frontmost
+  (WebKit content ignores cursor motion in inactive windows), retry after the focused
+  app is quit or deactivated, or drive the app through its own automation channel.
+- **`move` / `drag`** — same gate as `activate`: they always take the real cursor
+  (there is no ghost rung for motion — measured), so they are refused unless `away` or
+  confirmed, and refused outright while the screen is locked or the action point is
+  covered by another app's window.
 - **Hardware input** (`allowHardwareInput`) — the advice tells you whether taking the
   cursor is acceptable; the engine additionally refuses it outright while the screen is
   locked or the aim point is covered by another app's window.
