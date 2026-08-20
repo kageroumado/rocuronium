@@ -139,6 +139,9 @@ a line in the trial log below — those lines are the Phase-1 gaps that were mis
 - 2026-08-09 · same task · coordinate ghost click resolved to an AXGroup ("element exposes no press action") and the posted event was noEffect — SwiftUI button, app not frontmost · `menu` path instead
 - 2026-08-09 · same task · `menu` flagged "Refrax ▸ Restart to Update — v99.0…" as "would reboot the Mac" — the Restart heuristic fires on app-menu items, not just Apple ▸ · confirm:true (correctly overridable, but the hazard label was wrong)
 - 2026-08-09 · same task · the confirmed menu press returned ok:false / verdict "unverifiable" even though the action fully succeeded (app quit, updated, relaunched) — a press that closes the app can never verify, and reporting it as an error invites a dangerous retry
+- 2026-08-20 · reproduce a user's physical fullscreen-button click in Refrax (web content) while the window was inactive and partially covered by Warp · rocuronium daemon unreachable (control socket dead — `rocuronium status` fails; likely not running since a reboot/lock) — and this task is its core promise: app-targeted ghost clicks immune to z-order, no cursor steal · Peekaboo foreground CGEvent clicks, which repeatedly landed on the covering Warp window at the same global coords until Refrax was floated with keep-on-top; each misfire silently activated the wrong app. Two asks: (1) launchd/keepalive so the daemon survives reboots — **DONE 2026-08-20**, see Done; (2) a `click` that targets web-content elements inside a WKWebView by AX label even when the app is inactive/covered (Peekaboo could only do it after raising the window) — **answered same day, next line**: the ghost AX press did exactly this once the daemon was back up.
+- 2026-08-20 · locate YouTube's fullscreen button in Refrax web content · `find --app Refrax "Full screen"` returned two unrelated search fields (AXComboBox 'Search', AXTextField) and never the AXButton 'Full screen (f)' — while `click --label "Full screen"` on the same tree correctly matched it (ambiguous with the traffic-light 'full screen button'); find and click disagree on matching semantics, and find's fuzzy results didn't include the exact-substring hit · `read | rg` to discover the true label, then `click --label "Full screen (f)"` — which worked perfectly (ghost AX press on an inactive, covered window; the whole reason for the task). Same-day win worth noting: that click is something Peekaboo could only do after raising the window.
+- 2026-08-10 · verify Sevoflurane's Steam supernav hover flow (open on hover, keep-open while gliding into the flyout, dismiss on mouse-away) · no way to *move* a cursor at all — hover states, hover-intent timers, and enter/leave chains are untestable without real pointer motion, so every iteration burned a human test pass · Kiri's hands, repeatedly. **Feature ask (Kiri, 2026-08-10): simulated cursor paths — move from point to point along a straight line or a curve (Bézier, like vector editors draw), at a controllable speed, optionally with left/right button held, so hover/drag/glide flows can be driven and verified without touching the real cursor.** Note the ghost-rung tension: hover requires the system cursor position to actually change (tracking areas follow the real pointer), so this likely lives on the hardware rung, presence-gated like other cursor-taking verbs — or drives per-app synthetic mouse-moved event streams (CGEvent posts with per-event positions, cursor unmoved) where the target app's tracking allows it.
 
 **All six trial-log gaps addressed 2026-08-09 (c89eefa)** (verified by execution on the
 installed build; the trial continues — new fallback moments still get lines above):
@@ -214,6 +217,18 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 - The CLI lives in `Contents/Resources`, never `Contents/MacOS`.
 
 ## Done
+
+- **2026-08-20 — launchd keepalive + stale-bundle cleanup.** The daemon is a LaunchAgent
+  (`~/Library/LaunchAgents/glass.kagerou.rocuronium.plist`: RunAtLoad, KeepAlive
+  SuccessfulExit=false — crash/kill respawns, menu-bar Quit stays quit), installed by
+  `Scripts/install-launchagent.sh`, which `release.sh --install` now runs instead of
+  `open`. Verified: `kill -9` → new pid serving the socket in <4 s, Accessibility grant
+  intact. Two rot sources found and fixed while here: `ditto` *merges* into an existing
+  bundle, so the installed app carried Aug-2 debug dylibs and failed strict codesign
+  (install now trashes the old bundle first); and the "dead Hello-world window with a
+  Dock icon" was a stale lowercase `rocuronium.app` template scaffold in DerivedData
+  sharing the real bundle id, which `open` resolved by name — trashed. Old
+  `pkill -f Rocuronium.app` also matched every CLI/MCP client by path; now `pkill -x`.
 
 - **2026-08-04 · 04f6c6f — Phase 1, verb parity.** `read` (bounded text dump; silent
   `AXWebArea` reported as hidden-not-blank with a read referral), `apps`/`windows`
