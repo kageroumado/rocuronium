@@ -62,10 +62,18 @@ nonisolated enum ElementQuery {
 
     /// Walks an app's tree, collecting elements that satisfy `predicate`.
     ///
-    /// Seeded from `AXWindows` and the menu bar rather than only `AXChildren`, because the two
-    /// sets differ between apps. Nested elements claiming the `AXApplication` role are not
-    /// descended into: an app listing itself as its own child is a cycle that consumes the
-    /// entire traversal budget before reaching any window.
+    /// Seeded from `AXWindows` plus the non-window `AXChildren` (the two sets differ between
+    /// apps). Nested elements claiming the `AXApplication` role are not descended into: an app
+    /// listing itself as its own child is a cycle that consumes the entire traversal budget
+    /// before reaching any window.
+    ///
+    /// The **menu bar is deliberately not walked**. Menu items are the right match for
+    /// nothing except `menu`/`shortcut`, which have their own resolution (`MenuQuery`) — and
+    /// a closed menu item reports a meaningless 0×0 frame at the screen corner, so acting on
+    /// one through `click`/`scroll` aims at geometry that does not exist. Measured
+    /// 2026-08-09: `wait --label References` on Safari matched a History-menu entry whose
+    /// *title* contained "references", a false positive that then poisoned a scroll probe
+    /// (its "scroll area" ascended from the menu item).
     static func search(
         pid: pid_t,
         maxDepth: Int = Constants.maxDepth,
@@ -109,10 +117,10 @@ nonisolated enum ElementQuery {
         for (index, window) in root.windows.enumerated() {
             visit(window, depth: 1, path: "/win[\(index)]")
         }
-        if let menuBar = root.menuBar {
-            visit(menuBar, depth: 1, path: "/menubar")
-        }
-        for (index, child) in root.children.enumerated() where child.role != "AXApplication" {
+        // The menu bar arrives through `AXChildren` too, so it is skipped here as well —
+        // see the type comment for why menus are excluded from label walks entirely.
+        for (index, child) in root.children.enumerated()
+            where child.role != "AXApplication" && child.role != "AXMenuBar" {
             visit(child, depth: 1, path: "/kid[\(index)]")
         }
 

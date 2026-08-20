@@ -153,6 +153,12 @@ the attribute, by role walk. Safari's web content exposes a writable bar (measur
 `wait` polls for an element (`--gone` for disappearance) and is the right primitive
 after `launch`, after a click that opens a dialog, or before reading a slow view.
 
+Label queries (`find`, `click`, `type`, `scroll`, `wait`, `read --label`) **never match
+menu items** — the menu bar is excluded from label walks. Menu items are the right match
+for nothing except `menu` and `shortcut`, which resolve them properly; a closed menu
+item's frame is a meaningless 0×0 rect at the screen corner, and matching one turned
+"wait for the page to load" into a false positive on a History-menu entry (measured).
+
 ## Keys that are neither text nor shortcuts
 
 `key` posts a bare named key — escape, return, tab, space, delete, arrows, home/end,
