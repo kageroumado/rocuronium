@@ -336,19 +336,26 @@ nonisolated struct GhostLadder {
             )
 
         case .click, .press:
-            guard element.actionNames.contains(kAXPressAction) else {
-                attempts.append(.init(rung: .accessibility, outcome: "element exposes no press action"))
+            // `AXShowMenu` counts as a press: menu buttons (and the remote elements System
+            // Settings panes host) expose only it, and a human clicks them like any button.
+            guard let pressish = element.pressishAction else {
+                attempts.append(.init(rung: .accessibility, outcome: "element exposes no press or show-menu action"))
                 return nil
             }
-            let code = element.perform()
+            let code = element.perform(pressish)
             guard code == .success else {
-                attempts.append(.init(rung: .accessibility, outcome: "press failed (\(code.rawValue))"))
+                attempts.append(.init(rung: .accessibility, outcome: "\(pressish) failed (\(code.rawValue))"))
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
             // A press has no read-back; the honest verdict is unverifiable until the pixel
             // diff runs, which the caller supplies for visual targets.
-            attempts.append(.init(rung: .accessibility, outcome: "press accepted"))
+            attempts.append(.init(
+                rung: .accessibility,
+                outcome: pressish == kAXPressAction
+                    ? "press accepted"
+                    : "show-menu action accepted — a menu appearing is the consequence to watch for",
+            ))
             return await finish(
                 action, element, .accessibility, .unverifiable, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,

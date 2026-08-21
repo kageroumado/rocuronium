@@ -19,11 +19,14 @@ tools. Add `--json` to any command for the full reply.
     apps · windows · find · read · wait            observe (read-only)
     launch · activate                              lifecycle
     type · click · scroll · shortcut · menu · key  act
+    statusitem                                     menu bar status items
     display · park · screenshot                    isolation + pixels
 
 Targeting: `--app` takes a name or a bundle id. Two running apps with the same name (a
 debug and a release build, say) are refused with both candidates listed — pass the
-bundle id. A label that matches elements of several roles is likewise refused; pass
+bundle id. Two instances of the same *bundle id* (`open -n`) have exactly one
+unambiguous address: `--pid`, which every app-taking verb accepts and which overrides
+`--app`. A label that matches elements of several roles is likewise refused; pass
 `--role` (e.g. `--role button`) to say which one you meant. Label matching tries labels
 first and element *values* as the fallback, so text you saw in `read` output is findable
 and scrollable-to even when it exists only as a value.
@@ -147,6 +150,18 @@ one exists — found by attribute or, for the overlay scrollers modern AppKit hi
 the attribute, by role walk. Safari's web content exposes a writable bar (measured:
 `--to` round-trips confirmed); Chromium and Electron never expose one.
 
+`scroll --until-text <string>` is the deterministic form for content the tree does not
+expose: each step captures the target's window (window-true, occlusion-proof), OCRs it
+locally, and stops the moment the string is legible — no over- or undershoot, because
+the loop terminates on sight rather than on a guessed distance. Needs Screen Recording.
+The stepper is the scroll bar where one exists (step sized from the bar's thumb with
+overlap, so a screenful can never skip past the target between frames); `--dy`'s sign
+sets the direction. The reply carries `foundAt` — the sighting's screen rectangle, ready
+for `click --x --y` at its center — and `callAgain: true` when the step budget ran out
+with document left. Two frames with identical legible text end the loop honestly: the
+end of the content, or a toolkit that ignores the mechanism (the referral says which
+channel can reach it).
+
 `wait` polls for an element (`--gone` for disappearance) and is the right primitive
 after `launch`, after a click that opens a dialog, or before reading a slow view.
 
@@ -193,6 +208,39 @@ hover lands on whatever window is **topmost** at the point (occlusion refused wh
 `--app` is given — park or activate first); WebKit/WKWebView pages ignore all motion
 while their app is inactive (`activate` before web hover); a drag aborted by a mid-path
 lock or cancel releases its button where it stopped, never leaving it held.
+
+## Status items and menu buttons
+
+`statusitem --app X` lists an app's menu bar status items; `--press` opens one's menu or
+popover by `AXPress`, cursor-free. Status items live in a separate extras menu bar that
+no window walk or `find` reaches, so this verb is the only ghost path to a MenuBarExtra.
+With several items, `--label` picks one; pid-scoping keeps two instances of one bundle
+id distinguishable. Evidence is the target's window count — a popover opening is a
+window appearing — because the press call itself can block in menu tracking and return
+an error code for a press that fully worked.
+
+Controls that expose only `AXShowMenu` (menu buttons, and the remote elements System
+Settings panes host inside opaque provider groups) are clicked like any button: the
+press rung performs the show-menu action when no press action exists, and the menu
+appearing is the window-count consequence to watch for. Two measured caveats on the
+System Settings case: the opened menu's window belongs to the pane's *appex*, not the
+app you targeted, so the window-count read-back can miss it and the verdict stays
+`unverifiable` for a menu that visibly opened — verify with a region `screenshot` when
+it matters. And once open, such a menu is not dismissible by any ghost mechanism
+(posted Escape to host and appex both no-op — menu tracking runs its own event loop;
+re-pressing does not toggle): choose an item, or quit the host app to tear it down.
+
+## The display hold
+
+While an agent session is active (any perceiving or acting command), the app holds the
+display awake — through Adrafinil's display-class holds (`adrafinil acquire --display`)
+when its CLI is installed, or a process-local assertion otherwise — and releases after a
+few quiet minutes. `status` reports it as `displayHold: adrafinil | internal | none`.
+Adrafinil's own pause, idle-release, and thermal cutouts outrank the hold, and a hold
+deliberately stops at the lock screen: locked-but-awake is fully readable, and the lock
+itself is Dantrolene's decision, not ours. Measured 2026-08-22: the wake and the hold do
+**not** reset `HIDIdleTime`, so presence readings stay honest about whose activity is
+whose.
 
 ## Actions that close their own app
 
