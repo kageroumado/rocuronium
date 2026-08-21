@@ -20,10 +20,15 @@ final class CommandRouter {
     /// All accessibility work happens here, off the main actor. See `Engine`.
     private let engine = Engine()
     private let virtualDisplay = VirtualDisplayBridge()
+    /// Keeps the display awake for the whole agent session, not just per action.
+    private let adrafinil = AdrafinilBridge()
 
     struct Request: Decodable {
         let command: String
         var app: String?
+        /// Targets a process directly, bypassing name resolution — the only unambiguous
+        /// address when two instances share a bundle id (`open -n`).
+        var pid: pid_t?
         var label: String?
         /// Narrows a label match by element role ("button" or "AXButton") — the answer when
         /// two roles share the same text and "be more specific" has no more-specific label.
@@ -64,6 +69,10 @@ final class CommandRouter {
         var dy: Double?
         /// For `scroll`: absolute position, 0 (top) to 1 (bottom), via the scroll bar.
         var to: Double?
+        /// For `scroll`: step until this string is legible in the frame (local OCR per step).
+        var untilText: String?
+        /// For `statusitem`: press the item rather than just listing.
+        var press: Bool?
         /// For `move`/`drag`: path points as "x,y" strings — start, destination, and
         /// intermediate waypoints ("x,y x,y …") the curve passes through.
         var start: String?
@@ -138,7 +147,14 @@ final class CommandRouter {
     // MARK: - Commands
 
     private func execute(_ request: Request) async throws -> [String: Any] {
+        // Any command that perceives or acts marks the session active, which places (and
+        // keeps renewing) the session-level display hold. Status-shaped commands do not:
+        // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
+        case "status", "diag", "request-capture", "display": break
+        default: adrafinil.noteActivity()
+        }
+        return switch request.command {
         case "status": status()
         case "diag": await diagnose()
         case "request-capture": requestCapture()
@@ -160,6 +176,7 @@ final class CommandRouter {
         case "display": try await display(request)
         case "park": try await park(request)
         case "screenshot": try await screenshot(request)
+        case "statusitem": try await statusItem(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
     }
@@ -177,6 +194,7 @@ final class CommandRouter {
             "mayTakeCursor": presence.mayTakeCursor,
             "advice": presence.advice,
             "virtualDisplayActive": virtualDisplay.activeLease != nil,
+            "displayHold": adrafinil.isHolding ? (adrafinil.mechanism ?? "internal") : "none",
         ]
     }
 
@@ -375,10 +393,10 @@ final class CommandRouter {
     /// Scrolls a scroll area: `to` positions absolutely via the scroll bar (read back as
     /// evidence), `dy`/`dx` post wheel events and let the bar or pixels testify.
     private func scroll(_ request: Request) async throws -> [String: Any] {
-        guard request.to != nil || request.dx != nil || request.dy != nil else {
+        guard request.to != nil || request.dx != nil || request.dy != nil || request.untilText != nil else {
             return [
                 "ok": false,
-                "error": "'scroll' requires --dy/--dx (pixels; positive dy reveals content below) or --to (0=top … 1=bottom)",
+                "error": "'scroll' requires --dy/--dx (pixels; positive dy reveals content below), --to (0=top … 1=bottom), or --until-text <string> (OCR each step, stop on sight)",
                 "presence": presenceBlock(),
             ]
         }
@@ -396,6 +414,34 @@ final class CommandRouter {
 
         isDriving = true
         defer { isDriving = false }
+
+        // The OCR loop: capture → look → step → repeat, stopping the moment the string is
+        // legible. Deterministic where a pixel delta over- or undershoots blindly.
+        if let needle = request.untilText {
+            guard !needle.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return ["ok": false, "error": "'untilText' must be a non-empty string to look for"]
+            }
+            let search = try await engine.scrollUntilText(
+                pid: pid,
+                label: request.label,
+                role: request.role,
+                needle: needle,
+                deltaY: request.dy ?? 1,
+                maxSteps: Constants.maximumScrollSearchSteps,
+            )
+            var reply = evidenceReply(search.evidence)
+            reply["steps"] = search.steps
+            if let before = search.barBefore { reply["scrollbarBefore"] = before }
+            if let after = search.barAfter { reply["scrollbarAfter"] = after }
+            if let found = search.foundAt {
+                // The sighting's screen rectangle: `click --x --y` at its center is the
+                // follow-up this exists for.
+                reply["foundAt"] = block(for: found)
+            }
+            if search.callAgain { reply["callAgain"] = true }
+            return reply
+        }
+
         let result = try await engine.scroll(
             pid: pid,
             label: request.label,
@@ -982,6 +1028,36 @@ final class CommandRouter {
         return reply
     }
 
+    /// Lists an app's menu bar status items, or presses one. Status items live in a separate
+    /// extras menu bar no window walk reaches, so this is the only ghost path to a
+    /// MenuBarExtra popover or status menu (measured gap, trial log 2026-08-22).
+    private func statusItem(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        guard request.press == true else {
+            let items = try await engine.statusItems(pid: pid)
+            return [
+                "ok": true,
+                "items": items.map { item -> [String: Any] in
+                    var row: [String: Any] = ["role": item.role, "label": item.label]
+                    if let frame = item.frame { row["frame"] = block(for: frame) }
+                    return row
+                },
+                "count": items.count,
+                "summary": items.isEmpty
+                    ? "no status items — this app installs none"
+                    : "\(items.count) status item(s); pass press:true to open one",
+                "presence": presenceBlock(),
+            ]
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.pressStatusItem(pid: pid, label: request.label)
+        var reply = evidenceReply(result.evidence)
+        reply["item"] = result.item
+        return reply
+    }
+
     // MARK: - Screenshots
 
     /// The default vision backend made concrete: capture pixels and hand them to the caller,
@@ -1130,6 +1206,16 @@ final class CommandRouter {
     /// when two exist is a coin flip on somebody's real windows, so it is refused with the
     /// candidates listed; bundle ids are the disambiguator, and they are matched exactly.
     private func resolve(_ request: Request) throws -> pid_t {
+        // An explicit pid is the address, not a hint: it wins over `app` outright, because
+        // it exists for exactly the case name resolution cannot answer (two instances of
+        // one bundle id). Refused when nothing runs there — acting on a recycled pid would
+        // drive an app nobody chose.
+        if let pid = request.pid {
+            guard NSRunningApplication(processIdentifier: pid) != nil else {
+                throw RouterError.appNotRunning("pid \(pid)")
+            }
+            return pid
+        }
         guard let name = request.app else { throw RouterError.missingApp }
         let applications = NSWorkspace.shared.runningApplications
 
@@ -1174,6 +1260,9 @@ final class CommandRouter {
         static let defaultWaitSeconds = 10.0
         /// A cold launch can legitimately take this long on a big Electron app.
         static let launchReadySeconds = 20.0
+        /// Each OCR-scroll step costs ~0.5 s (capture + fast OCR + settle); 12 stays well
+        /// inside the socket's 30 s, and the reply says callAgain when more document remains.
+        static let maximumScrollSearchSteps = 12
         /// An already-running app should answer almost immediately.
         static let relaunchReadySeconds = 5.0
     }

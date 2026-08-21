@@ -97,6 +97,19 @@ nonisolated struct AXElement {
         return (out as? [String]) ?? []
     }
 
+    /// The action that "clicks" this element: `AXPress` where offered, else `AXShowMenu`.
+    ///
+    /// Menu buttons (`AXMenuButton`, and the remote elements System Settings panes host in
+    /// `AXOpaqueProviderGroup`s) expose only `AXShowMenu` — a plain press-only check reported
+    /// "element exposes no press action" for a control a human clicks like any button
+    /// (measured on the Wallpaper pane's "Add Video", 2026-08-20). Nil means neither exists.
+    var pressishAction: String? {
+        let names = actionNames
+        if names.contains(kAXPressAction) { return kAXPressAction }
+        if names.contains(kAXShowMenuAction) { return kAXShowMenuAction }
+        return nil
+    }
+
     var children: [AXElement] {
         ((attribute(kAXChildrenAttribute) as? [AXUIElement]) ?? []).map(AXElement.init)
     }
@@ -126,6 +139,16 @@ nonisolated struct AXElement {
 
     var menuBar: AXElement? {
         guard let bar = attribute(kAXMenuBarAttribute),
+              CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(bar as! AXUIElement)
+    }
+
+    /// The menu bar's right-hand side: the app's status items (`NSStatusItem`s) live here, in
+    /// a separate bar the ordinary window walk never reaches. Each child is an
+    /// `AXMenuBarItem` with a real on-screen frame — unlike closed menu items — and `AXPress`
+    /// on one opens its menu or popover.
+    var extrasMenuBar: AXElement? {
+        guard let bar = attribute("AXExtrasMenuBar"),
               CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
         return AXElement(bar as! AXUIElement)
     }

@@ -160,15 +160,35 @@ enum MCPServer {
             frame moving. `to` (0=top … 1=bottom) writes the vertical scroll bar where one \
             exists — some AppKit views expose one; Chromium/Electron never do. Bare `dy`/`dx` \
             falls back to posted wheel events, which every toolkit measured so far ignores — \
-            an honest noEffect there means "use label instead", not "retry harder".
+            an honest noEffect there means "use label instead", not "retry harder". \
+            `untilText` scrolls deterministically to a string the AX tree may not even \
+            contain: each step captures the window and OCRs it locally, stopping the moment \
+            the text is legible; the reply's foundAt rectangle is ready for a coordinate \
+            click, and callAgain:true means the step budget ran out with document left.
             """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Element to bring into view (the mechanism that actually works)"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
-                "dy": ["type": "number", "description": "Vertical pixel delta; positive reveals content below"],
+                "dy": ["type": "number", "description": "Vertical pixel delta; positive reveals content below (with untilText: just the direction sign)"],
                 "dx": ["type": "number", "description": "Horizontal pixel delta"],
                 "to": ["type": "number", "description": "Absolute vertical position, 0 (top) to 1 (bottom)"],
+                "untilText": ["type": "string", "description": "Scroll until this string is legible in the frame (local OCR per step; needs Screen Recording)"],
+            ], required: ["app"],
+        ),
+        tool(
+            "statusitem",
+            """
+            List an app's menu bar status items, or press one (press:true) to open its menu \
+            or popover — cursor-free. Status items live in a separate extras menu bar that \
+            no window walk or find reaches, so this is the only ghost path to a MenuBarExtra. \
+            With several items, `label` picks one. Evidence: the target's window count — a \
+            popover or status menu opening is a window appearing.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "label": ["type": "string", "description": "Pick one item by label when the app installs several"],
+                "press": ["type": "boolean", "description": "Press the item (default: just list)"],
             ], required: ["app"],
         ),
         tool(
@@ -296,7 +316,16 @@ enum MCPServer {
         _ name: String, _ description: String,
         properties: [String: Any], required: [String]
     ) -> [String: Any] {
-        [
+        // Every tool that targets an app also accepts a pid, uniformly: it overrides `app`
+        // and is the only unambiguous address when two instances share a bundle id.
+        var properties = properties
+        if properties["app"] != nil, properties["pid"] == nil {
+            properties["pid"] = [
+                "type": "number",
+                "description": "Target this process id directly (overrides 'app') — for when two running instances share a name or bundle id",
+            ]
+        }
+        return [
             "name": name,
             "description": description,
             "inputSchema": [

@@ -213,11 +213,15 @@ breaks the app.
 
 ## 8. Suite integration
 
-- **adrafinil** — reuse Dantrolene's `AdrafinilBridge` pattern verbatim (refcounted keys, TTL,
-  key rotation, App Store compile-out). **Requires a new display-class hold**: Adrafinil today
-  keeps the *system* awake while letting the *display* sleep, which is exactly the state that
-  collapses every AX tree. Until that ships, `DisplayWake` falls back to
-  `IOPMAssertionDeclareUserActivity`.
+- **adrafinil** — `AdrafinilBridge` (Dantrolene's pattern: rotated keys, TTL, serialized CLI
+  calls, synchronous release on quit) holds a **display-class** hold (`acquire --display`,
+  shipped in Adrafinil 2026-08) for the whole agent session: placed on the first
+  perceiving/acting command, renewed while commands keep arriving, released after ~4 quiet
+  minutes. Adrafinil's daemon owns the policy that outranks it (pause, idle release, thermal
+  cutouts). Without the CLI the same lifecycle runs on a process-local IOPM assertion —
+  enhancement, never dependency. Rung 0's per-action wake stays: it is what wakes an
+  already-dark panel. Measured 2026-08-22: `IOPMAssertionDeclareUserActivity` does **not**
+  reset `HIDIdleTime`, so neither wake nor hold corrupts presence readings.
 - **dantrolene** — owns lock policy; rocuronium defers rather than duplicating. Lock alone is
   harmless to agents; display sleep is not.
 - **Test Display.app** — park driven windows on the virtual screen for true isolation.

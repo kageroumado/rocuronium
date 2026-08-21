@@ -536,6 +536,106 @@ actor Engine {
         kill(pid, 0) == -1 && errno == ESRCH
     }
 
+    // MARK: - Status items
+
+    /// The app's menu bar status items (`NSStatusItem`s), which live in a separate extras
+    /// menu bar the window walk never reaches — `find role:AXMenuBarItem` returns nothing
+    /// for them (measured on a MenuBarExtra popover app, 2026-08-22). Pid-scoped by
+    /// construction, so two instances sharing a bundle id stay distinguishable.
+    func statusItems(pid: pid_t) throws -> [ElementDescriptor] {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let bar = AXElement(pid: pid).extrasMenuBar else { return [] }
+        return bar.children.map { descriptor(for: $0, depth: 1) }
+    }
+
+    /// Presses a status item by `AXPress`, opening its menu or popover without the cursor.
+    ///
+    /// The press is performed directly rather than through the ladder: an item whose press
+    /// opens an NSMenu can block the AX call in menu tracking until the messaging timeout,
+    /// so the return code routinely reads as failure for a press that fully worked. The
+    /// read-back that decides is the window count — a menu or popover appearing is a window
+    /// appearing, owned by the same process.
+    func pressStatusItem(pid: pid_t, label: String?) async throws -> (evidence: Evidence, item: String) {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let bar = AXElement(pid: pid).extrasMenuBar, !bar.children.isEmpty else {
+            throw EngineError.notFound("a status item for pid \(pid) — the app installs none")
+        }
+        let items = bar.children
+        let target: AXElement
+        if let label {
+            let needle = label.lowercased()
+            let matches = items.filter { $0.label.lowercased().contains(needle) }
+            guard matches.count <= 1 else {
+                throw EngineError.ambiguous(label, matches.map { "\($0.role) '\($0.label)'" })
+            }
+            guard let match = matches.first else {
+                throw EngineError.notFound("a status item labeled '\(label)' — this app has: "
+                    + items.map { "'\($0.label)'" }.joined(separator: ", "))
+            }
+            target = match
+        } else {
+            guard items.count == 1 else {
+                throw EngineError.ambiguous(
+                    "the status item",
+                    items.map { "\($0.role) '\($0.label)'" },
+                )
+            }
+            target = items[0]
+        }
+
+        let itemName = target.label
+        let cursorBefore = EventPoster.cursorLocation
+        let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
+        let windowsBefore = onScreenWindowCount(pid)
+        let code = target.perform()
+        cache.invalidate(pid: pid)
+
+        var attempts: [Evidence.Attempt] = [.init(
+            rung: .accessibility,
+            outcome: code == .success
+                ? "press accepted"
+                : "press returned \(code.rawValue) — for a status item this can mean the AX call "
+                    + "blocked in menu tracking, not that nothing happened; the window count decides",
+        )]
+        var verdict = Evidence.Verdict.unverifiable
+        var readback: String?
+        for _ in 0 ..< 6 {
+            let now = onScreenWindowCount(pid)
+            if now != windowsBefore {
+                verdict = .confirmed
+                readback = "the target's on-screen window count changed \(windowsBefore) → \(now)"
+                attempts.append(.init(
+                    rung: .accessibility,
+                    outcome: "window count \(windowsBefore) → \(now) — its menu or popover is open",
+                ))
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+
+        let cursorAfter = EventPoster.cursorLocation
+        let frontAfter = await MainActor.run { EventPoster.frontmostBundleID }
+        let targetBundle = await MainActor.run {
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        }
+        let evidence = Evidence(
+            action: "statusItem(press)",
+            target: "AXMenuBarItem '\(itemName)'",
+            rung: .accessibility,
+            verdict: verdict,
+            readback: readback,
+            pixelDelta: nil,
+            focusBefore: nil,
+            focusAfter: nil,
+            cursorMoved: hypot(cursorAfter.x - cursorBefore.x, cursorAfter.y - cursorBefore.y) >= 1,
+            frontmostChanged: frontAfter != frontBefore,
+            frontmostBecameTarget: frontAfter != frontBefore && frontAfter == targetBundle,
+            attempts: attempts,
+            referral: nil,
+        )
+        return (evidence, itemName)
+    }
+
     /// Posts a bare named key (Escape, Return, arrows…) to the process — the verb for keys
     /// that are neither text (`type`) nor menu-reachable (`shortcut`). The measured need:
     /// dismissing a native file-picker dialog wants a plain Escape, which no other verb
@@ -800,6 +900,184 @@ actor Engine {
         return (evidence, barBefore, barAfter)
     }
 
+    struct ScrollSearchResult: Sendable {
+        let evidence: Evidence
+        let barBefore: Double?
+        let barAfter: Double?
+        let steps: Int
+        /// Screen rectangle of the sighted text, ready to aim a click at.
+        let foundAt: ElementDescriptor.Frame?
+        /// The step budget ran out with more document left — call again to keep looking.
+        let callAgain: Bool
+    }
+
+    /// Scrolls until OCR sights `needle` in the frame — deterministic where pixel deltas
+    /// blindly over- or undershoot.
+    ///
+    /// Each iteration captures the target's window (window-true, occlusion-proof), OCRs it
+    /// locally (~100 ms, `TextSighting`), and stops the moment the text is legible — so the
+    /// loop terminates on *sight*, not on a guessed distance. Sightings only count inside
+    /// the scroll area's own rectangle, or a match in a sidebar would stop a search of the
+    /// list next to it. The stepper is the scroll bar where one is exposed (step sized from
+    /// the bar's thumb, with overlap, so a screenful can never skip past the needle between
+    /// frames); posted wheels are the fallback, and two consecutive frames with identical
+    /// legible text end the loop honestly — the end of the document, or a toolkit that
+    /// ignores posted wheels.
+    func scrollUntilText(
+        pid: pid_t,
+        label: String?,
+        role: String?,
+        needle: String,
+        deltaY: Double,
+        maxSteps: Int
+    ) async throws -> ScrollSearchResult {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard ScreenCapture.isPermitted else {
+            throw EngineError.pathRefused(
+                "'untilText' needs Screen Recording — the loop is OCR over captured frames. Grant it, or use 'scroll' with a label (AXScrollToVisible) instead.",
+            )
+        }
+        AXElement(pid: pid).enableManualAccessibility()
+        cache.evictDeadProcesses(livePIDs: livePIDs())
+
+        let area = try resolveScrollArea(pid: pid, label: label, role: role)
+        let target = "\(area.role) '\(area.label)'"
+        let areaFrame = area.frame
+        let bar = verticalScrollBar(of: area)
+        let barBefore = bar?.numberValue
+        let cursorBefore = EventPoster.cursorLocation
+        let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
+        let direction: Double = deltaY < 0 ? -1 : 1
+        // Step by most of a viewport, never a full one: the overlap is what guarantees text
+        // cannot scroll through unseen between two frames. The thumb's share of its track is
+        // the viewport's share of the document; without a readable thumb, small fixed steps.
+        let stepFraction = max(0.02, 0.8 * (thumbFraction(of: bar) ?? 0.075))
+
+        var attempts: [Evidence.Attempt] = []
+        var steps = 0
+        var previousFingerprint: String?
+        var stalledFrames = 0
+        var reachedEnd = false
+
+        while steps < maxSteps, !Task.isCancelled {
+            guard let frame = try? windowFrame(pid: pid),
+                  let capture = try? await ScreenCapture.windowImage(
+                      ownedBy: pid,
+                      near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
+                  )
+            else {
+                attempts.append(.init(rung: .accessibility, outcome: "could not capture the window to OCR"))
+                break
+            }
+            let sightings = TextSighting.sight(in: capture.image)
+            let inArea = sightings.filter { sighting in
+                guard let areaFrame else { return true }
+                return TextSighting.screenRect(of: sighting, in: capture.windowFrame)
+                    .intersects(areaFrame)
+            }
+            if let hit = TextSighting.find(needle, in: inArea) {
+                let rect = TextSighting.screenRect(of: hit, in: capture.windowFrame)
+                attempts.append(.init(
+                    rung: bar != nil ? .accessibility : .postedEvent,
+                    outcome: "OCR sighted '\(hit.text.prefix(60))' after \(steps) step(s)",
+                ))
+                cache.invalidate(pid: pid)
+                return ScrollSearchResult(
+                    evidence: await finishScroll(
+                        action: "scroll(untilText: '\(needle)')", target: target,
+                        rung: bar != nil ? .accessibility : .postedEvent,
+                        verdict: .confirmed,
+                        readback: "sighted at (\(Int(rect.midX)), \(Int(rect.midY))) — line: '\(hit.text.prefix(80))'",
+                        attempts: attempts,
+                        cursorBefore: cursorBefore,
+                        frontBefore: frontBefore,
+                        area: area, pid: pid,
+                    ),
+                    barBefore: barBefore, barAfter: bar?.numberValue, steps: steps,
+                    foundAt: .init(x: rect.origin.x, y: rect.origin.y, width: rect.width, height: rect.height),
+                    callAgain: false,
+                )
+            }
+
+            // Nothing changing between frames means scrolling has stopped working: the end
+            // of the document, or a target that ignores the mechanism. Two identical frames,
+            // not one — a slow renderer can serve a stale frame once.
+            let fingerprint = TextSighting.fingerprint(of: inArea)
+            if fingerprint == previousFingerprint {
+                stalledFrames += 1
+                if stalledFrames >= 2 { break }
+            } else {
+                stalledFrames = 0
+            }
+            previousFingerprint = fingerprint
+
+            if let bar, let position = bar.numberValue {
+                let next = min(1, max(0, position + direction * stepFraction))
+                if abs(next - position) < 0.0005 {
+                    reachedEnd = true
+                    break
+                }
+                bar.setValue(next)
+            } else if let areaFrame {
+                await EventPoster.scroll(
+                    deltaX: 0, deltaY: direction * 400,
+                    at: CGPoint(x: areaFrame.midX, y: areaFrame.midY), pid: pid,
+                )
+            } else {
+                attempts.append(.init(rung: .postedEvent, outcome: "no scroll bar and no frame to aim wheels at"))
+                break
+            }
+            steps += 1
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+
+        cache.invalidate(pid: pid)
+        let barAfter = bar?.numberValue
+        let exhausted = steps >= maxSteps && !reachedEnd
+        let barIgnored = bar == nil && stalledFrames >= 2
+        attempts.append(.init(
+            rung: bar != nil ? .accessibility : .postedEvent,
+            outcome: reachedEnd
+                ? "scanned to the \(direction > 0 ? "end" : "top") without sighting '\(needle)'"
+                : exhausted
+                    ? "step budget spent (\(steps)); more document remains — call again to continue"
+                    : "frames stopped changing after \(steps) step(s) — the end of the content, or the target ignores this scroll mechanism",
+        ))
+        // A posted-wheel loop that provably moved nothing is a noEffect, and finishScroll
+        // attaches the web-content referral to that verdict on its own.
+        let evidence = await finishScroll(
+            action: "scroll(untilText: '\(needle)')", target: target,
+            rung: bar != nil ? .accessibility : .postedEvent,
+            verdict: barIgnored ? .noEffect : .unverifiable,
+            readback: barAfter.map { after in
+                barBefore.map { "scrollbar \(String(format: "%.3f", $0)) → \(String(format: "%.3f", after))" }
+                    ?? "scrollbar at \(String(format: "%.3f", after))"
+            },
+            attempts: attempts,
+            cursorBefore: cursorBefore,
+            frontBefore: frontBefore,
+            area: area, pid: pid,
+        )
+        return ScrollSearchResult(
+            evidence: evidence,
+            barBefore: barBefore, barAfter: barAfter, steps: steps,
+            foundAt: nil,
+            callAgain: exhausted,
+        )
+    }
+
+    /// The scroll bar thumb's share of its track ≈ the viewport's share of the document.
+    /// Read from the bar's `AXValueIndicator` child; nil when the bar hides its thumb from
+    /// accessibility.
+    private func thumbFraction(of bar: AXElement?) -> Double? {
+        guard let bar, let barFrame = bar.frame, barFrame.height > 0 else { return nil }
+        guard let thumb = bar.children.first(where: { $0.role == "AXValueIndicator" }),
+              let thumbFrame = thumb.frame
+        else { return nil }
+        let fraction = thumbFrame.height / barFrame.height
+        return (0.005 ... 1).contains(fraction) ? fraction : nil
+    }
+
     private func finishScroll(
         action: String, target: String, rung: Evidence.Rung, verdict: Evidence.Verdict,
         readback: String?, attempts: [Evidence.Attempt],
@@ -912,13 +1190,13 @@ actor Engine {
     /// pressable is what the caller meant; for text the deepest element is right, so the
     /// ascent is per-action, not part of resolution.
     private nonisolated func ascendToPressable(_ element: AXElement) -> AXElement {
-        if element.actionNames.contains(kAXPressAction) { return element }
+        if element.pressishAction != nil { return element }
         var current = element
         for _ in 0 ..< 5 {
             guard let parent = current.parent else { break }
             // A window or the app itself is never the button the caller aimed at.
             if ["AXWindow", "AXSheet", "AXApplication"].contains(parent.role) { break }
-            if parent.actionNames.contains(kAXPressAction) { return parent }
+            if parent.pressishAction != nil { return parent }
             current = parent
         }
         return element

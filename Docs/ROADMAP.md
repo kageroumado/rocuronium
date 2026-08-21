@@ -85,6 +85,11 @@ specs moved to the Done section. What the session measured, and what it left ope
    sheet's button by label (`click --label Cancel --role button` — verified working)
    instead of Escape. Possible future rung: a session-level key post while the target
    is frontmost, gated like hardware input since it hits global focus.
+   More of the same, measured 2026-08-22: an *open menu* is unreachable by every ghost
+   mechanism — posted Escape to the host **and** to the menu-owning appex both no-op
+   (menu tracking runs its own event loop), and re-pressing the menu button does not
+   toggle. Once a menu is open the ghost options are "choose an item" or "quit the
+   host"; in the guide.
 7. ~~An action whose consequence is a window or element appearing/vanishing reads as
    failure~~ — **DONE 2026-08-20.** `Evidence.confirmedByWindowCountChange` is the
    read-back for the window-list family: `press` (menu/shortcut), `act` (click), and
@@ -96,9 +101,12 @@ specs moved to the Done section. What the session measured, and what it left ope
    cases (2026-08-09, away run): Cancel dismissing its own sheet read `noEffect`;
    File ▸ New read `unverifiable` while opening a window; a close button read
    `unverified` — all invisible to element-rect, selection, and same-window pixels.
-8. Two instances of the **same bundle id** (`open -n`) are refused as ambiguous — right
-   call, but the refusal's advice (target by bundle id) has nothing to offer there. If
-   this happens in practice, a `--pid` locator is the answer; wait for a real occurrence.
+8. ~~Two instances of the same bundle id refused with no way through~~ — **DONE
+   2026-08-22.** `--pid` on every app-taking verb (CLI, socket, and MCP — the `tool()`
+   helper adds it uniformly wherever `app` exists); it overrides `app` outright and a
+   dead pid is refused. Verified by execution: `read --pid <TextEdit>` dumped the
+   document, pid 99999 refused — and it was immediately useful in anger, delivering an
+   Escape to a System Settings *appex* pid that has no app name at all.
 9. ~~Label queries match menu items~~ — **DONE 2026-08-20.** Exclusion, not demotion:
    demoting menu matches below label matches would not have fixed the measured case
    (`wait --label References` matched the History-menu entry precisely because no
@@ -147,6 +155,10 @@ a line in the trial log below — those lines are the Phase-1 gaps that were mis
 - 2026-08-20 · locate YouTube's fullscreen button in Refrax web content · `find --app Refrax "Full screen"` returned two unrelated search fields (AXComboBox 'Search', AXTextField) and never the AXButton 'Full screen (f)' — while `click --label "Full screen"` on the same tree correctly matched it (ambiguous with the traffic-light 'full screen button'); find and click disagree on matching semantics, and find's fuzzy results didn't include the exact-substring hit · `read | rg` to discover the true label, then `click --label "Full screen (f)"` — which worked perfectly (ghost AX press on an inactive, covered window; the whole reason for the task). Same-day win worth noting: that click is something Peekaboo could only do after raising the window.
 - 2026-08-10 · verify Sevoflurane's Steam supernav hover flow (open on hover, keep-open while gliding into the flyout, dismiss on mouse-away) · no way to *move* a cursor at all — hover states, hover-intent timers, and enter/leave chains are untestable without real pointer motion, so every iteration burned a human test pass · Kiri's hands, repeatedly. **Feature ask (Kiri, 2026-08-10): simulated cursor paths — move from point to point along a straight line or a curve (Bézier, like vector editors draw), at a controllable speed, optionally with left/right button held, so hover/drag/glide flows can be driven and verified without touching the real cursor.** Note the ghost-rung tension: hover requires the system cursor position to actually change (tracking areas follow the real pointer), so this likely lives on the hardware rung, presence-gated like other cursor-taking verbs — or drives per-app synthetic mouse-moved event streams (CGEvent posts with per-event positions, cursor unmoved) where the target app's tracking allows it. **RESOLVED 2026-08-20** — the tension was measured (ghost motion does not exist on macOS) and the verbs shipped on the hardware rung: see Done.
 
+- 2026-08-20 · press an "Add Video" AXMenuButton inside System Settings' Wallpaper pane (an AXOpaqueProviderGroup hosting remote elements from the pane appex) · `find` sees the element fine, but `click` reports "element exposes no press action" and the posted-event fallback is noEffect — menu buttons need the AXShowMenu action, which no rung attempts; posted events also appear to go to the host System Settings pid while hit-testing lives in the appex process · nothing did it cursor-free — a hand-rolled trusted AX walker couldn't even reach the element (opaque provider group children aren't in AXChildren for a plain walker, and walking the appex pid directly yields a bare app element), so rocuronium's traversal is the only tool that can see these elements and just lacks an AXShowMenu/press verb on them — **ADDRESSED 2026-08-22**: the press rung performs `AXShowMenu` when no `AXPress` exists (`AXElement.pressishAction`), and the click on the Wallpaper pane's opaque-provider menu button verifiably opened its menu (region screenshot). Two residues, both in the guide: the menu window belongs to the *appex*, so the window-count read-back on the targeted app misses it and the verdict honestly stays `unverifiable`; and an open menu has no ghost dismissal (see loose end 6's 2026-08-22 addendum)
+- 2026-08-22 · open a MenuBarExtra popover (Phosphene status item) to drive its controls · `find role:AXMenuBarItem` returns no matches for the app (status items live in a separate extras menu bar the walker never reaches), so there is no ghost press for a status item at all · `mcp__peekaboo__click` at menu-bar coordinates — which steals the cursor, exactly what presence-gating forbids. Gap: enumerate + AXPress NSStatusItems, pid-scoped so two instances sharing a bundle id stay distinguishable. — **ADDRESSED same day**: new `statusitem` verb reads the app element's `AXExtrasMenuBar` (list, or `--press` by AXPress with the window count as read-back, since the press call itself can block in menu tracking). Verified on the original Phosphene case: popover opened (windows 1 → 2, confirmed) and toggled closed (2 → 1), cursor untouched.
+- 2026-08-20 · same task, hardware fallback · `click` with allowHardwareInput:true stayed on the posted-event rung (presence: user present/idle, mayTakeCursor false) — correct gating, noted here only to record that the hardware rung was the sole remaining path and etiquette blocked it · deferred to the human at the keyboard
+
 **All six trial-log gaps addressed 2026-08-09 (c89eefa)** (verified by execution on the
 installed build; the trial continues — new fallback moments still get lines above):
 
@@ -183,15 +195,30 @@ delta softens an element-rect `noEffect` to `unverifiable` — conflicting evide
 leaves a refutation standing. Getting such clicks all the way to `confirmed` needs a
 semantic channel, which is phase 4's vision tier.
 
-## Phase 3 — Display hold (overnight capability; ~3 days, mostly in adrafinil)
+## Phase 3 — Display hold — **DONE 2026-08-22** (adrafinil side shipped 2026-08)
 
-Full spec: `~/Developer/adrafinil/Docs/DISPLAY-HOLD-SPEC.md` (committed 344b15f). Five
-must-verify measurements before shipping, the first being whether
-`IOPMAssertionDeclareUserActivity` resets `HIDIdleTime` — rocuronium's own `ensureAwake`
-has that presence-integrity exposure *today*, so measurement 1 is worth running even
-before the adrafinil work starts.
+Adrafinil shipped display-class holds (`hold --display`, `acquire --display`,
+`keep_display_awake` on MCP); rocuronium's side is `AdrafinilBridge`: a session-level
+display hold placed on the first perceiving/acting command, renewed with rotated keys
+while commands keep arriving, released after ~4 quiet minutes, swept synchronously on
+quit. Falls back to a process-local IOPM assertion when the CLI is missing **or the
+daemon is down** (measured on this machine: installed CLI, dead daemon, soft-failing
+acquire — the bridge switches to `internal` rather than believing exit 0). `status`
+reports `displayHold: adrafinil | internal | none`.
+
+**Measurement 1 answered 2026-08-22**: `IOPMAssertionDeclareUserActivity` does **not**
+reset `HIDIdleTime` (19.33 s before → 19.64 s at +0.3 s → 21.65 s at +2.3 s, kept
+counting). `ensureAwake` never had the presence-integrity exposure; neither does the
+hold.
 
 ## Phase 4 — Vision tiers (the AX-dead 18%; ~1 week)
+
+**First slice shipped 2026-08-22**: `TextSighting` (Vision fast OCR, no model download)
+powering `scroll --until-text` — capture the window, OCR locally (~100 ms/frame), stop
+the moment the string is legible; the reply carries the sighting's screen rectangle for
+a coordinate click. Verified: needle at line 150 of a 200-line TextEdit doc sighted in
+7 bar-steps / 3.7 s, honest scanned-to-the-end on an absent needle. This is the OCR
+half of the detector tier; the YOLO half and the VLM tier remain below.
 
 Research: `~/Developer/Research/gui-grounding-models-2026-08.md` (harness in
 `gui-grounding-2026-08/`). The January model table in ARCHITECTURE §7 is invalidated —
@@ -221,6 +248,23 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 - The CLI lives in `Contents/Resources`, never `Contents/MacOS`.
 
 ## Done
+
+- **2026-08-22 — release-readiness batch: status items, AXShowMenu, `--pid`, the display
+  hold, and OCR scrolling.** Five gaps closed in one pass, all verified by execution on
+  the installed build:
+  - `statusitem` (extras menu bar; the 2026-08-22 trial gap) — Phosphene popover opened
+    and closed, window count as read-back both ways.
+  - `AXShowMenu` as a press (the 2026-08-20 trial gap) — the Wallpaper pane's
+    opaque-provider menu button visibly opened its menu; appex-owned menu windows and
+    the no-ghost-dismissal residue documented in the guide.
+  - `--pid` targeting everywhere (loose end 8) — including MCP, added uniformly by the
+    `tool()` helper.
+  - `AdrafinilBridge` display-class session hold (Phase 3's rocuronium side) with
+    rotated keys, quit sweep, and a fallback to a process-local assertion measured
+    against a dead daemon; measurement 1 answered (no `HIDIdleTime` reset).
+  - `scroll --until-text` on Vision fast OCR (`TextSighting`, Phase 4's first slice) —
+    needle at line 150 sighted in 7 steps/3.7 s, honest end-of-document on a miss,
+    `foundAt` rectangle ready for a coordinate click.
 
 - **2026-08-20 · 506e187 — cursor paths: `move` and `drag` (the 2026-08-10 trial-log ask).**
   Measurement first (`~/Developer/Experiments/cursor-paths/RESULTS.md`): per-pid posted

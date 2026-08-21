@@ -27,6 +27,8 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium click      --app <name> [--label <text>] [--role <r>] [--x <n> --y <n>]
   rocuronium scroll     --app <name> --label <text> --dy <px>   (bring element into view)
   rocuronium scroll     --app <name> (--dy <px> [--dx <px>] | --to <0..1>)
+  rocuronium scroll     --app <name> --until-text <string> [--dy <±px: direction>]
+  rocuronium statusitem --app <name> [--label <text>] [--press]
   rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
   rocuronium menu       --app <name> --path "File > Export" [--resolve-only] [--confirm]
   rocuronium key        --app <name> --keys <escape|shift+tab|cmd+down|…>
@@ -45,6 +47,7 @@ rocuronium — drive this Mac without taking the cursor
 
 Options:
   --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
+  --pid <n>                target a process directly (when two instances share a bundle id)
   --json                   print the raw reply
 
 'read' dumps an app's text via accessibility — no pixels, works behind a locked screen.
@@ -59,6 +62,12 @@ refused while a human is present unless --confirm. 'display' leases the headless
 screen; 'park' moves an app's window onto it (or to an explicit point — the reply carries
 the previous position, which is how you put it back). 'screenshot' hands the pixels to
 you, the caller: your model does the looking.
+
+'scroll --until-text' captures the window each step, OCRs it locally, and stops the moment
+the string is legible — deterministic where a pixel delta overshoots; the reply carries the
+sighting's screen rectangle, ready for a coordinate click. 'statusitem' lists an app's menu
+bar status items (a separate bar no window walk reaches) and --press opens one's menu or
+popover, cursor-free.
 
 'move' glides the REAL cursor along a path (straight line, or a curve through --via
 waypoints) and leaves it on the destination — the way to drive hover menus, tooltips, and
@@ -109,6 +118,8 @@ if command == "display", let action = arguments.first, !action.hasPrefix("-") {
 for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
+// Kebab-case on the command line, camelCase on the wire.
+if let found = value(for: "until-text") { payload["untilText"] = found }
 // The path verbs speak in points: --from/--to are "x,y" strings there, while scroll's
 // --to is the numeric 0…1 fraction the loop below parses.
 let pathVerb = command == "move" || command == "drag"
@@ -116,7 +127,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -131,6 +142,7 @@ for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration"] +
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--submit") { payload["submit"] = true }
 if arguments.contains("--gone") { payload["gone"] = true }
+if arguments.contains("--press") { payload["press"] = true }
 // `shortcut` can reach Log Out from any app, so seeing what a shortcut resolves to is a
 // first-class operation, and pressing a destructive item takes a deliberate second flag.
 if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
@@ -297,6 +309,14 @@ case "park":
 case "screenshot":
     print(reply["path"] as? String ?? "done")
 
+case "statusitem" where reply["items"] != nil:
+    for item in reply["items"] as? [[String: Any]] ?? [] {
+        let frame = item["frame"] as? [String: Any] ?? [:]
+        let position = frame.isEmpty ? "" : "  @(\(Int(frame["x"] as? Double ?? 0)),\(Int(frame["y"] as? Double ?? 0)))"
+        print("\(item["role"] ?? "?")  '\(item["label"] ?? "")'\(position)")
+    }
+    print(reply["summary"] as? String ?? "")
+
 default:
     print(reply["summary"] as? String ?? "done")
     // Which menu item delivered a shortcut — "Edit ▸ Select All", not just "it was pressed".
@@ -306,7 +326,16 @@ default:
     if let hazard = reply["hazard"] as? String { print("⚠︎ this item \(hazard)") }
     if let note = reply["note"] as? String { print("note: \(note)") }
     if let readback = reply["readback"] as? String, !readback.isEmpty {
-        print("read back: \(readback.prefix(60))")
+        print("read back: \(readback.prefix(80))")
+    }
+    // Where OCR sighted the text — the coordinates a follow-up click aims at.
+    if let found = reply["foundAt"] as? [String: Any] {
+        let x = (found["x"] as? Double ?? 0) + (found["w"] as? Double ?? 0) / 2
+        let y = (found["y"] as? Double ?? 0) + (found["h"] as? Double ?? 0) / 2
+        print("found at: center (\(Int(x)), \(Int(y)))")
+    }
+    if reply["callAgain"] as? Bool == true {
+        print("more document remains — call again to keep searching")
     }
     // The whole point of the tool: say plainly whether the human's cursor was touched.
     // Movement under a ghost rung is the user's own hand — warning about it would train
