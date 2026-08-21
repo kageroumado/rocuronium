@@ -1,0 +1,635 @@
+<meta charset="utf-8">
+<title>rocuronium — combined presence demo</title>
+<style>
+  :root {
+    --ground: #F5F5FA;
+    --panel: #FFFFFF;
+    --panel-2: #EDEDF5;
+    --ink: #191922;
+    --ink-2: #5F5F72;
+    --ink-3: #92929F;
+    --hair: #E2E2EC;
+    --agent: #5E5CE6;
+    --agent-deep: #4644B8;
+    --agent-soft: #E9E8FC;
+    --agent-ink: #FFFFFF;
+    --agent-glow: rgba(94, 92, 230, .45);
+    --agent-trail: rgba(94, 92, 230, .32);
+    --stop: #D64045;
+    --ghost-body: #FFFFFF;
+    --ghost-eye: #4644B8;
+    --wall-a: #BFD0EE; --wall-b: #D8CDEC; --wall-c: #EED9DC;
+    --mb-bg: rgba(250, 250, 253, .85);
+    --mb-ink: #1D1D26;
+    --menu-bg: rgba(252, 252, 254, .92);
+    --win-bg: #FBFBFD;
+    --win-2: #F1F1F6;
+    --win-ink: #1B1B22;
+    --win-ink2: #73737F;
+    --win-hair: #E5E5EC;
+    --win-sel: #E9E8FC;
+    --field-bg: #FFFFFF;
+    --tl-r: #FF5F57; --tl-y: #FEBC2E; --tl-g: #28C840;
+    --cur-fill: #101016; --cur-edge: #FFFFFF;
+    --chord-bg: rgba(22, 20, 44, .78);
+    --chord-ink: #FFFFFF;
+    --font-ui: system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    --font-round: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+    --font-data: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --shadow: 0 1px 2px rgba(20, 18, 40, .06), 0 14px 44px rgba(30, 25, 70, .12);
+    --win-shadow: 0 1px 3px rgba(15, 15, 35, .18), 0 18px 48px rgba(15, 15, 35, .22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121218; --panel: #1A1A23; --panel-2: #22222E;
+      --ink: #F0F0F6; --ink-2: #ABABBE; --ink-3: #757585; --hair: #2E2E3C;
+      --agent: #7D7AFF; --agent-deep: #5A57E0; --agent-soft: #2B2954; --agent-ink: #FFFFFF;
+      --agent-glow: rgba(125, 122, 255, .5); --agent-trail: rgba(125, 122, 255, .38);
+      --stop: #FF6B6E;
+      --ghost-body: #F4F4FC; --ghost-eye: #3D3B96;
+      --wall-a: #232A4D; --wall-b: #34274E; --wall-c: #43254A;
+      --mb-bg: rgba(28, 28, 38, .85); --mb-ink: #E9E9F1;
+      --menu-bg: rgba(34, 34, 46, .94);
+      --win-bg: #212129; --win-2: #2A2A35; --win-ink: #ECECF3; --win-ink2: #9A9AAB;
+      --win-hair: #353542; --win-sel: #34325E; --field-bg: #191920;
+      --cur-fill: #F2F2F8; --cur-edge: #101016;
+      --chord-bg: rgba(8, 7, 20, .8); --chord-ink: #F2F1FB;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 18px 50px rgba(0, 0, 0, .55);
+      --win-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 22px 60px rgba(0, 0, 0, .6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #121218; --panel: #1A1A23; --panel-2: #22222E;
+    --ink: #F0F0F6; --ink-2: #ABABBE; --ink-3: #757585; --hair: #2E2E3C;
+    --agent: #7D7AFF; --agent-deep: #5A57E0; --agent-soft: #2B2954; --agent-ink: #FFFFFF;
+    --agent-glow: rgba(125, 122, 255, .5); --agent-trail: rgba(125, 122, 255, .38);
+    --stop: #FF6B6E;
+    --ghost-body: #F4F4FC; --ghost-eye: #3D3B96;
+    --wall-a: #232A4D; --wall-b: #34274E; --wall-c: #43254A;
+    --mb-bg: rgba(28, 28, 38, .85); --mb-ink: #E9E9F1;
+    --menu-bg: rgba(34, 34, 46, .94);
+    --win-bg: #212129; --win-2: #2A2A35; --win-ink: #ECECF3; --win-ink2: #9A9AAB;
+    --win-hair: #353542; --win-sel: #34325E; --field-bg: #191920;
+    --cur-fill: #F2F2F8; --cur-edge: #101016;
+    --chord-bg: rgba(8, 7, 20, .8); --chord-ink: #F2F1FB;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 18px 50px rgba(0, 0, 0, .55);
+    --win-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 22px 60px rgba(0, 0, 0, .6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--font-ui); line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(16px, 4vw, 40px) 16px 72px;
+  }
+  .shell { max-width: 980px; margin: 0 auto; }
+
+  .brandline { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+  .glyph { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(150deg, var(--agent), var(--agent-deep)); display: grid; place-items: center; box-shadow: 0 3px 10px var(--agent-glow); }
+  .glyph svg { width: 18px; height: 18px; }
+  .brandline b { font-family: var(--font-round); font-weight: 800; font-size: 15px; }
+  .brandline span { color: var(--ink-3); font-size: 13px; }
+
+  h1 { font-family: var(--font-round); font-weight: 800; font-size: clamp(25px, 5vw, 34px); letter-spacing: -.5px; line-height: 1.1; margin: 0 0 10px; text-wrap: balance; }
+  h1 em { font-style: normal; color: var(--agent); }
+  .lede { color: var(--ink-2); font-size: 15px; max-width: 64ch; margin: 0 0 24px; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--hair); border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg button { appearance: none; border: 0; background: transparent; color: var(--ink-2); font: 600 13px var(--font-ui); padding: 6px 13px; border-radius: 7px; cursor: pointer; }
+  .seg button[aria-selected="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(20,18,40,.12); }
+  .spacer { flex: 1; }
+  .btn { appearance: none; border: 0; cursor: pointer; border-radius: 10px; font: 600 13px var(--font-ui); padding: 9px 16px; }
+  .btn-primary { background: var(--agent); color: var(--agent-ink); box-shadow: 0 3px 12px var(--agent-glow); }
+
+  .stage { border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--hair); }
+  .desktop {
+    position: relative; width: 960px; height: 600px; transform-origin: top left;
+    background:
+      radial-gradient(120% 90% at 82% 100%, var(--wall-c), transparent 60%),
+      radial-gradient(110% 120% at 0% 100%, var(--wall-b), transparent 70%),
+      linear-gradient(180deg, var(--wall-a), var(--wall-b));
+    overflow: hidden; font-family: var(--font-ui);
+  }
+  .desktop.frozen * { animation-play-state: paused !important; transition: none !important; }
+
+  .menubar {
+    position: absolute; inset: 0 0 auto 0; height: 26px; z-index: 5;
+    display: flex; align-items: center; gap: 18px; padding: 0 14px;
+    background: var(--mb-bg); backdrop-filter: blur(20px);
+    color: var(--mb-ink); font-size: 12.5px;
+  }
+  .menubar .app { font-weight: 700; }
+  .menubar .mi { padding: 3px 7px; margin: 0 -7px; border-radius: 5px; }
+  .menubar .mi.open { background: var(--agent); color: var(--agent-ink); }
+  .menubar .right { margin-left: auto; display: flex; gap: 14px; }
+
+  .dropdown {
+    position: absolute; z-index: 6; min-width: 210px;
+    background: var(--menu-bg); backdrop-filter: blur(24px);
+    border: 1px solid var(--win-hair); border-radius: 9px;
+    box-shadow: var(--win-shadow); padding: 5px;
+    color: var(--win-ink); font-size: 13px;
+    transform-origin: top center;
+    animation: menupop .16s ease-out both;
+  }
+  @keyframes menupop { from { opacity: 0; transform: scale(.97) translateY(-3px); } to { opacity: 1; transform: none; } }
+  .dropdown[hidden] { display: none; }
+  .dropdown .it { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-radius: 6px; }
+  .dropdown .it .sc { margin-left: auto; color: var(--win-ink2); font-size: 12px; }
+  .dropdown .it.hl { background: var(--agent); color: var(--agent-ink); }
+  .dropdown .it.hl .sc { color: var(--agent-ink); }
+  .dropdown hr { border: 0; border-top: 1px solid var(--win-hair); margin: 5px 8px; }
+
+  .window { position: absolute; border-radius: 11px; overflow: hidden; background: var(--win-bg); box-shadow: var(--win-shadow); color: var(--win-ink); font-size: 12.5px; }
+  .titlebar { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--win-2); border-bottom: 1px solid var(--win-hair); }
+  .tl { display: flex; gap: 7px; }
+  .tl i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .tl i:nth-child(1) { background: var(--tl-r); }
+  .tl i:nth-child(2) { background: var(--tl-y); }
+  .tl i:nth-child(3) { background: var(--tl-g); }
+  .titlebar b { font-size: 12.5px; font-weight: 600; }
+
+  .list-rows .row { display: flex; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--win-hair); align-items: baseline; }
+  .row b { font-weight: 600; white-space: nowrap; }
+  .row span { color: var(--win-ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row time { margin-left: auto; color: var(--win-ink2); font-size: 11.5px; flex-shrink: 0; }
+
+  #composeWin { animation: winpop .28s cubic-bezier(.2,.9,.35,1.1) both; }
+  #composeWin[hidden] { display: none; }
+  @keyframes winpop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+  .form { padding: 16px 18px; display: grid; gap: 11px; }
+  .fld label { display: block; font-size: 10.5px; font-weight: 700; color: var(--win-ink2); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+  .fld .box { min-height: 30px; border: 1px solid var(--win-hair); border-radius: 7px; background: var(--field-bg); padding: 5px 10px; font-size: 13px; display: flex; align-items: center; }
+  .fld .box.focus { border-color: var(--agent); box-shadow: 0 0 0 3px var(--agent-soft); }
+  .caret { display: inline-block; width: 1.5px; height: 15px; margin-left: 1px; background: var(--agent); animation: caret 1s steps(1) infinite; }
+  @keyframes caret { 50% { opacity: 0; } }
+
+  /* ---- overlay: edge glow + top tab ---- */
+  .ov-edge { position: absolute; inset: 0; z-index: 10; pointer-events: none; opacity: 0; transition: opacity .5s ease; }
+  .desktop.driving .ov-edge { opacity: 1; }
+  .ov-edge::before {
+    content: ""; position: absolute; inset: 0;
+    box-shadow: inset 0 0 0 3px var(--agent), inset 0 0 42px 6px var(--agent-glow);
+    animation: breathe 2.8s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+
+  /* ---- HUD with ghost mark ---- */
+  .hud {
+    position: absolute; right: 16px; bottom: 16px; z-index: 28;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--mb-bg); backdrop-filter: blur(20px);
+    border: 1px solid var(--hair); border-radius: 999px; padding: 8px 14px 8px 9px;
+    box-shadow: var(--win-shadow); color: var(--win-ink); font-size: 12.5px;
+    opacity: 0; transform: translateY(10px); transition: opacity .4s ease, transform .4s cubic-bezier(.2,.9,.3,1);
+  }
+  .desktop.driving .hud, .desktop.released .hud { opacity: 1; transform: none; }
+  .hud .hg { width: 26px; height: 26px; border-radius: 50%; background: var(--agent); display: grid; place-items: center; position: relative; flex-shrink: 0; }
+  .hud .hg svg { width: 15px; height: 15px; }
+  .hud .hg::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--agent); animation: pulse 2s ease-out infinite; }
+  @keyframes pulse { from { opacity: .8; transform: scale(.8); } to { opacity: 0; transform: scale(1.35); } }
+  .desktop.released .hud .hg { background: var(--ink-3); }
+  .desktop.released .hud .hg::after { animation: none; opacity: 0; }
+  .hud time { font: 600 12px var(--font-data); font-variant-numeric: tabular-nums; }
+  .hud .act { color: var(--win-ink2); max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hud .sep { width: 1px; height: 18px; background: var(--win-hair); }
+  .kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; background: var(--win-2); border: 1px solid var(--win-hair); color: var(--win-ink2); font: 600 11px var(--font-ui); }
+
+  /* ---- synthetic cursor + courier ghost ---- */
+  #cursor { position: absolute; z-index: 30; width: 20px; height: 24px; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); opacity: 0; transition: opacity .4s ease; }
+  .desktop.driving #cursor { opacity: 1; }
+  #cursor.pressed { transform: scale(.86); transform-origin: 4px 3px; }
+  #courier { position: absolute; z-index: 29; width: 40px; height: 40px; pointer-events: none; filter: drop-shadow(0 4px 10px var(--agent-glow)); opacity: 0; transition: opacity .4s ease; }
+  .desktop.driving #courier { opacity: 1; }
+  #courier .inner { animation: hover-bob 2.6s ease-in-out infinite; }
+  @keyframes hover-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  #courier .body { fill: var(--ghost-body); }
+  #courier .eye { fill: var(--ghost-eye); }
+  #courier .eyes { transition: transform .35s cubic-bezier(.3,.9,.4,1); }
+
+  .trail {
+    position: absolute; z-index: 24; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--agent-trail); box-shadow: 0 0 12px 4px var(--agent-trail);
+    pointer-events: none; animation: trailfade .7s ease-out forwards;
+  }
+  @keyframes trailfade { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.25); } }
+
+  #ring { position: absolute; z-index: 26; width: 56px; height: 56px; pointer-events: none; }
+  #ring[hidden] { display: none; }
+  #ring .track { fill: none; stroke: var(--agent-soft); stroke-width: 3; }
+  #ring .fill { fill: none; stroke: var(--agent); stroke-width: 3; stroke-linecap: round; }
+  #ring.contract { animation: contract .18s ease-in forwards; }
+  @keyframes contract { to { transform: scale(.55); opacity: 0; } }
+
+  .ripple {
+    position: absolute; z-index: 25; border-radius: 50%; pointer-events: none;
+    border: 2.5px solid var(--agent); box-shadow: 0 0 18px 2px var(--agent-glow);
+    animation: rip .55s cubic-bezier(.2,.7,.4,1) forwards;
+  }
+  @keyframes rip { from { opacity: .9; transform: scale(.25); } to { opacity: 0; transform: scale(1.4); } }
+
+  /* ---- takeover chord flash ---- */
+  #chord {
+    position: absolute; inset: 0; z-index: 40; display: grid; place-items: center;
+    background: var(--chord-bg); backdrop-filter: blur(2px);
+  }
+  #chord[hidden] { display: none; }
+  .chord-card { text-align: center; color: var(--chord-ink); animation: chordpop .28s cubic-bezier(.2,.9,.35,1.2) both; }
+  @keyframes chordpop { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
+  .chord-keys { display: flex; gap: 12px; justify-content: center; margin-bottom: 14px; }
+  .chord-keys span {
+    width: 64px; height: 64px; display: grid; place-items: center;
+    border-radius: 14px; border: 2px solid var(--chord-ink);
+    background: rgba(255,255,255,.12);
+    font: 700 28px var(--font-ui);
+    animation: keypress .3s ease-out both .1s;
+  }
+  @keyframes keypress { from { transform: translateY(-6px); } 60% { transform: translateY(2px); } to { transform: none; } }
+  .chord-card p { margin: 0; font: 600 15px var(--font-ui); }
+  .chord-card small { display: block; margin-top: 4px; font-size: 12.5px; color: var(--chord-ink); font-weight: 500; }
+  #chord.fadeout { animation: chordfade .6s ease .7s both; }
+  @keyframes chordfade { to { opacity: 0; } }
+
+  .timeline { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--ink-3); font-size: 12.5px; }
+  .timeline b { color: var(--ink-2); font-weight: 600; }
+</style>
+
+<div class="shell">
+  <div class="brandline">
+    <span class="glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2.6c-4.6 0-7.4 3.4-7.4 7.9v9.9l2.5-2.1 2.4 2.1 2.5-2.1 2.5 2.1 2.4-2.1 2.5 2.1v-9.9c0-4.5-2.8-7.9-7.4-7.9z" fill="#fff"/><circle cx="9.4" cy="10.3" r="1.25" fill="#4644b8"/><circle cx="14.6" cy="10.3" r="1.25" fill="#4644b8"/></svg></span>
+    <b>rocuronium</b>
+    <span>presence overlay · prototype 4 of 4 · the composite</span>
+  </div>
+
+  <h1>One scene, <em>everything on</em></h1>
+  <p class="lede">
+    Edge glow for peripheral awareness, the narrating HUD for detail, the courier ghost on the
+    cursor for character — running one task end to end: open a menu, pick an item, type into the
+    new window. It ends the only way that matters: the human presses ⌥⎋ and gets the Mac back
+    in a single frame.
+  </p>
+
+  <div class="controls">
+    <div class="spacer"></div>
+    <div class="seg" role="tablist" aria-label="Theme" id="themeSeg">
+      <button role="tab" data-t="">Auto</button>
+      <button role="tab" data-t="light">Light</button>
+      <button role="tab" data-t="dark">Dark</button>
+    </div>
+    <button class="btn btn-primary" id="replayBtn">Replay scene</button>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="desktop" id="desktop">
+      <div class="menubar">
+        <span class="app">Mail</span>
+        <span class="mi">File</span><span class="mi">Edit</span><span class="mi">View</span>
+        <span class="mi" id="miMessage">Message</span><span class="mi">Window</span>
+        <span class="right"><span>􀙇</span><span>􀋦</span><span>Fri Aug 22</span><span>14:32</span></span>
+      </div>
+
+      <div class="dropdown" id="msgMenu" hidden>
+        <div class="it" id="itNew">New Message<span class="sc">⌘N</span></div>
+        <div class="it">Reply<span class="sc">⌘R</span></div>
+        <div class="it">Reply All<span class="sc">⇧⌘R</span></div>
+        <hr>
+        <div class="it">Forward<span class="sc">⇧⌘F</span></div>
+        <div class="it">Redirect<span class="sc">⇧⌘E</span></div>
+      </div>
+
+      <div class="window" style="left: 80px; top: 70px; width: 560px; height: 430px;">
+        <div class="titlebar"><span class="tl"><i></i><i></i><i></i></span><b style="margin: 0 auto; transform: translateX(-26px);">Inbox — 5 messages</b></div>
+        <div class="list-rows">
+          <div class="row"><b>App Store Connect</b><span>Your build has completed processing</span><time>14:20</time></div>
+          <div class="row"><b>GitHub</b><span>[rocuronium] Run #142 succeeded on main</span><time>13:58</time></div>
+          <div class="row"><b>Linear</b><span>ROC-88 moved to In Review</span><time>13:12</time></div>
+          <div class="row"><b>Ely</b><span>re: the presence overlay sketches</span><time>11:47</time></div>
+          <div class="row"><b>Crash Reporter</b><span>0 new events this week</span><time>09:30</time></div>
+        </div>
+      </div>
+
+      <div class="window" id="composeWin" hidden style="left: 400px; top: 150px; width: 460px; height: 330px;">
+        <div class="titlebar"><span class="tl"><i></i><i></i><i></i></span><b style="margin: 0 auto; transform: translateX(-26px);">New Message</b></div>
+        <div class="form">
+          <div class="fld"><label>To</label><div class="box">ely@kagerou.glass</div></div>
+          <div class="fld"><label>Subject</label><div class="box" id="subjBox"><span id="subjText"></span></div></div>
+          <div class="fld"><label>Body</label><div class="box" style="min-height: 110px; align-items: flex-start;"><span id="bodyText"></span></div></div>
+        </div>
+      </div>
+
+      <div class="ov-edge"></div>
+
+      <div class="hud">
+        <span class="hg"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2.6c-4.6 0-7.4 3.4-7.4 7.9v9.9l2.5-2.1 2.4 2.1 2.5-2.1 2.5 2.1 2.4-2.1 2.5 2.1v-9.9c0-4.5-2.8-7.9-7.4-7.9z" fill="#fff"/><circle cx="9.4" cy="10.3" r="1.25" fill="#4644b8"/><circle cx="14.6" cy="10.3" r="1.25" fill="#4644b8"/></svg></span>
+        <time id="hudTime">00:00</time>
+        <span class="act" id="hudAction">Starting session…</span>
+        <span class="sep"></span>
+        <span class="kbd">⌥</span><span class="kbd">⎋</span>
+      </div>
+
+      <svg id="ring" hidden viewBox="0 0 56 56">
+        <circle class="track" cx="28" cy="28" r="24"/>
+        <circle class="fill" cx="28" cy="28" r="24" id="ringFill" transform="rotate(-90 28 28)"/>
+      </svg>
+
+      <svg id="courier" viewBox="0 0 24 24">
+        <g class="inner">
+          <path class="body" d="M12 2.6c-4.6 0-7.4 3.4-7.4 7.9v9.9l2.5-2.1 2.4 2.1 2.5-2.1 2.5 2.1 2.4-2.1 2.5 2.1v-9.9c0-4.5-2.8-7.9-7.4-7.9z"/>
+          <g class="eyes">
+            <circle class="eye" cx="9.4" cy="10.3" r="1.3"/>
+            <circle class="eye" cx="14.6" cy="10.3" r="1.3"/>
+          </g>
+        </g>
+      </svg>
+
+      <svg id="cursor" viewBox="0 0 20 24">
+        <path d="M2.5 1.5 L2.5 19 L7 15 L9.8 21.5 L12.6 20.3 L9.8 13.9 L15.8 13.6 Z"
+              fill="var(--cur-fill)" stroke="var(--cur-edge)" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+
+      <div id="chord" hidden>
+        <div class="chord-card">
+          <div class="chord-keys"><span>⌥</span><span>⎋</span></div>
+          <p>You have control</p>
+          <small>Agent stopped mid-action · session log saved</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="timeline">
+    <span><b>0s</b> overlay on</span>
+    <span><b>1s</b> glide to Message menu</span>
+    <span><b>4s</b> New Message</span>
+    <span><b>7s</b> subject typed</span>
+    <span><b>11s</b> body typing…</span>
+    <span><b>13s</b> ⌥⎋ — frozen in one frame</span>
+  </p>
+</div>
+
+<script>
+  // ---------- shared machinery (same engine as cursor-choreography) ----------
+  const desktop = document.getElementById("desktop");
+  const cursor = document.getElementById("cursor");
+  const courier = document.getElementById("courier");
+  const eyes = courier.querySelector(".eyes");
+  const ring = document.getElementById("ring");
+  const ringFill = document.getElementById("ringFill");
+  const hudAction = document.getElementById("hudAction");
+  const hudTime = document.getElementById("hudTime");
+  const RING_C = 2 * Math.PI * 24;
+  ringFill.style.strokeDasharray = RING_C;
+
+  let runId = 0;
+  let pos = [200, 540];
+  let ghost = [160, 500];
+  let sessionStart = performance.now();
+  let clockOn = true;
+
+  const easeInOut = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // element center in desktop-logical coordinates, immune to the responsive scale
+  function centerOf(el) {
+    const r = el.getBoundingClientRect(), d = desktop.getBoundingClientRect();
+    const s = d.width / 960;
+    return [(r.left - d.left) / s + r.width / (2 * s), (r.top - d.top) / s + r.height / (2 * s)];
+  }
+
+  function setCursor(x, y) { pos = [x, y]; cursor.style.left = x + "px"; cursor.style.top = y + "px"; }
+
+  // courier trails the cursor on its own clock
+  let lastGhostT = performance.now();
+  (function ghostLoop(now) {
+    const dt = Math.min(50, now - lastGhostT); lastGhostT = now;
+    if (!desktop.classList.contains("frozen")) {
+      ghost[0] += ((pos[0] - 30) - ghost[0]) * (1 - Math.pow(.002, dt / 1000));
+      ghost[1] += ((pos[1] - 36) - ghost[1]) * (1 - Math.pow(.002, dt / 1000));
+      courier.style.left = ghost[0] + "px";
+      courier.style.top = ghost[1] + "px";
+    }
+    requestAnimationFrame(ghostLoop);
+  })(lastGhostT);
+
+  let lastTrail = 0;
+  function dropTrail(x, y) {
+    const now = performance.now();
+    if (now - lastTrail < 36) return;
+    lastTrail = now;
+    const d = document.createElement("i");
+    d.className = "trail";
+    d.style.left = (x - 5) + "px";
+    d.style.top = (y - 5) + "px";
+    desktop.appendChild(d);
+    d.addEventListener("animationend", () => d.remove());
+  }
+
+  function glanceAt(target) {
+    const [tx, ty] = Array.isArray(target) ? target : centerOf(target);
+    const dx = tx - pos[0], dy = ty - pos[1], len = Math.hypot(dx, dy) || 1;
+    eyes.style.transform = `translate(${(dx/len*1.8).toFixed(2)}px, ${(dy/len*1.2).toFixed(2)}px)`;
+  }
+
+  function glide(to, dur, arc) {
+    return new Promise(resolve => {
+      const id = runId;
+      const [x0, y0] = pos, [x1, y1] = to;
+      const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const c1 = [x0 + dx / 3 + nx * arc, y0 + dy / 3 + ny * arc];
+      const c2 = [x0 + 2 * dx / 3 + nx * arc, y0 + 2 * dy / 3 + ny * arc];
+      const t0 = performance.now();
+      (function frame(now) {
+        if (id !== runId) return resolve();
+        const t = Math.min(1, (now - t0) / dur), e = easeInOut(t), u = 1 - e;
+        setCursor(
+          u*u*u*x0 + 3*u*u*e*c1[0] + 3*u*e*e*c2[0] + e*e*e*x1,
+          u*u*u*y0 + 3*u*u*e*c1[1] + 3*u*e*e*c2[1] + e*e*e*y1
+        );
+        dropTrail(pos[0], pos[1]);
+        if (t < 1) requestAnimationFrame(frame); else resolve();
+      })(t0);
+    });
+  }
+
+  function charge(dur) {
+    return new Promise(resolve => {
+      const id = runId;
+      ring.hidden = false;
+      ring.classList.remove("contract");
+      ring.style.left = (pos[0] - 28) + "px";
+      ring.style.top = (pos[1] - 28) + "px";
+      const t0 = performance.now();
+      (function frame(now) {
+        if (id !== runId) { ring.hidden = true; return resolve(); }
+        const t = Math.min(1, (now - t0) / dur);
+        ringFill.style.strokeDashoffset = RING_C * (1 - t);
+        if (t < 1) requestAnimationFrame(frame); else resolve();
+      })(t0);
+    });
+  }
+
+  async function clickAt() {
+    ring.classList.add("contract");
+    cursor.classList.add("pressed");
+    const r = document.createElement("i");
+    r.className = "ripple";
+    r.style.cssText = `left:${pos[0]-22}px; top:${pos[1]-22}px; width:44px; height:44px;`;
+    desktop.appendChild(r);
+    r.addEventListener("animationend", () => r.remove());
+    await sleep(140);
+    cursor.classList.remove("pressed");
+    ring.hidden = true;
+    ring.classList.remove("contract");
+    ringFill.style.strokeDashoffset = RING_C;
+  }
+
+  async function typein(spanId, text) {
+    const id = runId;
+    const el = document.getElementById(spanId);
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    el.after(caret);
+    for (const ch of text) {
+      if (id !== runId) break;
+      el.textContent += ch;
+      await sleep(18 * (0.6 + Math.random() * 0.9) * 2.2);
+    }
+    caret.remove();
+  }
+
+  // ---------- the scene ----------
+  const miMessage = document.getElementById("miMessage");
+  const msgMenu = document.getElementById("msgMenu");
+  const itNew = document.getElementById("itNew");
+  const composeWin = document.getElementById("composeWin");
+  const chord = document.getElementById("chord");
+
+  function resetScene() {
+    runId++;
+    desktop.classList.remove("driving", "frozen", "released");
+    chord.hidden = true;
+    chord.classList.remove("fadeout");
+    msgMenu.hidden = true;
+    miMessage.classList.remove("open");
+    itNew.classList.remove("hl");
+    composeWin.hidden = true;
+    document.getElementById("subjText").textContent = "";
+    document.getElementById("bodyText").textContent = "";
+    document.querySelectorAll(".box.focus").forEach(b => b.classList.remove("focus"));
+    document.querySelectorAll(".caret, .ripple, .trail").forEach(e => e.remove());
+    ring.hidden = true;
+    ringFill.style.strokeDashoffset = RING_C;
+    setCursor(200, 540);
+    ghost = [160, 500];
+    eyes.style.transform = "";
+    hudAction.textContent = "Starting session…";
+  }
+
+  async function scene() {
+    resetScene();
+    const id = runId;
+
+    await sleep(400);
+    sessionStart = performance.now(); clockOn = true;
+    desktop.classList.add("driving");
+    hudAction.textContent = "Hardware input granted — overlay on";
+    await sleep(1000); if (id !== runId) return;
+
+    hudAction.textContent = "Opening Message menu…";
+    glanceAt(miMessage);
+    await sleep(350); if (id !== runId) return;
+    await glide(centerOf(miMessage), 1100, -70); if (id !== runId) return;
+    await charge(750); if (id !== runId) return;
+    await clickAt(); if (id !== runId) return;
+    miMessage.classList.add("open");
+    const mr = centerOf(miMessage);
+    msgMenu.style.left = (mr[0] - 30) + "px";
+    msgMenu.style.top = "27px";
+    msgMenu.hidden = false;
+    await sleep(400); if (id !== runId) return;
+
+    hudAction.textContent = "Choosing ‘New Message’…";
+    glanceAt(itNew);
+    await sleep(300); if (id !== runId) return;
+    await glide(centerOf(itNew), 700, 30); if (id !== runId) return;
+    itNew.classList.add("hl");
+    await charge(750); if (id !== runId) return;
+    await clickAt(); if (id !== runId) return;
+    msgMenu.hidden = true;
+    miMessage.classList.remove("open");
+    composeWin.hidden = false;
+    hudAction.textContent = "Evidence: window ‘New Message’ appeared ✓";
+    await sleep(700); if (id !== runId) return;
+
+    hudAction.textContent = "Clicking Subject field…";
+    const subjBox = document.getElementById("subjBox");
+    glanceAt(subjBox);
+    await sleep(300); if (id !== runId) return;
+    await glide(centerOf(subjBox), 900, -50); if (id !== runId) return;
+    await charge(700); if (id !== runId) return;
+    await clickAt(); if (id !== runId) return;
+    subjBox.classList.add("focus");
+    hudAction.textContent = "Typing subject…";
+    await typein("subjText", "Presence overlay — first cut"); if (id !== runId) return;
+    await sleep(300); if (id !== runId) return;
+
+    hudAction.textContent = "Typing body…";
+    subjBox.classList.remove("focus");
+    const bodyBox = document.getElementById("bodyText").parentElement;
+    bodyBox.classList.add("focus");
+    // takeover fires mid-typing — the whole point of the demo
+    const typing = typein("bodyText", "Sketches attached. The edge glow breathes, the ring charges before every cli");
+    await sleep(2600); if (id !== runId) return;
+    takeover();
+    await typing;
+  }
+
+  function takeover() {
+    // one frame: freeze everything, flash the chord, hand the Mac back
+    runId++;
+    clockOn = false;
+    desktop.classList.add("frozen");
+    chord.hidden = false;
+    hudAction.textContent = "Stopped by user — ⌥⎋";
+    setTimeout(() => {
+      desktop.classList.remove("driving", "frozen");
+      desktop.classList.add("released");
+      chord.classList.add("fadeout");
+      document.querySelectorAll(".box.focus").forEach(b => b.classList.remove("focus"));
+      document.querySelectorAll(".caret").forEach(e => e.remove());
+      setTimeout(() => { chord.hidden = true; }, 1400);
+      setTimeout(scene, 3600); // loop the demo
+    }, 1600);
+  }
+
+  setInterval(() => {
+    if (!clockOn) return;
+    const s = Math.max(0, Math.floor((performance.now() - sessionStart) / 1000));
+    hudTime.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }, 250);
+
+  document.getElementById("replayBtn").addEventListener("click", scene);
+
+  const themeSeg = document.getElementById("themeSeg");
+  themeSeg.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    const t = b.dataset.t;
+    if (t) document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+    themeSeg.querySelectorAll("button").forEach(x => x.setAttribute("aria-selected", x === b));
+  }));
+  themeSeg.querySelector('[data-t=""]').setAttribute("aria-selected", "true");
+
+  const stage = document.getElementById("stage");
+  function fit() {
+    const s = stage.clientWidth / 960;
+    desktop.style.transform = `scale(${s})`;
+    stage.style.height = 600 * s + "px";
+  }
+  new ResizeObserver(fit).observe(stage);
+  fit();
+
+  scene();
+</script>
