@@ -240,6 +240,27 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 5. **Semantic verification** via Foundation Models `Attachment`, behind a macOS 27
    availability check — covers "was the message sent?" with zero download.
 
+## Phase 5 candidates — researched 2026-08-22, awaiting Kiri's picks
+
+Three memos/prototype sets from the release-readiness session, each ending in a decision
+only Kiri can make:
+
+1. **Absorb the virtual display into the daemon** — `Docs/VIRTUAL-DISPLAY-NOTES.md`.
+   ~80 lines of `CGVirtualDisplay` (the macOS 26 SDK exports the classes), auto-lease on
+   `park`, un-park-before-teardown, a `strays` check for windows nobody parked. Eight
+   measurements listed before any of it ships; the 60-line in-process spike (item 8) is
+   the natural first move.
+2. **Visible-agent mode** — `Prototypes/overlay/*.html` (open in a browser; four animated
+   demos: banner variants, cursor choreography with trail/ripples/charge-up delay, avatar
+   concepts, and a combined scene ending on the ⌥⎋ emergency stop). Pick a direction; the
+   implementation is an overlay window in the app plus a slowed hardware-rung profile.
+3. **Locked-screen and local models** — `Docs/LOCKED-AND-LOCAL-NOTES.md`. Rungs 0–3 are
+   the legitimate ceiling on the locked local console (Codex's shipped answer is
+   auto-unlock, still declined); the sanctioned third door is a Screen Sharing
+   High-Performance **virtual-display session**, worth a measurement spike. Phase 4's
+   head-to-head is ~1 day, annotation-dominated; the plan-once / ground-locally split cuts
+   big-model image calls ~70–80% on multi-step tasks.
+
 ## Standing constraints (not work — read before touching adjacent code)
 
 - The socket serializes requests and `Engine`/`TreeCache` depend on it (ARCHITECTURE §1).
