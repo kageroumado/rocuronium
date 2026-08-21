@@ -249,7 +249,7 @@ Holo1-7B is research-licensed, UI-TARS is superseded. Order:
 
 ## Done
 
-- **2026-08-22 — release-readiness batch: status items, AXShowMenu, `--pid`, the display
+- **2026-08-22 · 4ffb5ff — release-readiness batch: status items, AXShowMenu, `--pid`, the display
   hold, and OCR scrolling.** Five gaps closed in one pass, all verified by execution on
   the installed build:
   - `statusitem` (extras menu bar; the 2026-08-22 trial gap) — Phosphene popover opened
