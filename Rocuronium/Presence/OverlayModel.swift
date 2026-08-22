@@ -9,7 +9,9 @@ import Foundation
 @Observable
 final class OverlayModel {
     /// The jellyfish's state channel. `hidden` doubles as "no session": the window is out.
-    enum Phase {
+    /// `nonisolated`: a plain value whose synthesized Equatable must stay callable from the
+    /// animation completion handlers that check it.
+    nonisolated enum Phase {
         case hidden
         /// Session on, nothing in flight — dim drift.
         case idle

@@ -290,20 +290,12 @@ struct OverlayEffectsView: View {
                 }
 
                 if let ring = model.chargeRing {
-                    let progress = min(1, timeline.date.timeIntervalSince(ring.start) / ring.duration)
-                    let radius = 24.0
-                    let track = Path(ellipseIn: CGRect(
-                        x: ring.point.x - radius, y: ring.point.y - radius,
-                        width: radius * 2, height: radius * 2,
-                    ))
-                    context.stroke(track, with: .color(JellyPalette.agent.opacity(0.25)), lineWidth: 3)
-                    var arc = Path()
-                    arc.addArc(
-                        center: ring.point, radius: radius,
-                        startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * progress),
-                        clockwise: false,
+                    let elapsed = timeline.date.timeIntervalSince(ring.start)
+                    Self.drawChargeSigil(
+                        in: context, at: ring.point,
+                        progress: min(1, elapsed / ring.duration),
+                        elapsed: elapsed, time: now,
                     )
-                    context.stroke(arc, with: .color(JellyPalette.agent), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 }
 
                 for ripple in model.ripples {
@@ -332,6 +324,62 @@ struct OverlayEffectsView: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// The destination sigil: where the jellyfish is headed, and how far the wind-up has
+    /// gotten. A faint breathing seal — outer ring, slowly rotating dashed rune ring,
+    /// counter-rotating diamond marks, a center point — with the progress arc kept at full
+    /// strength on top, because the wind-up is the interrupt window and must stay legible.
+    private static func drawChargeSigil(
+        in context: GraphicsContext, at center: CGPoint,
+        progress: Double, elapsed: TimeInterval, time: TimeInterval
+    ) {
+        var ctx = context
+        // Bloom in over the first beat, then breathe gently in place.
+        let appear = min(1, max(0, elapsed / 0.15))
+        let breathe = sin(time * 2 * .pi / 1.8)
+        let scale = (0.85 + 0.15 * appear) * (1 + 0.04 * breathe)
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.opacity = appear * (0.85 + 0.15 * breathe)
+
+        func circle(_ radius: Double) -> Path {
+            Path(ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2))
+        }
+
+        ctx.stroke(circle(26), with: .color(JellyPalette.agent.opacity(0.3)), lineWidth: 1.5)
+
+        var runes = ctx
+        runes.rotate(by: .degrees(time * 24))
+        runes.stroke(
+            circle(19.5),
+            with: .color(JellyPalette.agent.opacity(0.45)),
+            style: StrokeStyle(lineWidth: 1, dash: [7, 9]),
+        )
+
+        var marks = ctx
+        marks.rotate(by: .degrees(-time * 16))
+        for index in 0 ..< 4 {
+            let angle = Double(index) * .pi / 2
+            let point = CGPoint(x: 12.5 * cos(angle), y: 12.5 * sin(angle))
+            var diamond = Path()
+            diamond.move(to: CGPoint(x: point.x, y: point.y - 3))
+            diamond.addLine(to: CGPoint(x: point.x + 2.2, y: point.y))
+            diamond.addLine(to: CGPoint(x: point.x, y: point.y + 3))
+            diamond.addLine(to: CGPoint(x: point.x - 2.2, y: point.y))
+            diamond.closeSubpath()
+            marks.fill(diamond, with: .color(JellyPalette.agent.opacity(0.5)))
+        }
+
+        ctx.fill(circle(2), with: .color(JellyPalette.agent.opacity(0.6)))
+
+        var arc = Path()
+        arc.addArc(
+            center: .zero, radius: 26,
+            startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * progress),
+            clockwise: false,
+        )
+        ctx.stroke(arc, with: .color(JellyPalette.agent.opacity(0.9)), style: StrokeStyle(lineWidth: 3, lineCap: .round))
     }
 }
 

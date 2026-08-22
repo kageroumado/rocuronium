@@ -7,7 +7,7 @@ struct RocuroniumApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContent(engine: engine)
+            MenuPopover(engine: engine)
         } label: {
             // The icon is the safety indicator: the jellyfish is filled while the engine is
             // driving something, outlined when idle. A user must never have to wonder
@@ -95,85 +95,5 @@ final class EngineHost {
     private func openSettings(pane: String) {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
         NSWorkspace.shared.open(url)
-    }
-}
-
-private struct MenuBarContent: View {
-    let engine: EngineHost
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("rocuronium").font(.headline)
-
-            if engine.isHalted {
-                // The only way back from ⌥⎋. Human-only by design: no socket verb can
-                // clear the halt, so the agent cannot un-halt itself.
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Halted by you (⌥⎋)", systemImage: "hand.raised.fill")
-                        .font(.callout).foregroundStyle(.orange)
-                    Text("Every agent verb is refused until you resume.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Resume agent commands") { engine.resumeFromHalt() }
-                }
-            }
-
-            if !engine.isTrusted {
-                // Without this grant nothing works at all, so it is the first thing shown.
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Accessibility access is required.").font(.callout)
-                    Text("Add Rocuronium in the list, then relaunch it.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Open Accessibility settings…") { engine.requestAccessibilityPermission() }
-                }
-            }
-
-            if !engine.canCaptureScreen {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Screen Recording is optional.").font(.callout)
-                    Text("Without it, clicks that expose no value stay unverifiable. If Rocuronium isn't in the list yet, press this once more.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Open Screen Recording settings…") { engine.requestScreenRecordingPermission() }
-                }
-            }
-
-            LabeledContent("Presence", value: engine.presence.state.rawValue)
-            LabeledContent("Can see", value: engine.presence.canSee ? "yes" : "display asleep")
-            if engine.presence.screenLocked {
-                Text("Screen is locked — this does not block the engine.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            if let startupError = engine.startupError {
-                Text(startupError).font(.caption).foregroundStyle(.red)
-            }
-
-            @Bindable var overlayModel = engine.overlayModel
-            Toggle("Show overlay for every action", isOn: $overlayModel.showForAllActions)
-                .font(.callout)
-                .toggleStyle(.checkbox)
-
-            let recent = engine.activityLog.recent(5)
-            if !recent.isEmpty {
-                Divider()
-                Text("Recent activity").font(.caption).foregroundStyle(.secondary)
-                ForEach(recent.reversed()) { entry in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(entry.date, format: .dateTime.hour().minute().second())
-                            .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                        Text("\(entry.action) \(entry.target)")
-                            .font(.caption).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(entry.verdict)
-                            .font(.caption)
-                            .foregroundStyle(entry.verdict == "confirmed" ? .green : .secondary)
-                    }
-                }
-            }
-
-            Divider()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-        }
-        .padding(12)
-        .frame(width: 260)
     }
 }
