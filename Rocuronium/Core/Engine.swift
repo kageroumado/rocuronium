@@ -1360,6 +1360,14 @@ actor Engine {
         if points.count == 1, let current = CGEvent(source: nil)?.location {
             points.insert(current, at: 0)
         }
+        // A bare start→end `move` gets a natural bow: human motion is never a ruler line,
+        // so a slight randomized arc is injected between the endpoints. Only `move` — a
+        // drag's path is semantic (sliders, selections, drawing), and bowing it would drag
+        // through pixels the caller never chose; explicit --via waypoints are also left
+        // exactly as given.
+        if button == nil, points.count == 2 {
+            points = naturallyBowed(from: points[0], to: points[1])
+        }
         guard let plan = PathPlan(through: points, duration: duration, easing: easing) else {
             throw EngineError.pathRefused("The path needs two distinct points — a start (or the current cursor) and a destination at least a pixel away.")
         }
@@ -1408,6 +1416,25 @@ actor Engine {
             windowsAfter: windowsAfter,
             endpointOwner: endpointOwner,
         )
+    }
+
+    /// One via waypoint perpendicular to the straight line, at a randomized spot past the
+    /// middle with a randomized bow of a few percent of the distance — enough that the
+    /// wake reads as a hand's arc, small enough that the path never strays far from the
+    /// line the caller imagined. Short hops stay straight: at 40 pt a bow is just wobble.
+    private nonisolated func naturallyBowed(from start: CGPoint, to end: CGPoint) -> [CGPoint] {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let length = hypot(dx, dy)
+        guard length >= 40 else { return [start, end] }
+
+        let along = Double.random(in: 0.4 ... 0.6)
+        let bow = length * Double.random(in: 0.05 ... 0.12) * (Bool.random() ? 1 : -1)
+        let via = CGPoint(
+            x: start.x + dx * along - dy / length * bow,
+            y: start.y + dy * along + dx / length * bow,
+        )
+        return [start, via, end]
     }
 
     /// On-screen windows the system attributes to this process, popup layers included —

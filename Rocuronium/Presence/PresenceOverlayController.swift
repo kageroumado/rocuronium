@@ -154,9 +154,13 @@ final class PresenceOverlayController {
             context.duration = Constants.fadeOut
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            // A new session may have begun during the fade; only order out if still hidden.
-            guard let self, self.model.phase == .hidden else { return }
-            self.window?.orderOut(nil)
+            // AppKit calls this on the main thread; the closure is typed Sendable, so assert
+            // rather than hop (see the scheduling hierarchy — assumeIsolated is near-free).
+            MainActor.assumeIsolated {
+                // A new session may have begun during the fade; only order out if still hidden.
+                guard let self, self.model.phase == .hidden else { return }
+                self.window?.orderOut(nil)
+            }
         })
     }
 
