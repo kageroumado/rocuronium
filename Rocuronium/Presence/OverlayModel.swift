@@ -47,6 +47,9 @@ final class OverlayModel {
 
     var chargeRing: ChargeRing?
     var ripples: [Ripple] = []
+    /// The bezel window's frame, in the effects window's top-left coordinates — home for
+    /// the jellyfish's perch, kept current as the human drags the bezel around.
+    var bezelFrame: CGRect?
 
     /// Show the overlay for every acting verb, not only cursor-taking ones. The ghost rungs
     /// are invisible by design, so this is opt-in — but "I want to watch it work" is a

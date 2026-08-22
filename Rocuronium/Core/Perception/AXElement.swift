@@ -182,7 +182,7 @@ nonisolated struct AXElement {
     /// evidence, and callers read back.
     @discardableResult
     func setValue(_ number: Double) -> AXError {
-        AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, NSNumber(value: number))
+        mutate { AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, NSNumber(value: number)) }
     }
 
     var isEditable: Bool {
@@ -191,11 +191,30 @@ nonisolated struct AXElement {
 
     // MARK: - Mutation
 
+    /// Runs a mutating AX call, hopped to the main thread when the target is **this
+    /// process**. Same-process accessibility requests are not IPC'd — they execute
+    /// synchronously on the calling thread — and SwiftUI's action/set handlers assert the
+    /// main actor, so a self-targeted press from the engine's thread is a guaranteed
+    /// SIGTRAP (measured: clicking the demo stage's own button crashed the app). Reads
+    /// stay direct: they dispatch no handlers, and the walk over our own windows works.
+    /// The main.sync is deadlock-free here because callers on the engine executor never
+    /// have the main thread blocked waiting on them — the router *awaits* the engine, and
+    /// an awaiting MainActor is suspended, not blocked.
+    private func mutate(_ call: () -> AXError) -> AXError {
+        var targetPid: pid_t = 0
+        if AXUIElementGetPid(raw, &targetPid) == .success,
+           targetPid == ProcessInfo.processInfo.processIdentifier,
+           !Thread.isMainThread {
+            return DispatchQueue.main.sync(execute: call)
+        }
+        return call()
+    }
+
     /// Writes a value. **The returned error is not evidence**: WebKit content returns
     /// `.success` here while changing nothing, so callers must read back and compare.
     @discardableResult
     func setValue(_ text: String) -> AXError {
-        AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, text as CFString)
+        mutate { AXUIElementSetAttributeValue(raw, kAXValueAttribute as CFString, text as CFString) }
     }
 
     /// Moves an element (in practice: a window) to a point in the same top-left global space
@@ -205,12 +224,12 @@ nonisolated struct AXElement {
     func setPosition(_ point: CGPoint) -> AXError {
         var point = point
         guard let value = AXValueCreate(.cgPoint, &point) else { return .failure }
-        return AXUIElementSetAttributeValue(raw, kAXPositionAttribute as CFString, value)
+        return mutate { AXUIElementSetAttributeValue(raw, kAXPositionAttribute as CFString, value) }
     }
 
     @discardableResult
     func perform(_ action: String = kAXPressAction) -> AXError {
-        AXUIElementPerformAction(raw, action as CFString)
+        mutate { AXUIElementPerformAction(raw, action as CFString) }
     }
 
     /// Chromium builds its accessibility tree lazily. Setting this asks it to build the full

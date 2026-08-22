@@ -28,6 +28,8 @@ final class CommandRouter {
     /// What the agent did, one line per acting command; the popover, the bezel, and the
     /// `activity` verb all read from here.
     let activityLog = ActivityLog()
+    /// The deterministic practice window every verb can be exercised against.
+    let demoStage = DemoStageController()
 
     init() {
         PresenceOverlayController.shared = overlay
@@ -216,7 +218,7 @@ final class CommandRouter {
         // keeps renewing) the session-level display hold. Status-shaped commands do not:
         // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
-        case "status", "diag", "request-capture", "display", "activity": break
+        case "status", "diag", "request-capture", "display", "activity", "demo": break
         default: adrafinil.noteActivity()
         }
         // The overlay policy: cursor-taking work is always shown — hardware-input opt-ins
@@ -253,7 +255,30 @@ final class CommandRouter {
         case "screenshot": try await screenshot(request)
         case "statusitem": try await statusItem(request)
         case "activity": activity()
+        case "demo": demo(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
+        }
+    }
+
+    /// Opens (reset), re-shows, or hides the demo stage. The reply carries the window's
+    /// fixed frame in the same top-left coordinates every other verb speaks, so a test can
+    /// aim at the stage without a `windows` round-trip.
+    private func demo(_ request: Request) -> [String: Any] {
+        switch request.action {
+        case "hide":
+            demoStage.hide()
+            return ["ok": true, "summary": "demo stage hidden"]
+        case "show", "reset", nil:
+            demoStage.show(reset: request.action != "show")
+            return [
+                "ok": true,
+                "visible": true,
+                "reset": request.action != "show",
+                "summary": "demo stage is up at (720, 200), 560×720 — fixed and reset unless action:show; "
+                    + "drive it with --app Rocuronium",
+            ]
+        default:
+            return ["ok": false, "error": "unknown demo action '\(request.action ?? "")' — use show, reset, or hide"]
         }
     }
 

@@ -107,7 +107,7 @@ struct MenuPopover: View {
                         .foregroundStyle(tint)
                         .symbolRenderingMode(.hierarchical)
                 } else {
-                    JellyfishIcon(phase: jellyfishPhase, dimmed: dimmed)
+                    JellyfishStateView(phase: jellyfishPhase, dimmed: dimmed)
                         .frame(width: 44, height: 52)
                 }
             }
@@ -259,41 +259,28 @@ struct MenuPopover: View {
             }
             Spacer(minLength: 0)
             GlassEffectContainer(spacing: Theme.Space.sm) {
-                Button {
-                    NSApplication.shared.terminate(nil)
-                } label: {
-                    // `xmark`, not `power`: a power glyph in a Mac context reads as "shut
-                    // down the Mac" — the wrong mental model for quitting the app.
-                    Image(systemName: "xmark").frame(width: 16, height: 16)
+                HStack(spacing: Theme.Space.sm) {
+                    Button {
+                        engine.showDemoStage()
+                    } label: {
+                        Image(systemName: "theatermasks").frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .help("Open the demo stage — deterministic targets for every verb")
+                    Button {
+                        NSApplication.shared.terminate(nil)
+                    } label: {
+                        // `xmark`, not `power`: a power glyph in a Mac context reads as
+                        // "shut down the Mac" — the wrong mental model for quitting the app.
+                        Image(systemName: "xmark").frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .help("Quit Rocuronium — the control socket goes with it")
                 }
-                .buttonStyle(.glass)
-                .controlSize(.large)
-                .help("Quit Rocuronium — the control socket goes with it")
             }
         }
-    }
-}
-
-// MARK: - Jellyfish hero icon
-
-/// The mascot as the hero-card icon, gently animated in place — the popover's counterpart
-/// of Adrafinil's spiral eye.
-private struct JellyfishIcon: View {
-    let phase: OverlayModel.Phase
-    var dimmed = false
-
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                JellyfishArt.draw(
-                    in: context,
-                    rect: CGRect(origin: .zero, size: size),
-                    time: timeline.date.timeIntervalSinceReferenceDate,
-                    phase: phase,
-                )
-            }
-        }
-        .opacity(dimmed ? 0.66 : 1)
     }
 }
 

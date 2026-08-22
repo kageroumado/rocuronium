@@ -41,6 +41,10 @@ final class EngineHost {
         isHalted = false
     }
 
+    func showDemoStage() {
+        router.demoStage.show(reset: true)
+    }
+
     init() {
         let server = ControlServer(router: router)
         self.server = server

@@ -92,12 +92,20 @@ What gates on it:
 Cursor-taking work is visible work. Whenever a command opts into hardware input, and for
 `move`/`drag` always (they take the real cursor by construction), the app shows the
 presence overlay: a whisper of a tint over the desktop (readable from across the room,
-never enough to hide anything), a centered bezel that narrates each action in
-evidence-verdict language with the session's elapsed time, and the jellyfish escorting
-the cursor. Before each hardware click a charge-up ring fills at the aim point for
-~600 ms — that wind-up is a deliberate interrupt window, not decoration. The overlay
-lingers ~15 s after the last command, then fades. A "show overlay for every action"
-toggle in the menu bar popover extends it to ghost-rung commands too.
+never enough to hide anything), an opaque bezel that narrates each action in
+evidence-verdict language with the session's elapsed time (drag it wherever it bothers
+you least — the position is remembered), and the jellyfish escorting the cursor while a
+command is in flight, then drifting home to perch beside the bezel. Before each hardware
+click a sigil charges at the aim point for ~600 ms — that wind-up is a deliberate
+interrupt window, not decoration. The overlay lingers ~15 s after the last command, then
+fades. A "show overlay for every action" toggle in the menu bar popover extends it to
+ghost-rung commands too.
+
+**The cursor stays negotiable.** During a `move`/`drag`, a brushed mouse is absorbed —
+the glide bends elastically and eases back on path, still landing on the destination —
+while sustained deliberate motion (about a quarter second of it) makes the gesture yield:
+the button is released, the reply says "yielded to the hand on the mouse", and the cursor
+is yours. ⌥⎋ remains the hard stop.
 
 **⌥⎋ is the emergency stop.** While the overlay is visible, Option+Escape halts the
 engine mid-action: a cursor trace aborts within one sample (a held drag button is
@@ -223,7 +231,10 @@ content drags and title-bar drags all stayed silent, background and frontmost al
 Because these verbs always take the physical cursor, they are presence-gated like
 `activate`: refused while a human is present unless `--confirm`.
 
-The path is a straight line, or a smooth curve **through** `--via` waypoints — built for
+A bare start→end `move` follows a naturally bowed arc — a randomized few-percent
+perpendicular bow, because human motion is never a ruler line; `drag` paths stay exact
+(their geometry is semantic — sliders, selections), and explicit waypoints are honored
+as given. The path can also be a smooth curve **through** `--via` waypoints — built for
 hover-intent chains: glide onto the nav item, pause, then curve down into the flyout
 without leaving the hover region. `--duration` (seconds) and `--easing` shape the timing;
 the default is a distance-based duration with ease-in-out, which is what human motion
@@ -259,6 +270,17 @@ app you targeted, so the window-count read-back can miss it and the verdict stay
 it matters. And once open, such a menu is not dismissible by any ghost mechanism
 (posted Escape to host and appex both no-op — menu tracking runs its own event loop;
 re-pressing does not toggle): choose an item, or quit the host app to tear it down.
+
+## The demo stage
+
+`demo` opens a deterministic practice window at (720, 200), 560×720 — fixed position,
+stable labels, every control instrumented with a counter, so any verb can be exercised
+and *verified* without borrowing your real windows. Drive it with `--app Rocuronium`: a
+click target ("Tap Target" → "clicks: N"), a text field ("Type Here" → echo), a switch, a
+slider, a hover pad whose tracking fires even in the background ("hovers: N"), a
+120-row scroll flume whose needle is "Row 87 · the needle", and a gallery of the
+jellyfish's states plus the charge sigil. `demo reset` (the default) zeroes the counters;
+`demo show` keeps state; `demo hide` closes it. Also openable from the menu bar popover.
 
 ## The display hold
 

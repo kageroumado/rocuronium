@@ -40,6 +40,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium launch     --app <name>
   rocuronium activate   --app <name> [--confirm]
   rocuronium activity   (recent agent actions with their evidence verdicts)
+  rocuronium demo       [show|reset|hide]  (deterministic practice window, --app Rocuronium)
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
@@ -115,8 +116,8 @@ if command == "mcp" {
 }
 
 var payload: [String: Any] = ["command": command]
-// `display` takes a positional subcommand: `rocuronium display acquire`.
-if command == "display", let action = arguments.first, !action.hasPrefix("-") {
+// `display` and `demo` take a positional subcommand: `rocuronium display acquire`.
+if command == "display" || command == "demo", let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }

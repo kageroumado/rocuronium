@@ -312,6 +312,20 @@ enum MCPServer {
             properties: [:], required: [],
         ),
         tool(
+            "demo",
+            """
+            Open Rocuronium's deterministic demo stage — a fixed practice window at \
+            (720, 200), 560×720, with instrumented targets for every verb: a click counter, \
+            a text field with an echo, a switch, a slider, a hover pad, and a 120-row \
+            scroll list whose needle is 'Row 87 · the needle'. Drive it with app \
+            'Rocuronium'; every consequence is readable back. Action 'reset' (default) \
+            zeroes the counters, 'show' keeps state, 'hide' closes it.
+            """,
+            properties: [
+                "action": ["type": "string", "enum": ["show", "reset", "hide"]],
+            ], required: [],
+        ),
+        tool(
             "screenshot",
             "Capture pixels for the calling model to look at: an app's window (occlusion-proof, works while parked), an explicit region, or the main display. Returns the PNG path.",
             properties: [
