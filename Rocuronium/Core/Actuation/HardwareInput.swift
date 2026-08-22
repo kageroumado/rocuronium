@@ -17,6 +17,27 @@ nonisolated enum HardwareInput {
         /// Ordinary application windows. Higher layers are the Dock and menu bar, whose
         /// full-screen backing windows would otherwise look like they cover everything.
         static let normalWindowLayer = 0
+        /// Trace pacing waits with (near-)zero tolerance. The system's default timer
+        /// tolerance coalesces a ~8 ms frame sleep up to tens of ms, which is exactly the
+        /// "cursor moves at 20 fps" complaint — the plan samples at 120 Hz, and only
+        /// uncoalesced sleeps deliver it.
+        static let traceTolerance: Duration = .milliseconds(1)
+        /// Elasticity: cursor movement below this between two of our samples is rounding
+        /// noise, not a hand.
+        static let humanNoiseFloor = 1.0
+        /// Per-posted-frame decay (~120 Hz) of the elastic offset: a nudge is absorbed and
+        /// eased back onto the path over roughly half a second.
+        static let offsetDecay = 0.94
+        /// The grab detector counts *events*, not positions: our own absolute posts
+        /// overwrite a hand's displacement within ~9 ms, so position sampling misses all
+        /// but a lucky race — but the HID system counts every motion event, ours and the
+        /// human's alike (verified 1:1), and the excess over what we posted is the hand.
+        /// A decaying excess above this yields; a physical mouse reports at 60–125 Hz, so
+        /// this is roughly a quarter-second of sustained deliberate motion, while an
+        /// accidental brush's short burst decays away below it.
+        static let yieldExcessEvents = 20.0
+        /// Per-check (~40 Hz) decay of the excess-event accumulator.
+        static let excessDecay = 0.9
     }
 
     /// Who owns the frontmost ordinary window at `point`.
@@ -109,13 +130,99 @@ nonisolated enum HardwareInput {
     ///   deltas (games, pane splitters) sees no motion while position-based code works.
     /// - Integer delta stamping accumulates rounding across a stream (+33% over 40 steps);
     ///   the fields are written as doubles.
+    /// A cancellation signal a raw thread can poll: the walk runs outside Swift concurrency,
+    /// where `Task.isCancelled` does not exist.
+    private final class CancelFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func cancel() {
+            lock.lock()
+            defer { lock.unlock() }
+            value = true
+        }
+    }
+
     static func trace(
         _ plan: PathPlan, button: MouseButton?, restoreCursor: Bool,
     ) async -> TraceOutcome {
         InputAttribution.shared.noteSyntheticInput()
-        let source = CGEventSource(stateID: .hidSystemState)
         let restore = CGEvent(source: nil)?.location
+
+        // The walk runs on a dedicated `.userInteractive` thread with `mach_wait_until`
+        // pacing, not on Swift concurrency timers. Measured (2026-08-23): the async loop —
+        // even at raised priority, even with 1 ms tolerance — delivered ~43 of 120 planned
+        // samples/s, which reads as ~20 fps cursor motion; a mach-paced thread posts a
+        // clean 120/s, saturating the window server's ~60 Hz pointer publication, which is
+        // display rate. The thread also makes the pacing independent of whatever else the
+        // engine actor is doing.
+        let cancelled = CancelFlag()
+        let walk = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Walk, Never>) in
+                let thread = Thread {
+                    continuation.resume(returning: walkSamples(plan: plan, button: button, cancelled: cancelled))
+                }
+                thread.name = "rocuronium.trace"
+                thread.qualityOfService = .userInteractive
+                thread.start()
+            }
+        } onCancel: {
+            cancelled.cancel()
+        }
+
+        if restoreCursor, let restore {
+            try? await Task.sleep(for: Constants.settleDelay)
+            InputAttribution.shared.noteSyntheticInput()
+            CGEvent(
+                mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: .mouseMoved,
+                mouseCursorPosition: restore, mouseButton: .left,
+            )?.post(tap: .cghidEventTap)
+        }
+        // The window server publishes the pointer a frame or two behind a 120 Hz post
+        // stream, and the lag varies — an immediate read reported the cursor ~13 pt short
+        // of a destination it demonstrably reached (misread as "a human hand may be on the
+        // mouse"), and a fixed settle still missed one run in three. Poll until the read
+        // agrees with the last posted point; a genuine post-walk human displacement
+        // outlasts the poll and still reports honestly.
+        var cursorEnd = CGEvent(source: nil)?.location ?? walk.lastPoint
+        var settlePolls = 0
+        while settlePolls < 8, hypot(cursorEnd.x - walk.lastPoint.x, cursorEnd.y - walk.lastPoint.y) > 2 {
+            settlePolls += 1
+            try? await Task.sleep(for: .milliseconds(30))
+            cursorEnd = CGEvent(source: nil)?.location ?? cursorEnd
+        }
+        return TraceOutcome(
+            samplesPosted: walk.posted,
+            samplesTotal: plan.samples.count,
+            cursorEnd: cursorEnd,
+            abortReason: walk.abort,
+        )
+    }
+
+    private struct Walk {
+        let posted: Int
+        let lastPoint: CGPoint
+        let abort: String?
+    }
+
+    /// The synchronous sample walk: arrive, settle, press, glide, release — mach-paced.
+    private static func walkSamples(plan: PathPlan, button: MouseButton?, cancelled: CancelFlag) -> Walk {
+        let source = CGEventSource(stateID: .hidSystemState)
         var previous = plan.start
+
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        func absoluteTime(after offset: Duration, of start: UInt64) -> UInt64 {
+            let nanoseconds = UInt64(offset.components.seconds) * 1_000_000_000
+                + UInt64(offset.components.attoseconds / 1_000_000_000)
+            return start + nanoseconds * UInt64(timebase.denom) / UInt64(timebase.numer)
+        }
 
         func post(_ type: CGEventType, at point: CGPoint) {
             guard let event = CGEvent(
@@ -131,61 +238,139 @@ nonisolated enum HardwareInput {
             previous = point
         }
 
-        func finish(posted: Int, abort: String?) async -> TraceOutcome {
-            if restoreCursor, let restore {
-                try? await Task.sleep(for: Constants.settleDelay)
-                post(.mouseMoved, at: restore)
-            }
-            return TraceOutcome(
-                samplesPosted: posted,
-                samplesTotal: plan.samples.count,
-                cursorEnd: CGEvent(source: nil)?.location ?? previous,
-                abortReason: abort,
-            )
-        }
-
         // Arrive, settle, then press — a down on the very first event of a motion stream is
         // a shape real input never has, and the settle gives the window under the point its
-        // hover state before the button lands.
+        // hover state before the button lands. Thread.sleep is fine here: this thread has
+        // nothing else to do, and the durations are choreography, not pacing.
+        InputAttribution.shared.noteSyntheticInput()
         post(.mouseMoved, at: plan.start)
-        try? await Task.sleep(for: Constants.settleDelay)
+        Thread.sleep(forTimeInterval: 0.08)
         if let button {
             post(button.down, at: plan.start)
-            try? await Task.sleep(for: Constants.clickHoldDuration)
+            Thread.sleep(forTimeInterval: 0.03)
         }
 
         let moveType = button?.dragged ?? CGEventType.mouseMoved
-        let clock = ContinuousClock()
-        let begin = clock.now
+        func motionEventCount() -> UInt32 {
+            CGEventSource.counterForEventType(.hidSystemState, eventType: .mouseMoved)
+                &+ CGEventSource.counterForEventType(.hidSystemState, eventType: .leftMouseDragged)
+                &+ CGEventSource.counterForEventType(.hidSystemState, eventType: .rightMouseDragged)
+        }
+        let begin = mach_absolute_time()
         var posted = 0
-        for sample in plan.samples {
-            // Same mid-run revocation checks as `type`, for the same two reasons: a lock
-            // means the cursor now belongs to the login window, and a cancelled request has
-            // already been reported failed. A held button is released where the walk stopped
-            // — aborting a drag must never leave the system in "button down" limbo.
-            guard consoleIsStillOurs else {
+        // Elasticity: the hand's displacement, absorbed and eased back onto the path. The
+        // ring of recent posts is the lag filter — the window server publishes the pointer
+        // asynchronously, so a read can return a position we posted a frame or two ago;
+        // matching against recent posts keeps our own latency from reading as a hand.
+        var humanOffset = CGPoint.zero
+        var recentPosts: [CGPoint] = []
+        // The grab detector: motion events beyond the ones we posted are the human's.
+        var countedEvents = motionEventCount()
+        var postedSinceCount = 0
+        var humanEvents = 0.0
+        var lockCountdown = 0
+        var index = 0
+        let count = plan.samples.count
+        while index < count {
+            // Cheap flags every frame; the screen-lock read (~1 ms of session queries) every
+            // ~130 ms — a lock cannot matter faster than that, and per-frame it taxes the rate.
+            lockCountdown -= 1
+            var revoked = cancelled.isCancelled || EmergencyStop.isHalted
+            if !revoked, lockCountdown <= 0 {
+                lockCountdown = 16
+                revoked = UserPresence.screenIsLocked
+            }
+            if revoked {
                 InputAttribution.shared.noteSyntheticInput()
                 if let button { post(button.up, at: previous) }
                 let abort = if EmergencyStop.isHalted {
                     "halted by the human (⌥⎋) mid-path"
-                } else if Task.isCancelled {
+                } else if cancelled.isCancelled {
                     "the request was cancelled mid-path"
                 } else {
                     "the screen locked mid-path"
                 }
-                return await finish(posted: posted, abort: abort)
+                return Walk(posted: posted, lastPoint: previous, abort: abort)
             }
+
+            // The hand on the mouse, detected two ways, checked every third frame (~40 Hz).
+            //
+            // The *grab detector* is event accounting: the HID system counts every motion
+            // event, ours and the human's alike, so the excess over what we posted is
+            // exactly the hand — position sampling cannot do this job, because our own
+            // absolute posts overwrite a displacement within ~9 ms (measured: a 350 pt
+            // synthetic "grab" went entirely unseen by position reads). Sustained excess
+            // yields the gesture rather than fighting the hand; a brushed mouse's short
+            // burst decays away below the threshold.
+            //
+            // The *elastic bend* stays position-based and cosmetic: when a read does catch
+            // the displaced cursor, the path absorbs the offset and eases back. The ring
+            // of recent posts filters window-server lag out of that read.
+            if posted > 2, posted.isMultiple(of: 3) {
+                let events = motionEventCount()
+                let excess = Int(events &- countedEvents) - postedSinceCount
+                countedEvents = events
+                postedSinceCount = 0
+                if excess > 0 { humanEvents += Double(excess) }
+                if humanEvents > Constants.yieldExcessEvents {
+                    InputAttribution.shared.noteSyntheticInput()
+                    if let button { post(button.up, at: previous) }
+                    return Walk(
+                        posted: posted, lastPoint: previous,
+                        abort: "the human moved the cursor mid-path — yielded to the hand on the mouse",
+                    )
+                }
+                humanEvents *= Constants.excessDecay
+
+                if let actual = CGEvent(source: nil)?.location {
+                    let deviation = recentPosts
+                        .map { hypot(actual.x - $0.x, actual.y - $0.y) }
+                        .min() ?? 0
+                    if deviation > Constants.humanNoiseFloor {
+                        let nearest = recentPosts.min {
+                            hypot(actual.x - $0.x, actual.y - $0.y) < hypot(actual.x - $1.x, actual.y - $1.y)
+                        } ?? previous
+                        humanOffset.x += actual.x - nearest.x
+                        humanOffset.y += actual.y - nearest.y
+                    }
+                    humanOffset.x *= Constants.offsetDecay
+                    humanOffset.y *= Constants.offsetDecay
+                }
+            }
+
+            // Taper the elastic offset out over the final stretch, so a nudged glide still
+            // lands exactly on the destination the caller was promised.
+            let progress = Double(index) / Double(max(count - 1, 1))
+            let taper = min(1, (1 - progress) / 0.15)
+            let sample = plan.samples[index]
             InputAttribution.shared.noteSyntheticInput()
-            post(moveType, at: sample.point)
+            post(moveType, at: CGPoint(
+                x: sample.point.x + humanOffset.x * taper,
+                y: sample.point.y + humanOffset.y * taper,
+            ))
             posted += 1
-            try? await clock.sleep(until: begin + sample.offset)
+            postedSinceCount += 1
+            recentPosts.append(previous)
+            if recentPosts.count > 8 { recentPosts.removeFirst() }
+
+            let next = index + 1
+            guard next < count else { break }
+            // Catch up rather than burst: when behind schedule, skip to the sample due now
+            // (never past the final one) instead of machine-gunning stale points.
+            let now = mach_absolute_time()
+            var target = next
+            while target < count - 1, absoluteTime(after: plan.samples[target].offset, of: begin) < now {
+                target += 1
+            }
+            index = target
+            mach_wait_until(absoluteTime(after: plan.samples[index].offset, of: begin))
         }
 
         if let button {
-            try? await Task.sleep(for: Constants.clickHoldDuration)
+            Thread.sleep(forTimeInterval: 0.03)
             post(button.up, at: plan.end)
         }
-        return await finish(posted: posted, abort: nil)
+        return Walk(posted: posted, lastPoint: previous, abort: nil)
     }
 
     /// Types into the frontmost first responder, like hands on the keyboard. Same unicode

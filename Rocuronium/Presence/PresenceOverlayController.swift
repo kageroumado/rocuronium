@@ -18,6 +18,8 @@ final class PresenceOverlayController {
     var onEmergencyStop: (@MainActor () -> Void)?
 
     private var window: NSWindow?
+    private var bezelWindow: NSWindow?
+    private var bezelMoveObserver: (any NSObjectProtocol)?
     private let hotkey = HotkeyMonitor()
     private var lingerTask: Task<Void, Never>?
 
@@ -120,8 +122,10 @@ final class PresenceOverlayController {
         model.phase = .hidden
         model.sessionStart = nil
         model.chargeRing = nil
-        window?.orderOut(nil)
-        window?.alphaValue = 0
+        for panel in [window, bezelWindow] {
+            panel?.orderOut(nil)
+            panel?.alphaValue = 0
+        }
         onEmergencyStop?()
     }
 
@@ -129,17 +133,21 @@ final class PresenceOverlayController {
 
     private func show() {
         if window == nil { window = makeWindow() }
-        guard let window else { return }
-        if !window.isVisible {
-            window.alphaValue = 0
-            window.orderFrontRegardless()
-        }
-        if window.alphaValue < 1 {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Constants.fadeIn
-                window.animator().alphaValue = 1
+        if bezelWindow == nil { bezelWindow = makeBezelWindow() }
+        for panel in [window, bezelWindow] {
+            guard let panel else { continue }
+            if !panel.isVisible {
+                panel.alphaValue = 0
+                panel.orderFrontRegardless()
+            }
+            if panel.alphaValue < 1 {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = Constants.fadeIn
+                    panel.animator().alphaValue = 1
+                }
             }
         }
+        publishBezelFrame()
         // The stop chord only exists while there is visibly something to stop.
         hotkey.register()
     }
@@ -149,19 +157,22 @@ final class PresenceOverlayController {
         model.phase = .hidden
         model.sessionStart = nil
         model.chargeRing = nil
-        guard let window else { return }
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = Constants.fadeOut
-            window.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            // AppKit calls this on the main thread; the closure is typed Sendable, so assert
-            // rather than hop (see the scheduling hierarchy — assumeIsolated is near-free).
-            MainActor.assumeIsolated {
-                // A new session may have begun during the fade; only order out if still hidden.
-                guard let self, self.model.phase == .hidden else { return }
-                self.window?.orderOut(nil)
-            }
-        })
+        for panel in [window, bezelWindow] {
+            guard let panel else { continue }
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = Constants.fadeOut
+                panel.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                // AppKit calls this on the main thread; the closure is typed Sendable, so
+                // assert rather than hop (assumeIsolated is near-free).
+                MainActor.assumeIsolated {
+                    // A new session may have begun during the fade; only order out while
+                    // still hidden.
+                    guard let self, self.model.phase == .hidden else { return }
+                    panel.orderOut(nil)
+                }
+            })
+        }
     }
 
     private func restartLinger() {
@@ -190,5 +201,63 @@ final class PresenceOverlayController {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: OverlayRootView(model: model))
         return window
+    }
+
+    /// The bezel's own window: opaque chrome the human can drag anywhere, with the frame
+    /// remembered across sessions and launches. Separate from the effects window because
+    /// that one must stay mouse-transparent over the whole screen, while the bezel wants
+    /// exactly the opposite — a small surface that catches the drag.
+    private func makeBezelWindow() -> NSWindow? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let hosting = NSHostingView(rootView: BezelView(model: model))
+        let size = hosting.fittingSize
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false,
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.ignoresMouseEvents = false
+        window.isMovableByWindowBackground = true
+        window.level = .screenSaver
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        // The saved position wins; the default sits bottom-center, high enough to clear
+        // the Dock. Only the origin is the human's — the size is ours, so a frame saved
+        // by an older layout must not shrink the current one.
+        if window.setFrameUsingName(Self.bezelFrameName) {
+            window.setContentSize(size)
+        } else {
+            window.setFrameOrigin(NSPoint(
+                x: screen.frame.midX - size.width / 2,
+                y: screen.frame.minY + 160,
+            ))
+        }
+        window.setFrameAutosaveName(Self.bezelFrameName)
+        bezelMoveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: window, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.publishBezelFrame() }
+        }
+        return window
+    }
+
+    private static let bezelFrameName = "PresenceBezel"
+
+    /// Mirrors the bezel's frame into the model in the effects window's top-left
+    /// coordinates, so the jellyfish's perch follows the bezel wherever it is dragged.
+    private func publishBezelFrame() {
+        guard let bezelWindow, let screen = NSScreen.screens.first else { return }
+        let frame = bezelWindow.frame
+        model.bezelFrame = CGRect(
+            x: frame.minX,
+            y: screen.frame.height - frame.maxY,
+            width: frame.width,
+            height: frame.height,
+        )
     }
 }

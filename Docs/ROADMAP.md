@@ -271,6 +271,42 @@ only Kiri can make:
 
 ## Done
 
+- **2026-08-23 — the presence-polish batch: display-rate motion, elastic yield, faces,
+  perch, movable bezel, demo stage.** Kiri's post-ship feedback round, every item
+  measured on the installed build:
+  - *Smooth cursor motion.* The "20 fps" stutter was Swift concurrency timer leeway —
+    the async pacing delivered 43 of 120 planned samples/s regardless of task priority.
+    The sample walk now runs on a dedicated `.userInteractive` thread with
+    `mach_wait_until` pacing (113 posts/s achieved) plus a catch-up that skips stale
+    samples instead of bursting them. Ceiling measured: the window server publishes
+    pointer position at ~55 fps to an idle process, ~37 fps to one hosting the overlay —
+    no private API changes that; CADisplayLink is unnecessary (120 Hz posts already
+    saturate publication).
+  - *Elastic human override.* Grab detection is **event accounting**, not position
+    sampling (our own 113/s absolute posts overwrite a hand's displacement within ~9 ms —
+    a 350 pt synthetic grab went entirely unseen by reads): the HID event counters track
+    every motion event 1:1 (verified), and the decaying excess over what we posted is the
+    hand. Sustained motion (~0.25 s) yields with the button released; a brushed mouse is
+    absorbed as a tapered elastic bend that still lands exactly. Landing read-back now
+    polls until publication agrees with the last posted point (a fixed settle still
+    misread one run in three as "a human hand may be on the mouse").
+  - *Jellyfish*: escorts only while a command is in flight, then drifts home to a perch
+    beside the bezel; blinks, gazes (wanders idle, scans thinking, locks toward travel
+    while acting), squints when determined, worried brows on needs-human. The charge
+    circle is now a breathing semitransparent sigil (rune ring, counter-rotating
+    diamonds) with the progress arc kept legible on top.
+  - *Bezel*: its own opaque, draggable window (frame autosaved, default clear of the
+    Dock); stop chip reads "⌥ esc" — the ⎋ glyph was recognized by nobody.
+  - *Demo stage* (`demo` verb + popover button): deterministic practice window,
+    counters as read-back, state gallery. Building it surfaced and fixed two real bugs:
+    **same-process AX actions execute on the caller's thread and SwiftUI's handlers
+    assert MainActor** — a self-targeted press was a guaranteed SIGTRAP (mutating AX
+    calls now hop to main for our own pid; this also explains the earlier statusitem
+    self-press -25200), and **the overlay's bezel text poisoned label queries against
+    the app itself** (overlay chrome is now `accessibilityHidden`). SwiftUI `onHover`
+    only fires frontmost, so the stage's hover pad uses an `.activeAlways` AppKit
+    tracking area.
+
 - **2026-08-22 · 7b98011 — the Presence module: visible-agent overlay, ⌥⎋ emergency stop,
   activity log, jellyfish glyph + app icon** (Phase 5 pick #2; the last unbuilt
   ARCHITECTURE §2 module). Core side: `EmergencyStop` (atomic, checked per-sample in

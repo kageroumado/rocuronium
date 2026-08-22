@@ -1,22 +1,25 @@
 import AppKit
 import SwiftUI
 
-/// The visible-agent overlay: whisper tint, centered bezel, jellyfish escort, and the
-/// click effects. Everything renders from one `OverlayModel`, so the surfaces cannot
-/// disagree about what the agent is doing.
+/// The visible-agent overlay's full-screen layer: whisper tint and the effects. The bezel
+/// lives in its own small window (movable, opaque) — see `PresenceOverlayController`.
+/// Everything renders from one `OverlayModel`, so the surfaces cannot disagree about what
+/// the agent is doing.
 struct OverlayRootView: View {
     let model: OverlayModel
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             // The from-across-the-room cue: ~5% dim, never enough to hide the work.
             Rectangle()
                 .fill(Color.black.opacity(0.05))
             OverlayEffectsView(model: model)
-            BezelView(model: model)
-                .padding(.bottom, 52)
         }
         .ignoresSafeArea()
+        // Chrome, not content: the overlay must be invisible to accessibility, or its own
+        // narration poisons label queries against this app — the bezel echoing
+        // "move 'Hover Pad'…" matched a demo-stage search for the pad (measured).
+        .accessibilityHidden(true)
     }
 }
 
@@ -239,10 +242,50 @@ enum JellyfishArt {
             Path(ellipseIn: CGRect(x: 17, y: 13, width: 30, height: 22)),
             with: .color(.white.opacity(0.22)),
         )
-        // Cute eyes with glints, and the pink cheeks.
+        // The face. Expression is the state made legible up close, the way the glow is
+        // from afar: a blink on a slow clock keeps it alive; the gaze (the glint) wanders
+        // idle, scans while thinking, and locks toward travel while acting; needs-human
+        // widens the eyes and adds worried brows.
+        let blinkPhase = (time / 4.4).truncatingRemainder(dividingBy: 1)
+        let blink = blinkPhase < 0.055 ? sin(blinkPhase / 0.055 * .pi) : 0
+        let (gazeX, gazeY, eyeScale, squint): (Double, Double, Double, Double) = switch phase {
+        case .thinking: (0.9 * sin(time * 2 * .pi / 1.9), -1.0, 1, 1)
+        case .acting: (max(-1, min(1, lean / 13)) * 1.2, 0.3, 1, 0.78)
+        case .needsHuman: (0, 0.6, 1.15, 1)
+        default: (0.6 * sin(time * 2 * .pi / 3.1), 0.4 * sin(time * 2 * .pi / 4.3), 1, 1)
+        }
+        let eyeRadius = 2.6 * eyeScale
+        let eyeHeight = eyeRadius * squint * (1 - 0.85 * blink)
         for eyeX in [26.0, 38.0] {
-            bell.fill(Path(ellipseIn: CGRect(x: eyeX - 2.6, y: 29.9, width: 5.2, height: 5.2)), with: .color(JellyPalette.eye))
-            bell.fill(Path(ellipseIn: CGRect(x: eyeX + 0.05, y: 30.75, width: 1.7, height: 1.7)), with: .color(.white))
+            bell.fill(
+                Path(ellipseIn: CGRect(
+                    x: eyeX - eyeRadius, y: 32.5 - eyeHeight,
+                    width: eyeRadius * 2, height: eyeHeight * 2,
+                )),
+                with: .color(JellyPalette.eye),
+            )
+            if blink < 0.5 {
+                bell.fill(
+                    Path(ellipseIn: CGRect(x: eyeX + 0.05 + gazeX, y: 30.75 + gazeY * 0.8, width: 1.7, height: 1.7)),
+                    with: .color(.white),
+                )
+            }
+        }
+        if phase == .needsHuman {
+            // Worried brows: inner ends raised.
+            var leftBrow = Path()
+            leftBrow.move(to: CGPoint(x: 23, y: 27.6))
+            leftBrow.addLine(to: CGPoint(x: 28.3, y: 25.9))
+            var rightBrow = Path()
+            rightBrow.move(to: CGPoint(x: 35.7, y: 25.9))
+            rightBrow.addLine(to: CGPoint(x: 41, y: 27.6))
+            for brow in [leftBrow, rightBrow] {
+                bell.stroke(
+                    brow,
+                    with: .color(JellyPalette.eye.opacity(0.8)),
+                    style: StrokeStyle(lineWidth: 1.1, lineCap: .round),
+                )
+            }
         }
         for cheekX in [20.5, 43.5] {
             bell.fill(
@@ -265,7 +308,7 @@ struct OverlayEffectsView: View {
     @State private var follow = EscortState()
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
 
@@ -273,7 +316,21 @@ struct OverlayEffectsView: View {
                 // screen, so flipping through the view height lands in view space.
                 let mouse = NSEvent.mouseLocation
                 let cursor = CGPoint(x: mouse.x, y: size.height - mouse.y)
-                follow.update(now: now, cursor: cursor)
+                // Escort the cursor only while a command is in flight. Once the work stops,
+                // the cursor is the human's again, and a mascot glued to it reads as "the
+                // agent still has hands" — so the jellyfish lets go and drifts home to a
+                // perch beside the bezel instead.
+                let escorting = model.phase == .acting || model.phase == .thinking
+                // Home is beside the bezel, wherever the human has dragged it.
+                let perch = model.bezelFrame.map { CGPoint(x: $0.minX - 54, y: $0.minY - 52) }
+                    ?? CGPoint(x: size.width / 2 - 160, y: size.height - 240)
+                follow.update(
+                    now: now, cursor: cursor,
+                    target: escorting
+                        ? CGPoint(x: cursor.x - 44, y: cursor.y - 62)
+                        : perch,
+                    escorting: escorting,
+                )
 
                 for dot in follow.trail {
                     let age = now - dot.time
@@ -291,7 +348,7 @@ struct OverlayEffectsView: View {
 
                 if let ring = model.chargeRing {
                     let elapsed = timeline.date.timeIntervalSince(ring.start)
-                    Self.drawChargeSigil(
+                    SigilArt.draw(
                         in: context, at: ring.point,
                         progress: min(1, elapsed / ring.duration),
                         elapsed: elapsed, time: now,
@@ -325,12 +382,15 @@ struct OverlayEffectsView: View {
         }
         .allowsHitTesting(false)
     }
+}
 
-    /// The destination sigil: where the jellyfish is headed, and how far the wind-up has
-    /// gotten. A faint breathing seal — outer ring, slowly rotating dashed rune ring,
-    /// counter-rotating diamond marks, a center point — with the progress arc kept at full
-    /// strength on top, because the wind-up is the interrupt window and must stay legible.
-    private static func drawChargeSigil(
+/// The destination sigil: where the jellyfish is headed, and how far the wind-up has
+/// gotten. A faint breathing seal — outer ring, slowly rotating dashed rune ring,
+/// counter-rotating diamond marks, a center point — with the progress arc kept at full
+/// strength on top, because the wind-up is the interrupt window and must stay legible.
+@MainActor
+enum SigilArt {
+    static func draw(
         in context: GraphicsContext, at center: CGPoint,
         progress: Double, elapsed: TimeInterval, time: TimeInterval
     ) {
@@ -383,6 +443,46 @@ struct OverlayEffectsView: View {
     }
 }
 
+/// The mascot in one state, gently animated in place — reused by the popover's hero card
+/// and the demo stage's gallery.
+struct JellyfishStateView: View {
+    let phase: OverlayModel.Phase
+    var dimmed = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            Canvas { context, size in
+                JellyfishArt.draw(
+                    in: context,
+                    rect: CGRect(origin: .zero, size: size),
+                    time: timeline.date.timeIntervalSinceReferenceDate,
+                    phase: phase,
+                )
+            }
+        }
+        .opacity(dimmed ? 0.66 : 1)
+    }
+}
+
+/// The sigil cycling its wind-up forever — the demo stage's preview of the charge ring.
+struct SigilPreviewView: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            Canvas { context, size in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let cycle = time.truncatingRemainder(dividingBy: 2.4)
+                SigilArt.draw(
+                    in: context,
+                    at: CGPoint(x: size.width / 2, y: size.height / 2),
+                    progress: min(1, cycle / 1.8),
+                    elapsed: cycle,
+                    time: time,
+                )
+            }
+        }
+    }
+}
+
 /// The spring that keeps the jellyfish a hand's width above-left of the pointer — escorting
 /// it, never riding it — plus the fading wake the cursor leaves while it moves.
 @MainActor
@@ -403,21 +503,20 @@ final class EscortState {
     private var lastTrailDrop: TimeInterval = 0
     private var lastCursor: CGPoint?
 
-    func update(now: TimeInterval, cursor: CGPoint) {
+    func update(now: TimeInterval, cursor: CGPoint, target: CGPoint, escorting: Bool) {
         defer {
             lastUpdate = now
             lastCursor = cursor
         }
         guard let lastUpdate else {
-            position = CGPoint(x: cursor.x - 44, y: cursor.y - 62)
+            position = target
             return
         }
         let dt = min(0.05, max(0.001, now - lastUpdate))
 
-        // The prototype's spring: exponential approach toward a perch above-left, with the
-        // lean derived from horizontal velocity.
-        let k = 1 - pow(0.0025, dt)
-        let target = CGPoint(x: cursor.x - 44, y: cursor.y - 62)
+        // The prototype's spring: exponential approach, with the lean derived from
+        // horizontal velocity. Escorting is snappy; the drift home is a lazy float.
+        let k = 1 - pow(escorting ? 0.0025 : 0.15, dt)
         let next = CGPoint(
             x: position.x + (target.x - position.x) * k,
             y: position.y + (target.y - position.y) * k,
@@ -425,12 +524,13 @@ final class EscortState {
         let velocity = CGPoint(x: (next.x - position.x) / (dt * 1000), y: (next.y - position.y) / (dt * 1000))
         position = next
         lean = max(-13, min(13, velocity.x * 55))
-        isMoving = hypot(velocity.x, velocity.y) > 0.04
+        isMoving = escorting && hypot(velocity.x, velocity.y) > 0.04
 
         // The wake follows the *cursor*, not the jellyfish — motion history a human can
-        // read at a glance. Dropped only while the pointer actually moves.
+        // read at a glance. Dropped only while the agent is actually escorting: a perched
+        // jellyfish must not decorate the human's own mousing.
         trail.removeAll { now - $0.time >= Self.trailLifetime }
-        if let lastCursor, hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) > 1.5,
+        if escorting, let lastCursor, hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) > 1.5,
            now - lastTrailDrop > 0.036 {
             lastTrailDrop = now
             trail.append(TrailDot(point: cursor, time: now))
@@ -440,15 +540,15 @@ final class EscortState {
 
 // MARK: - Bezel
 
-/// The centered HUD, volume-bezel lineage: jellyfish mark, narration in evidence-verdict
-/// language, elapsed session time, and the stop chord. Rests translucent, wakes to full
-/// opacity for a few seconds around each action, and decays back slowly.
+/// The HUD, volume-bezel lineage: jellyfish mark, narration in evidence-verdict language,
+/// elapsed session time, and the stop chord. Hosted in its own small window so it stays
+/// opaque and the human can drag it wherever it bothers them least; the narration column
+/// is fixed-width so the window never resizes under their cursor.
 struct BezelView: View {
     let model: OverlayModel
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
-            let engaged = timeline.date.timeIntervalSince(model.lastEngagement) < 3
             HStack(spacing: 11) {
                 BezelMarkView(model: model)
                     .frame(width: 30, height: 38)
@@ -457,8 +557,7 @@ struct BezelView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .frame(maxWidth: 300, alignment: .leading)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(width: 300, alignment: .leading)
                     HStack(spacing: 6) {
                         Text("Agent session")
                         Text(elapsed(at: timeline.date))
@@ -466,24 +565,29 @@ struct BezelView: View {
                     }
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                    // Never compressed: squeezable text under-reports the window's
+                    // fitting size, and the whole bezel then renders cramped.
+                    .fixedSize()
                 }
                 Divider()
                     .frame(height: 26)
                 Text("take over")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 KeyChip("⌥")
-                KeyChip("⎋")
+                // "esc", not the ⎋ glyph: the broken-circle-arrow symbol is the official
+                // Escape sign, and nobody recognizes it (measured on the first user).
+                KeyChip("esc")
             }
             .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 16))
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1),
             )
-            .opacity(engaged ? 1 : 0.62)
-            .animation(.easeOut(duration: 1.4), value: engaged)
         }
+        .accessibilityHidden(true)
     }
 
     private func elapsed(at date: Date) -> String {
@@ -498,7 +602,7 @@ private struct BezelMarkView: View {
     let model: OverlayModel
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,

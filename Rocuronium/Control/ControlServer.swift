@@ -247,7 +247,11 @@ final class ControlServer {
         // makes the cross-thread write to `reply` safe.
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var reply = Data()
-        let work = Task { @MainActor in
+        // Explicit priority, because this Task is born on a plain socket thread and would
+        // otherwise inherit an unremarkable QoS — and QoS decides timer leeway. The trace
+        // loop's 8 ms frame sleeps were being coalesced into ~20 ms ticks (measured: 43 of
+        // 120 planned samples/s posted), which is exactly "the cursor moves at 20 fps".
+        let work = Task(name: "control-request", priority: .userInitiated) { @MainActor in
             reply = await router.route(request)
             semaphore.signal()
         }
