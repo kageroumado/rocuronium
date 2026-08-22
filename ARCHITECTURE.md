@@ -273,6 +273,25 @@ would be captured as someone else's pixels at exactly the right size (measured, 
 review item 15). Region and full-display captures keep visible-pixel semantics, which is the
 right question for a diff.
 
+## 9b. The visible agent — Presence/
+
+The one direction invisibility must reverse: when the agent takes the cursor, the human
+deserves to see it happen and to be able to stop it. `Presence/` is that module — a
+borderless overlay window (whisper tint, centered narration bezel, the jellyfish escort,
+charge-ring/ripple effects), an `ActivityLog` ring buffer served by the `activity` verb,
+and the ⌥⎋ emergency stop.
+
+Two boundaries hold it together. Core never imports Presence: the engine telegraphs
+hardware actions through `PresenceRelay`'s static hooks (installed once at launch), and
+the halt is `EmergencyStop` — a Core-side atomic checked by every walk, poll loop, and
+per-sample in `HardwareInput`, so the fastest stop path is one ~8 ms trace sample and a
+mid-payload `type` stops between characters. And resume is asymmetric by design: ⌥⎋ can
+be pressed by anyone, but the flag is cleared only by the menu bar popover's button —
+no socket verb can un-halt the engine, so an agent cannot talk its way past a human who
+took the machine back. The overlay shows for hardware-input opt-ins and the cursor-path
+verbs always, for everything else behind a user toggle; ghost rungs stay invisible by
+design, because rungs 0–3 take nothing from the human that needs announcing.
+
 ## 9a. Rung 4 — hardware input
 
 The cursor-stealing rung is implemented: `CGEvent`s on `.cghidEventTap`, behaving exactly like

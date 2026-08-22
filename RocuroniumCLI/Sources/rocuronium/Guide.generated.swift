@@ -23,6 +23,7 @@ tools. Add `--json` to any command for the full reply.
     launch · activate                              lifecycle
     type · click · scroll · shortcut · menu · key  act
     statusitem                                     menu bar status items
+    activity                                       what happened this session
     display · park · screenshot                    isolation + pixels
 
 Targeting: `--app` takes a name or a bundle id. Two running apps with the same name (a
@@ -85,6 +86,32 @@ What gates on it:
   locked or the aim point is covered by another app's window.
 - Everything else is ghost-safe by construction: rungs 0–3 never move the cursor and
   never change the frontmost app, so they are fine while a human is typing.
+
+## The visible agent: overlay, ⌥⎋, and the activity log
+
+Cursor-taking work is visible work. Whenever a command opts into hardware input, and for
+`move`/`drag` always (they take the real cursor by construction), the app shows the
+presence overlay: a whisper of a tint over the desktop (readable from across the room,
+never enough to hide anything), a centered bezel that narrates each action in
+evidence-verdict language with the session's elapsed time, and the jellyfish escorting
+the cursor. Before each hardware click a charge-up ring fills at the aim point for
+~600 ms — that wind-up is a deliberate interrupt window, not decoration. The overlay
+lingers ~15 s after the last command, then fades. A "show overlay for every action"
+toggle in the menu bar popover extends it to ghost-rung commands too.
+
+**⌥⎋ is the emergency stop.** While the overlay is visible, Option+Escape halts the
+engine mid-action: a cursor trace aborts within one sample (a held drag button is
+released where it stopped), typing stops mid-character, walks bail out. After the halt,
+every acting and perceiving verb is refused with "halted by the human (⌥⎋) — resume from
+the Rocuronium menu bar"; `status` and `activity` still answer and report
+`halted: true`. **Resume is a button in the menu bar popover and nothing else** — no
+socket verb can clear the halt, so an agent cannot un-halt itself. If your verbs are
+suddenly refused with that message, stop and wait for the human; do not retry and do not
+look for a workaround.
+
+`activity` returns the session's recent actions (last 200) with their verdicts — the
+same record the human sees in the menu bar popover, so both sides of the session are
+reading one log.
 
 ## Display asleep is blindness; screen locked is not
 

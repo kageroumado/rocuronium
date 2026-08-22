@@ -22,6 +22,35 @@ final class CommandRouter {
     private let virtualDisplay = VirtualDisplayBridge()
     /// Keeps the display awake for the whole agent session, not just per action.
     private let adrafinil = AdrafinilBridge()
+    /// The visible-agent chrome: tint, bezel, jellyfish, ⌥⎋. Shown per the policy in
+    /// `execute` — cursor-taking commands always, everything else behind the toggle.
+    let overlay = PresenceOverlayController()
+    /// What the agent did, one line per acting command; the popover, the bezel, and the
+    /// `activity` verb all read from here.
+    let activityLog = ActivityLog()
+
+    init() {
+        PresenceOverlayController.shared = overlay
+        PresenceOverlayController.installRelayHooks()
+        overlay.onEmergencyStop = { [activityLog] in
+            activityLog.append(
+                action: "halt", target: "⌥⎋",
+                verdict: "halted",
+                summary: "Emergency stop — agent verbs refused until resumed from the menu bar",
+            )
+        }
+    }
+
+    /// Clears the ⌥⎋ halt. Reachable only from the menu bar popover — human-only by
+    /// design; no socket verb calls this, so an agent can never un-halt itself.
+    func resumeFromHalt() {
+        EmergencyStop.resume()
+        activityLog.append(
+            action: "resume", target: "menu bar",
+            verdict: "resumed",
+            summary: "Agent commands resumed by the human",
+        )
+    }
 
     struct Request: Decodable {
         let command: String
@@ -135,7 +164,18 @@ final class CommandRouter {
             if let complaint = validate(request) {
                 return encode(["ok": false, "error": complaint])
             }
-            return encode(try await execute(request))
+            let reply = try await execute(request)
+            if Self.actingVerbs.contains(request.command) {
+                activityLog.append(
+                    action: request.command,
+                    target: Self.target(of: request),
+                    verdict: reply["verdict"] as? String
+                        ?? (reply["ok"] as? Bool == true ? "ok" : "refused"),
+                    summary: reply["summary"] as? String ?? reply["error"] as? String ?? "",
+                )
+                overlay.commandFinished(reply)
+            }
+            return encode(reply)
         } catch {
             // Interpolating a Swift error enum prints its case name ("notInstalled"), which
             // tells the caller nothing; the description written for humans is the reply.
@@ -146,13 +186,48 @@ final class CommandRouter {
 
     // MARK: - Commands
 
+    /// The verbs that do something to the machine — the set the activity log records, the
+    /// overlay narrates, and the ⌥⎋ halt refuses.
+    private static let actingVerbs: Set<String> = [
+        "type", "click", "scroll", "shortcut", "menu", "key",
+        "move", "drag", "launch", "activate", "park", "statusitem",
+    ]
+
+    /// One phrase for the bezel and the log: what the command aimed at.
+    private static func target(of request: Request) -> String {
+        var parts: [String] = []
+        if let label = request.label { parts.append("'\(label)'") }
+        if let keys = request.keys { parts.append("'\(keys)'") }
+        if let path = request.path, request.command == "menu" { parts.append("'\(path)'") }
+        if let end = request.end { parts.append("to \(end)") }
+        else if let x = request.x, let y = request.y { parts.append("(\(Int(x)), \(Int(y)))") }
+        if let app = request.app { parts.append(parts.isEmpty ? app : "in \(app)") }
+        return parts.isEmpty ? "focused element" : parts.joined(separator: " ")
+    }
+
     private func execute(_ request: Request) async throws -> [String: Any] {
+        // The ⌥⎋ halt refuses everything that perceives or acts. `status`, `diag`, and
+        // `activity` still answer — an agent must be able to learn *why* its verbs stopped
+        // working — and no socket verb can clear the flag: resume is the popover button.
+        if EmergencyStop.isHalted, !["status", "diag", "activity"].contains(request.command) {
+            return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true]
+        }
         // Any command that perceives or acts marks the session active, which places (and
         // keeps renewing) the session-level display hold. Status-shaped commands do not:
         // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
-        case "status", "diag", "request-capture", "display": break
+        case "status", "diag", "request-capture", "display", "activity": break
         default: adrafinil.noteActivity()
+        }
+        // The overlay policy: cursor-taking work is always shown — hardware-input opt-ins
+        // and the path verbs, which take the real cursor by construction — and everything
+        // else only when the "show for all actions" toggle is on. Ghost rungs are invisible
+        // by design; the toggle is for watching, not for safety.
+        if Self.actingVerbs.contains(request.command),
+           request.allowHardwareInput == true
+           || request.command == "move" || request.command == "drag"
+           || overlay.model.showForAllActions {
+            overlay.begin(action: "\(request.command) \(Self.target(of: request))…")
         }
         return switch request.command {
         case "status": status()
@@ -177,8 +252,33 @@ final class CommandRouter {
         case "park": try await park(request)
         case "screenshot": try await screenshot(request)
         case "statusitem": try await statusItem(request)
+        case "activity": activity()
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
+    }
+
+    /// The session's recent actions with their verdicts — the same entries the popover and
+    /// the bezel show, so an agent and the human are reading one record.
+    private func activity() -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        let entries = activityLog.recent(50).map { entry -> [String: Any] in
+            [
+                "date": formatter.string(from: entry.date),
+                "action": entry.action,
+                "target": entry.target,
+                "verdict": entry.verdict,
+                "summary": entry.summary,
+            ]
+        }
+        return [
+            "ok": true,
+            "entries": entries,
+            "count": entries.count,
+            "halted": EmergencyStop.isHalted,
+            "summary": entries.isEmpty
+                ? "no recorded actions this session"
+                : "\(entries.count) recent action(s)" + (EmergencyStop.isHalted ? " · HALTED (⌥⎋)" : ""),
+        ]
     }
 
     private func status() -> [String: Any] {
@@ -195,6 +295,7 @@ final class CommandRouter {
             "advice": presence.advice,
             "virtualDisplayActive": virtualDisplay.activeLease != nil,
             "displayHold": adrafinil.isHolding ? (adrafinil.mechanism ?? "internal") : "none",
+            "halted": EmergencyStop.isHalted,
         ]
     }
 

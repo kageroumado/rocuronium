@@ -301,6 +301,17 @@ enum MCPServer {
             ], required: ["app"],
         ),
         tool(
+            "activity",
+            """
+            The session's recent agent actions with their evidence verdicts (last 200, \
+            newest last) — the same record the human sees in the menu bar. Read-only. Also \
+            reports `halted`: true means the human pressed ⌥⎋ and every acting/perceiving \
+            verb is refused until they resume from the Rocuronium menu bar — do not retry, \
+            and do not attempt to work around it.
+            """,
+            properties: [:], required: [],
+        ),
+        tool(
             "screenshot",
             "Capture pixels for the calling model to look at: an app's window (occlusion-proof, works while parked), an explicit region, or the main display. Returns the PNG path.",
             properties: [

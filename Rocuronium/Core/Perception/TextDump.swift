@@ -69,8 +69,8 @@ nonisolated enum TextDump {
             // Cancellation stops a walk whose caller was already told "timed out" — an
             // abandoned walk otherwise keeps the engine actor busy and every queued request
             // behind it times out too.
-            if Task.isCancelled || clock.now >= deadline {
-                truncationReason = "time budget reached"
+            if Task.isCancelled || EmergencyStop.isHalted || clock.now >= deadline {
+                truncationReason = EmergencyStop.isHalted ? "halted by the human (⌥⎋)" : "time budget reached"
                 return
             }
             visited += 1
