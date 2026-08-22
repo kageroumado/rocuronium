@@ -95,7 +95,7 @@ nonisolated enum ElementQuery {
             // has already been told "timed out" — without it the walk keeps burning the
             // engine actor, and every queued request behind it times out too (measured: two
             // abandoned Finder walks poisoned the socket for a full minute).
-            if Task.isCancelled || clock.now >= deadline {
+            if Task.isCancelled || EmergencyStop.isHalted || clock.now >= deadline {
                 outOfTime = true
                 return
             }

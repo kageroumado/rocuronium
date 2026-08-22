@@ -9,9 +9,10 @@ struct RocuroniumApp: App {
         MenuBarExtra {
             MenuBarContent(engine: engine)
         } label: {
-            // The icon is the safety indicator: filled while the engine is driving something,
-            // outlined when idle. A user must never have to wonder whether an agent has hands.
-            Image(systemName: engine.isDriving ? "cursorarrow.rays" : "cursorarrow")
+            // The icon is the safety indicator: the jellyfish is filled while the engine is
+            // driving something, outlined when idle. A user must never have to wonder
+            // whether an agent has hands.
+            Image(nsImage: engine.isDriving ? MenuBarGlyph.driving : MenuBarGlyph.idle)
         }
         .menuBarExtraStyle(.window)
     }
@@ -24,9 +25,21 @@ final class EngineHost {
     var isDriving: Bool { router.isDriving }
     private(set) var startupError: String?
     private(set) var presence = UserPresence.read()
+    /// Mirrors `EmergencyStop` for the popover; refreshed on the presence timer and by the
+    /// resume button, since the flag itself is a plain atomic the UI cannot observe.
+    private(set) var isHalted = false
 
     private let router = CommandRouter()
     private var server: ControlServer?
+
+    var activityLog: ActivityLog { router.activityLog }
+    var overlayModel: OverlayModel { router.overlay.model }
+
+    /// The one way back from ⌥⎋ — a human clicking a button in this popover.
+    func resumeFromHalt() {
+        router.resumeFromHalt()
+        isHalted = false
+    }
 
     init() {
         let server = ControlServer(router: router)
@@ -44,6 +57,7 @@ final class EngineHost {
     private func pollPresence() async {
         while !Task.isCancelled {
             presence = UserPresence.read()
+            isHalted = EmergencyStop.isHalted
             try? await Task.sleep(for: .seconds(5))
         }
     }
@@ -91,6 +105,18 @@ private struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("rocuronium").font(.headline)
 
+            if engine.isHalted {
+                // The only way back from ⌥⎋. Human-only by design: no socket verb can
+                // clear the halt, so the agent cannot un-halt itself.
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Halted by you (⌥⎋)", systemImage: "hand.raised.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                    Text("Every agent verb is refused until you resume.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Resume agent commands") { engine.resumeFromHalt() }
+                }
+            }
+
             if !engine.isTrusted {
                 // Without this grant nothing works at all, so it is the first thing shown.
                 VStack(alignment: .leading, spacing: 4) {
@@ -119,6 +145,29 @@ private struct MenuBarContent: View {
 
             if let startupError = engine.startupError {
                 Text(startupError).font(.caption).foregroundStyle(.red)
+            }
+
+            @Bindable var overlayModel = engine.overlayModel
+            Toggle("Show overlay for every action", isOn: $overlayModel.showForAllActions)
+                .font(.callout)
+                .toggleStyle(.checkbox)
+
+            let recent = engine.activityLog.recent(5)
+            if !recent.isEmpty {
+                Divider()
+                Text("Recent activity").font(.caption).foregroundStyle(.secondary)
+                ForEach(recent.reversed()) { entry in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(entry.date, format: .dateTime.hour().minute().second())
+                            .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                        Text("\(entry.action) \(entry.target)")
+                            .font(.caption).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(entry.verdict)
+                            .font(.caption)
+                            .foregroundStyle(entry.verdict == "confirmed" ? .green : .secondary)
+                    }
+                }
             }
 
             Divider()

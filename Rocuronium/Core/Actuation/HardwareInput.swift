@@ -166,12 +166,14 @@ nonisolated enum HardwareInput {
             guard consoleIsStillOurs else {
                 InputAttribution.shared.noteSyntheticInput()
                 if let button { post(button.up, at: previous) }
-                return await finish(
-                    posted: posted,
-                    abort: Task.isCancelled
-                        ? "the request was cancelled mid-path"
-                        : "the screen locked mid-path",
-                )
+                let abort = if EmergencyStop.isHalted {
+                    "halted by the human (⌥⎋) mid-path"
+                } else if Task.isCancelled {
+                    "the request was cancelled mid-path"
+                } else {
+                    "the screen locked mid-path"
+                }
+                return await finish(posted: posted, abort: abort)
             }
             InputAttribution.shared.noteSyntheticInput()
             post(moveType, at: sample.point)
@@ -202,8 +204,10 @@ nonisolated enum HardwareInput {
     /// - The socket times out and cancels the request. The caller has by then been told the
     ///   action failed; continuing to drive the physical keyboard afterwards is the one thing
     ///   a tool built on "the evidence matches reality" must never do.
+    /// - The human presses ⌥⎋. That is the fastest stop path in the system — the next sample
+    ///   or character observes the flag, a held button is released, and the hands are theirs.
     private static var consoleIsStillOurs: Bool {
-        !Task.isCancelled && !UserPresence.read().screenLocked
+        !Task.isCancelled && !EmergencyStop.isHalted && !UserPresence.read().screenLocked
     }
 
     /// Returns how much of `text` was actually delivered, so a run cut short is reported

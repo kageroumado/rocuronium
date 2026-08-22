@@ -39,6 +39,7 @@ rocuronium — drive this Mac without taking the cursor
                         [--app <name>] [--duration <s>] [--easing <e>] [--restore] [--confirm]
   rocuronium launch     --app <name>
   rocuronium activate   --app <name> [--confirm]
+  rocuronium activity   (recent agent actions with their evidence verdicts)
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
@@ -76,6 +77,10 @@ cursor, so both are refused while a human is present unless --confirm, and both 
 pointer where the path ends unless --restore. With --app they refuse when another app's
 window covers the action point, and they report the target's window count before/after —
 a flyout appearing is a window appearing.
+
+Cursor-taking commands show the visible-agent overlay (tint + bezel + jellyfish); ⌥⎋
+halts the engine mid-action, and every verb is then refused until the human resumes from
+the Rocuronium menu bar. 'activity' returns the session's action log with verdicts.
 
 Every reply reports whether a human is present; hardware input stays off unless asked for.
 """
@@ -308,6 +313,13 @@ case "park":
 
 case "screenshot":
     print(reply["path"] as? String ?? "done")
+
+case "activity":
+    for entry in reply["entries"] as? [[String: Any]] ?? [] {
+        let date = (entry["date"] as? String ?? "").suffix(9).prefix(8)  // HH:MM:SS out of ISO8601
+        print("\(date)  \(entry["action"] ?? "?") \(entry["target"] ?? "")  → \(entry["verdict"] ?? "?")")
+    }
+    print(reply["summary"] as? String ?? "")
 
 case "statusitem" where reply["items"] != nil:
     for item in reply["items"] as? [[String: Any]] ?? [] {

@@ -272,7 +272,7 @@ actor Engine {
                     matches: matches.prefix(5).map { descriptor(for: $0.element, depth: $0.depth) },
                 )
             }
-            if elapsed >= seconds(timeout) || Task.isCancelled {
+            if elapsed >= seconds(timeout) || Task.isCancelled || EmergencyStop.isHalted {
                 return WaitOutcome(satisfied: false, elapsedSeconds: elapsed, polls: polls, matches: [])
             }
             try? await Task.sleep(for: Constants.waitPollInterval)
@@ -307,7 +307,7 @@ actor Engine {
             if finished, windows > 0 || application.menuBar != nil {
                 return Readiness(ready: true, windows: windows, elapsedSeconds: elapsed)
             }
-            if elapsed >= seconds(timeout) || Task.isCancelled {
+            if elapsed >= seconds(timeout) || Task.isCancelled || EmergencyStop.isHalted {
                 return Readiness(ready: false, windows: windows, elapsedSeconds: elapsed)
             }
             try? await Task.sleep(for: Constants.launchPollInterval)
@@ -959,7 +959,7 @@ actor Engine {
         var stalledFrames = 0
         var reachedEnd = false
 
-        while steps < maxSteps, !Task.isCancelled {
+        while steps < maxSteps, !Task.isCancelled, !EmergencyStop.isHalted {
             guard let frame = try? windowFrame(pid: pid),
                   let capture = try? await ScreenCapture.windowImage(
                       ownedBy: pid,
@@ -1384,6 +1384,11 @@ actor Engine {
         }
 
         let windowsBefore = pid.map(onScreenWindowCount)
+        // The charge-up ring at the point that acts (drag: the button-down point; hover: the
+        // destination). When the overlay is visible this waits out the wind-up — the window
+        // in which ⌥⎋ lands before any motion starts; the per-sample halt check inside the
+        // trace covers everything after.
+        await PresenceRelay.telegraph(actionPoint)
         let outcome = await HardwareInput.trace(plan, button: button, restoreCursor: restoreCursor)
         // Give hover-intent timers and flyout animations a beat before counting windows —
         // the Steam supernav opens ~120 ms after the pointer settles.

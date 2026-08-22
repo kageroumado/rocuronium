@@ -207,7 +207,22 @@ nonisolated struct GhostLadder {
 
         switch action {
         case let .setText(text):
+            // The charge-up ring: when the overlay is visible this waits out the wind-up,
+            // which is the deliberate window in which ⌥⎋ can land before the click does.
+            await PresenceRelay.telegraph(aim)
+            guard !EmergencyStop.isHalted else {
+                attempts.append(.init(
+                    rung: .hardwareInput,
+                    outcome: "halted by the human (⌥⎋) during the charge-up — the click was never delivered",
+                ))
+                return await finish(
+                    action, element, .postedEvent, .unverifiable, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                )
+            }
             await HardwareInput.click(at: aim)
+            PresenceRelay.impact(aim)
             try? await Task.sleep(for: .milliseconds(200))
             // Look before typing. The occlusion check ran *before* the click, and the click
             // itself takes ~110 ms — long enough for an app finishing launch, a ⌘-Tab, or a
@@ -231,11 +246,13 @@ nonisolated struct GhostLadder {
             }
             let delivered = await HardwareInput.type(text)
             if delivered != text {
-                // The screen locked partway through; say how far it got rather than letting
-                // a partial write be judged as if the whole payload had been attempted.
+                // The console was revoked partway through — a lock, a cancel, or ⌥⎋. Say how
+                // far it got rather than letting a partial write be judged as if the whole
+                // payload had been attempted.
+                let cause = EmergencyStop.isHalted ? "the human halted it (⌥⎋)" : "the screen locked mid-run"
                 attempts.append(.init(
                     rung: .hardwareInput,
-                    outcome: "typing stopped after \(delivered.count) of \(text.count) characters — the screen locked mid-run",
+                    outcome: "typing stopped after \(delivered.count) of \(text.count) characters — \(cause)",
                 ))
             }
             try? await Task.sleep(for: .milliseconds(400))
@@ -261,7 +278,20 @@ nonisolated struct GhostLadder {
             ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
 
         case .click, .press:
+            await PresenceRelay.telegraph(aim)
+            guard !EmergencyStop.isHalted else {
+                attempts.append(.init(
+                    rung: .hardwareInput,
+                    outcome: "halted by the human (⌥⎋) during the charge-up — the click was never delivered",
+                ))
+                return await finish(
+                    action, element, .postedEvent, .unverifiable, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                )
+            }
             await HardwareInput.click(at: aim)
+            PresenceRelay.impact(aim)
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
             let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
