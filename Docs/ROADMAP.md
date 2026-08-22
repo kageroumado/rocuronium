@@ -290,11 +290,11 @@ only Kiri can make:
   renders in the bundle. Notes for future sessions: **`xcodebuild test` launches a
   test-host app whose control server unlink-and-rebinds the live daemon's socket** —
   after any test run, `launchctl kickstart -k gui/$UID/glass.kagerou.rocuronium`; and
-  **notarization is unreachable from a Claude session** ("No Keychain password item
-  found for profile: kagerou-notary" — the profile appears to live in the
-  data-protection keychain of an interactive session), so this install is
-  Developer-ID-signed but unnotarized; the next *shipped* build needs release.sh run
-  where that profile resolves.
+  **the `kagerou-notary` profile is readable only while the Mac is unlocked** —
+  notarytool reports "No Keychain password item found" behind the lock screen
+  (data-protection keychain), and the same command succeeds after unlock. Run
+  release.sh while the screen is unlocked; overnight sessions should expect the
+  notarize step to fail and say so instead of retrying.
 
 - **2026-08-22 · 4ffb5ff — release-readiness batch: status items, AXShowMenu, `--pid`, the display
   hold, and OCR scrolling.** Five gaps closed in one pass, all verified by execution on
