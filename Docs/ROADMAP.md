@@ -250,10 +250,10 @@ only Kiri can make:
    `park`, un-park-before-teardown, a `strays` check for windows nobody parked. Eight
    measurements listed before any of it ships; the 60-line in-process spike (item 8) is
    the natural first move.
-2. **Visible-agent mode** — `Prototypes/overlay/*.html` (open in a browser; four animated
-   demos: banner variants, cursor choreography with trail/ripples/charge-up delay, avatar
-   concepts, and a combined scene ending on the ⌥⎋ emergency stop). Pick a direction; the
-   implementation is an overlay window in the app plus a slowed hardware-rung profile.
+2. ~~**Visible-agent mode**~~ — **Kiri picked this one; SHIPPED 2026-08-22 (7b98011)**,
+   see Done. The v2 prototypes (`jellyfish-mascot.html`, `combined-demo-v2.html`) were
+   the visual spec; the whisper tint + centered bezel + jellyfish direction was decided
+   with Kiri in the release-readiness session.
 3. **Locked-screen and local models** — `Docs/LOCKED-AND-LOCAL-NOTES.md`. Rungs 0–3 are
    the legitimate ceiling on the locked local console (Codex's shipped answer is
    auto-unlock, still declined); the sanctioned third door is a Screen Sharing
@@ -269,6 +269,32 @@ only Kiri can make:
 - The CLI lives in `Contents/Resources`, never `Contents/MacOS`.
 
 ## Done
+
+- **2026-08-22 · 7b98011 — the Presence module: visible-agent overlay, ⌥⎋ emergency stop,
+  activity log, jellyfish glyph + app icon** (Phase 5 pick #2; the last unbuilt
+  ARCHITECTURE §2 module). Core side: `EmergencyStop` (atomic, checked per-sample in
+  `HardwareInput`, in every walk and poll loop) and `PresenceRelay` (telegraph/impact
+  hooks, so Core never imports UI; the 600 ms charge ring is the pre-click interrupt
+  window). Overlay: whisper tint + centered bezel (evidence-verdict narration, elapsed
+  clock, 62 % rest / slow-decay wake) + Canvas jellyfish (drift/think/act/needs-human,
+  spring-escort on `NSEvent.mouseLocation`) on a mouse-transparent `.screenSaver`-level
+  window; shown for hardware-input and `move`/`drag` always, everything else behind a
+  persisted toggle. Halt semantics: every acting/perceiving verb refuses until the human
+  resumes **from the popover only** — no socket verb can clear it. All verified by
+  execution on the installed build with Kiri at the keyboard: mid-glide capture showed
+  tint + bezel + jellyfish + charge ring; a hardware ⌥⎋ mid-8 s-move aborted at sample
+  266/961 with the cursor frozen mid-path; `status` read `halted: true`, `read` refused
+  with the resume message; Kiri's popover click resumed and the `activity` log carried
+  the whole story (move → halt → refused → resume); glyph reads as a jellyfish at menu
+  bar size in both states; the Icon Composer icon (glass bell over deep-water navy)
+  renders in the bundle. Notes for future sessions: **`xcodebuild test` launches a
+  test-host app whose control server unlink-and-rebinds the live daemon's socket** —
+  after any test run, `launchctl kickstart -k gui/$UID/glass.kagerou.rocuronium`; and
+  **notarization is unreachable from a Claude session** ("No Keychain password item
+  found for profile: kagerou-notary" — the profile appears to live in the
+  data-protection keychain of an interactive session), so this install is
+  Developer-ID-signed but unnotarized; the next *shipped* build needs release.sh run
+  where that profile resolves.
 
 - **2026-08-22 · 4ffb5ff — release-readiness batch: status items, AXShowMenu, `--pid`, the display
   hold, and OCR scrolling.** Five gaps closed in one pass, all verified by execution on
