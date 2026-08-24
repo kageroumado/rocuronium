@@ -61,7 +61,7 @@ enum MCPServer {
         ),
         tool(
             "windows",
-            "List an app's windows: title, frame, minimized, main, which display each is on and whether that is the virtual one. Read-only. Use before aiming a click, park, or capture.",
+            "List an app's windows: title, frame, minimized, main, which display each is on and whether that is the virtual one (rows on the virtual display that nobody parked are flagged 'stray'). Read-only. Use before aiming a click, park, or capture.",
             properties: [
                 "app": ["type": "string"],
             ], required: ["app"],
@@ -284,7 +284,7 @@ enum MCPServer {
         ),
         tool(
             "display",
-            "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives it back, 'status' reports. Windows parked there are invisible to the person at the Mac.",
+            "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives it back and sweeps parked windows home, 'status' reports leases, parked windows, and strays (windows on the display nobody parked). Windows parked there are invisible to the person at the Mac.",
             properties: [
                 "action": ["type": "string", "enum": ["acquire", "release", "status"]],
                 "reason": ["type": "string", "description": "Recorded on the lease — who/why"],
@@ -294,10 +294,11 @@ enum MCPServer {
         ),
         tool(
             "park",
-            "Move an app's primary window onto the virtual display (or to explicit x/y — the reply carries the previous position, which is the undo). Landing is read back as evidence.",
+            "Move an app's primary window onto the virtual display (or to explicit x/y — the reply carries the previous position, which is the undo). Landing is read back as evidence. With no lease in force this takes an auto-lease (id in the reply) that releases itself — and sweeps its windows home — when the last parked window is returned or closes. Attaching a display while a human is at the keyboard is refused without allowDisplayAttach, since attach is a visible event.",
             properties: [
                 "app": ["type": "string"],
                 "x": ["type": "number"], "y": ["type": "number"],
+                "allowDisplayAttach": ["type": "boolean", "description": "Attach a virtual display even though someone is at the Mac"],
             ], required: ["app"],
         ),
         tool(
