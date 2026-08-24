@@ -54,7 +54,7 @@ enum JellyfishArt {
 
     /// Smoothstep interpolation through keyframes, `t` in 0…1 — the prototype's CSS
     /// keyframe animations as a pure function.
-    private static func keyframed(_ t: Double, _ keys: [(Double, Double)]) -> Double {
+    static func keyframed(_ t: Double, _ keys: [(Double, Double)]) -> Double {
         var previous = keys[0]
         for key in keys.dropFirst() {
             if t <= key.0 {
@@ -147,6 +147,8 @@ enum JellyfishArt {
         // lean — is shared, because that is the state channel and the choreography, and it
         // must not change when the skin does.
         switch style {
+        case .classic:
+            ClassicArt.drawBody(in: body, time: time, phase: phase, lean: lean, moving: moving)
         case .bitjelly:
             BitjellyArt.drawBody(in: body, time: time, phase: phase, lean: lean, moving: moving)
         case .ghost, .aurora, .sparkler:
