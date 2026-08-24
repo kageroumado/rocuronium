@@ -5,10 +5,13 @@ import Observation
 /// same four phases, same halo, same blink, same worried brows — so switching one is a
 /// change of skin, never a change of what the overlay is telling you.
 ///
-/// Each of the four carries a **different light mechanism**, which was the rule the cast was
-/// picked on: a glyph, a bloom, a curtain and a run of beads stay apart at 46 pt, where four
-/// palettes would not.
+/// The four newer ones were each picked for carrying a **different light mechanism** — a
+/// glyph, a bloom, a curtain and a run of beads stay apart at 46 pt, where four palettes
+/// would not. Classic predates that rule and keeps its place regardless: it is the creature
+/// people already recognise.
 enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
+    /// The smooth jellyfish the app shipped with: soft bell, five lagging tentacles.
+    case classic
     /// The 14×18 sprite, four frames, with the forehead glyph the status light radiates from.
     case bitjelly
     /// A round sheet with a hem that never holds still. Lights from inside.
@@ -22,6 +25,7 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
+        case .classic: "Classic"
         case .bitjelly: "Bitjelly"
         case .ghost: "Ghost"
         case .aurora: "Aurora"
@@ -31,6 +35,7 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
 
     var blurb: String {
         switch self {
+        case .classic: "Smooth bell, lagging tentacles"
         case .bitjelly: "14×18 pixels, four frames"
         case .ghost: "A sheet that lights from inside"
         case .aurora: "Weather in a bell"
@@ -39,13 +44,14 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Where the creature's own origin sits in the 64×84 design box, and how many box units
-    /// one creature unit is worth. Bitjelly ignores both — it lays its own sprite out.
+    /// one creature unit is worth. Classic and Bitjelly ignore both — each lays itself out
+    /// directly in the 64×84 box.
     ///
     /// These are tuned so the *whole* creature lands inside the box, legs included. The
     /// canvas clips, so a value that only fits the bell silently amputates the tendrils.
     var anchorY: Double {
         switch self {
-        case .bitjelly: 0
+        case .classic, .bitjelly: 0
         case .ghost: 39
         case .aurora: 27
         case .sparkler: 26
@@ -54,7 +60,7 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
 
     var unit: Double {
         switch self {
-        case .bitjelly: 1
+        case .classic, .bitjelly: 1
         case .ghost: 3.3
         case .aurora: 2.6
         case .sparkler: 3.0
@@ -90,7 +96,6 @@ final class JellyStyleStore {
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.key)
-        // `classic`, the retired smooth jellyfish, may still be in anyone's defaults.
-        style = saved.flatMap(JellyStyle.init(rawValue:)) ?? .bitjelly
+        style = saved.flatMap(JellyStyle.init(rawValue:)) ?? .classic
     }
 }
