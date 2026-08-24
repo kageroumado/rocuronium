@@ -16,6 +16,8 @@ import ApplicationServices
 /// and returns `Sendable` output. Elements are created, used, and discarded inside.
 actor Engine {
     private let cache = TreeCache()
+    /// The walks `read` handed out observation tokens for; what `read --since` diffs against.
+    private let observations = TreeSnapshotStore()
 
     private enum Constants {
         /// How much a window may change on its own between two back-to-back captures and
@@ -30,6 +32,13 @@ actor Engine {
         /// would mean the caller mislabeled the target, not that more walking would help.
         static let scrollSearchDepth = 20
         static let scrollSearchBudget = 3000
+        /// Past this share of changed elements a `read --since` diff degrades to a full
+        /// read: the content was replaced, and the "diff" would just be the whole window
+        /// spelled as vanishes and appearances.
+        static let diffDegradeRatio = 0.6
+        /// Tiny walks are exempt from the ratio: two elements changing out of three is a
+        /// perfectly good diff.
+        static let diffDegradeMinimumElements = 20
     }
 
     // MARK: - Boundary types
@@ -180,14 +189,36 @@ actor Engine {
         /// Set when the dump crossed a web area that exposed no text — the honest answer is
         /// "hidden, use this channel", never "the page is empty".
         let referral: Evidence.Referral?
+        /// Observation token for this walk; a later `read --since <token>` of the same
+        /// scope answers with only what changed.
+        let token: String
+        /// The structural diff, when `since` named a walk this one could honestly be
+        /// compared against.
+        let delta: Delta?
+        /// Why a requested diff degraded to this full read instead. Never set silently:
+        /// a caller who asked for a diff and got lines back must be told why.
+        let diffNote: String?
+
+        struct Delta: Sendable {
+            let since: String
+            let text: String
+            let changes: Int
+        }
     }
 
     /// Dumps the readable text of an element's subtree (by label) or the main window.
     /// The cheap way to answer "what does the app say right now" — no pixels, no model.
-    func read(pid: pid_t, label: String?, role: String? = nil) throws -> ReadOutcome {
+    ///
+    /// With `since`, the walk still runs in full, but the reply is the structural diff
+    /// against the walk that token named: elements appeared, vanished, values changed.
+    /// Anything that would make that diff a lie — evicted token, another process, a
+    /// different scope or window, a truncated walk on either side, or wholesale change —
+    /// degrades to the full read with `diffNote` naming the reason.
+    func read(pid: pid_t, label: String?, role: String? = nil, since: String? = nil) throws -> ReadOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
+        observations.evictDeadProcesses(livePIDs: livePIDs())
 
         let root: AXElement
         let scope: String
@@ -205,6 +236,18 @@ actor Engine {
         }
 
         let dump = TextDump.dump(root: root)
+        let scopeKey = "\(label ?? "@window")|\(role ?? "*")"
+        var delta: ReadOutcome.Delta?
+        var diffNote: String?
+        if let since {
+            (delta, diffNote) = diff(
+                since: since, pid: pid, scopeKey: scopeKey, scope: scope, dump: dump,
+            )
+        }
+        let token = observations.store(TreeSnapshot(
+            pid: pid, scopeKey: scopeKey, scope: scope,
+            truncated: dump.truncated, nodes: dump.nodes,
+        ))
         return ReadOutcome(
             scope: scope,
             lines: dump.lines.map { .init(role: $0.role, title: $0.title, value: $0.value, depth: $0.depth) },
@@ -213,6 +256,42 @@ actor Engine {
             truncated: dump.truncated,
             truncationReason: dump.truncationReason,
             referral: dump.silentWebArea.flatMap { WebContent.readReferral(for: $0, pid: pid) },
+            token: token,
+            delta: delta,
+            diffNote: diffNote,
+        )
+    }
+
+    /// The `--since` decision: exactly one of the pair is non-nil. Every refusal names its
+    /// reason — a wrong diff served silently would be worse than no feature at all.
+    private func diff(
+        since: String, pid: pid_t, scopeKey: String, scope: String, dump: TextDump.Results
+    ) -> (ReadOutcome.Delta?, String?) {
+        let echo = String(since.prefix(24))
+        guard let previous = observations.snapshot(for: since) else {
+            return (nil, "unknown or evicted token '\(echo)' — returning a full read")
+        }
+        guard previous.pid == pid else {
+            return (nil, "token '\(echo)' belongs to another process — returning a full read")
+        }
+        guard previous.scopeKey == scopeKey else {
+            return (nil, "token '\(echo)' covers \(previous.scope), not this query — returning a full read")
+        }
+        guard previous.scope == scope else {
+            return (nil, "the window changed (\(previous.scope) → \(scope)) — a diff across different windows would be meaningless; returning a full read")
+        }
+        guard !previous.truncated, !dump.truncated else {
+            let which = previous.truncated ? "earlier" : "fresh"
+            return (nil, "the \(which) walk was truncated — diffing a partial tree would report unwalked elements as vanished; returning a full read")
+        }
+        let computed = TreeDelta.compute(from: previous.nodes, to: dump.nodes)
+        let elements = max(previous.nodes.count, dump.nodes.count)
+        if computed.changeRatio > Constants.diffDegradeRatio, elements > Constants.diffDegradeMinimumElements {
+            return (nil, "\(Int(computed.changeRatio * 100))% of elements changed — the content was replaced wholesale, so the diff would be larger than the truth; returning a full read")
+        }
+        return (
+            .init(since: since, text: TreeDelta.render(computed), changes: computed.changeCount),
+            nil
         )
     }
 

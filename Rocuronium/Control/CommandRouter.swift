@@ -19,6 +19,8 @@ final class CommandRouter {
 
     /// All accessibility work happens here, off the main actor. See `Engine`.
     private let engine = Engine()
+    /// The most recent capture per screenshot target — what `screenshot --since` diffs against.
+    private let frames = FrameStore()
     private let virtualDisplay = VirtualDisplayBridge()
     /// Keeps the display awake for the whole agent session, not just per action.
     private let adrafinil = AdrafinilBridge()
@@ -118,6 +120,9 @@ final class CommandRouter {
         /// For `move`/`drag`: put the cursor back where it was after the gesture. Off by
         /// default — a hover only means something while the cursor stays on the target.
         var restore: Bool?
+        /// For `read`/`screenshot`: an observation token from a prior reply of the same
+        /// verb; the reply becomes the delta against that observation.
+        var since: String?
     }
 
     /// Bounds every number that arrives over the socket, before it reaches arithmetic that
@@ -409,9 +414,29 @@ final class CommandRouter {
 
     /// Text out of an app without pixels — the most-used observe verb. Orders of magnitude
     /// cheaper in tokens than screenshot-plus-vision, and it works behind a locked screen.
+    /// With `since`, the reply is the structural delta against that earlier read — the
+    /// caller pays for the change, not the window.
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
-        let outcome = try await engine.read(pid: pid, label: request.label, role: request.role)
+        let outcome = try await engine.read(
+            pid: pid, label: request.label, role: request.role, since: request.since,
+        )
+        // A usable diff replaces the lines wholesale — sending both would defeat the verb.
+        if let delta = outcome.delta {
+            return [
+                "ok": true,
+                "scope": outcome.scope,
+                "since": delta.since,
+                "token": outcome.token,
+                "changes": delta.changes,
+                "delta": delta.text,
+                "elementsVisited": outcome.elementsVisited,
+                "summary": delta.changes == 0
+                    ? "no changes in \(outcome.scope) since \(delta.since)"
+                    : "\(delta.changes) change(s) in \(outcome.scope) since \(delta.since)",
+                "presence": presenceBlock(),
+            ]
+        }
         var reply: [String: Any] = [
             "ok": true,
             "scope": outcome.scope,
@@ -424,8 +449,10 @@ final class CommandRouter {
             "elementsVisited": outcome.elementsVisited,
             "characters": outcome.characters,
             "truncated": outcome.truncated,
+            "token": outcome.token,
             "presence": presenceBlock(),
         ]
+        if let note = outcome.diffNote { reply["diffNote"] = note }
         if let reason = outcome.truncationReason { reply["truncationReason"] = reason }
         if let referral = outcome.referral {
             reply["referral"] = [
@@ -1189,11 +1216,23 @@ final class CommandRouter {
     /// The default vision backend made concrete: capture pixels and hand them to the caller,
     /// whose own model does the looking. Captures the app's primary window when `--app` is
     /// given, an explicit region when x/y/w/h are, and the main display otherwise.
+    ///
+    /// With `since`, the reply becomes the pixel delta against that earlier capture of the
+    /// same target: changed-region crops (or a scroll report) instead of the whole frame.
     private func screenshot(_ request: Request) async throws -> [String: Any] {
         guard ScreenCapture.isPermitted else {
             return [
                 "ok": false,
                 "error": "Screen Recording is not granted — run 'request-capture', or approve Rocuronium in System Settings",
+            ]
+        }
+        // A diff reply writes zero, one, or several crops with derived names; an explicit
+        // single path cannot describe that, and honoring it for only some outcomes would
+        // make the file layout depend on what happened to change.
+        if request.since != nil, request.path != nil {
+            return [
+                "ok": false,
+                "error": "'--since' writes its region crops to the captures folder; '--path' applies to full captures only — drop one of the two",
             ]
         }
 
@@ -1213,18 +1252,19 @@ final class CommandRouter {
                 ownedBy: pid,
                 near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
             )
-            let url = try await writePNG(capture.image, to: destination)
-            return [
-                "ok": true,
-                "path": url.path,
-                "width": capture.image.width,
-                "height": capture.image.height,
-                "window": capture.windowTitle,
-                "rect": block(for: capture.windowFrame),
-                "summary": "captured window '\(capture.windowTitle)' "
-                    + "(\(capture.image.width)x\(capture.image.height) px) to \(url.path)",
-                "presence": presenceBlock(),
-            ]
+            let scale = capture.windowFrame.width > 0
+                ? Double(capture.image.width) / Double(capture.windowFrame.width)
+                : 2
+            return try await captureReply(
+                image: capture.image,
+                key: "app:\(pid)",
+                rect: capture.windowFrame,
+                scale: scale,
+                since: request.since,
+                destination: destination,
+                described: "window '\(capture.windowTitle)'",
+                extra: ["window": capture.windowTitle],
+            )
         }
 
         // The `--app` path inherits this guard through `engine.windowFrame`; the region and
@@ -1237,24 +1277,202 @@ final class CommandRouter {
                 "error": "the display is asleep — a capture right now would be a black frame, not a picture of anything",
             ]
         }
-        let rect: CGRect = if let x = request.x, let y = request.y, let w = request.w, let h = request.h {
-            CGRect(x: x, y: y, width: w, height: h)
+        let explicitRegion = request.x != nil && request.y != nil && request.w != nil && request.h != nil
+        let rect: CGRect = if explicitRegion {
+            CGRect(x: request.x!, y: request.y!, width: request.w!, height: request.h!)
         } else {
             CGDisplayBounds(CGMainDisplayID())
         }
         guard let image = try await ScreenCapture.image(of: rect) else {
             return ["ok": false, "error": "the capture region is degenerate (\(rect))"]
         }
+        let key = explicitRegion
+            ? "rect:\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.width)),\(Int(rect.height))"
+            : "display:main"
+        return try await captureReply(
+            image: image,
+            key: key,
+            rect: rect,
+            scale: rect.width > 0 ? Double(image.width) / Double(rect.width) : 2,
+            since: request.since,
+            destination: destination,
+            described: explicitRegion ? "region" : "the main display",
+            extra: [:],
+        )
+    }
+
+    /// The shared back half of every screenshot: store the frame for future diffs, hand out
+    /// its token, and — when `since` named a comparable frame — reply with the delta
+    /// instead of the whole capture. Degrades are named in `diffNote`, never silent.
+    private func captureReply(
+        image: CGImage,
+        key: String,
+        rect: CGRect,
+        scale: Double,
+        since: String?,
+        destination: URL?,
+        described: String,
+        extra: [String: Any]
+    ) async throws -> [String: Any] {
+        // The pre-diff reply shape, word for word: only the token (and any diff fields)
+        // may be new.
+        func fullSummary(_ url: URL) -> String {
+            extra["window"] != nil
+                ? "captured \(described) (\(image.width)x\(image.height) px) to \(url.path)"
+                : "captured \(image.width)x\(image.height) px to \(url.path)"
+        }
+        var diffNote: String?
+        var delta: [String: Any]?
+        // Normalized once, up front: the diff needs byte-comparable layouts, and storing
+        // the normalized form means the stored side of the *next* diff needs no re-decode.
+        guard let bytes = await normalizedBytes(of: image) else {
+            // No normalization means no diffing and no stored frame — say so instead of
+            // handing out a token that could never be honored.
+            let url = try await writePNG(image, to: destination)
+            return [
+                "ok": true,
+                "path": url.path,
+                "width": image.width,
+                "height": image.height,
+                "rect": block(for: rect),
+                "diffNote": "the capture could not be fingerprinted, so no observation token was issued",
+                "summary": fullSummary(url),
+                "presence": presenceBlock(),
+            ].merging(extra) { current, _ in current }
+        }
+
+        if let since {
+            let echo = String(since.prefix(24))
+            if let previous = frames.frame(for: since) {
+                if previous.key != key {
+                    diffNote = "token '\(echo)' covers a different capture target — returning the full capture"
+                } else if previous.pixelWidth != image.width || previous.pixelHeight != image.height {
+                    diffNote = "the captured size changed (\(previous.pixelWidth)x\(previous.pixelHeight) → "
+                        + "\(image.width)x\(image.height) px) — the window was resized or moved between captures; returning the full capture"
+                } else if let analysis = await analyzeFrames(
+                    before: previous.bytes, after: bytes, width: image.width, height: image.height,
+                ) {
+                    (delta, diffNote) = try await self.deltaReply(
+                        analysis, image: image, rect: rect, scale: scale, since: since, described: described,
+                    )
+                } else {
+                    diffNote = "the two captures could not be compared — returning the full capture"
+                }
+            } else {
+                diffNote = "unknown or evicted token '\(echo)' — returning the full capture"
+            }
+        }
+
+        let token = frames.store(
+            key: key, bytes: bytes,
+            pixelWidth: image.width, pixelHeight: image.height,
+            scale: scale, origin: rect.origin,
+        )
+
+        if var delta {
+            delta["token"] = token
+            delta["since"] = since
+            delta["rect"] = block(for: rect)
+            delta["presence"] = presenceBlock()
+            return delta.merging(extra) { current, _ in current }
+        }
+
         let url = try await writePNG(image, to: destination)
-        return [
+        var reply: [String: Any] = [
             "ok": true,
             "path": url.path,
             "width": image.width,
             "height": image.height,
             "rect": block(for: rect),
-            "summary": "captured \(image.width)x\(image.height) px to \(url.path)",
+            "token": token,
+            "summary": fullSummary(url),
             "presence": presenceBlock(),
         ]
+        if let diffNote { reply["diffNote"] = diffNote }
+        return reply.merging(extra) { current, _ in current }
+    }
+
+    /// Turns a diff analysis into a reply, writing region crops as it goes. Returns the
+    /// reply, or a degrade note when the honest answer is the full frame after all.
+    private func deltaReply(
+        _ analysis: FrameDiff.Analysis,
+        image: CGImage,
+        rect: CGRect,
+        scale: Double,
+        since: String,
+        described: String
+    ) async throws -> ([String: Any]?, String?) {
+        /// A pixel-space region of the capture, as global screen points.
+        func screenBlock(_ region: FrameDiff.Region) -> [String: Any] {
+            [
+                "x": rect.origin.x + Double(region.x) / scale,
+                "y": rect.origin.y + Double(region.y) / scale,
+                "w": Double(region.width) / scale,
+                "h": Double(region.height) / scale,
+            ]
+        }
+        func crop(_ region: FrameDiff.Region) async throws -> URL {
+            guard let cropped = image.cropping(to: CGRect(
+                x: region.x, y: region.y, width: region.width, height: region.height,
+            )) else { throw RouterError.captureWriteFailed("crop \(region)") }
+            return try await writePNG(cropped, to: nil)
+        }
+
+        switch analysis {
+        case .unchanged:
+            return ([
+                "ok": true,
+                "changed": false,
+                "regionCount": 0,
+                "regions": [[String: Any]](),
+                "summary": "no visible change in \(described) since \(since)",
+            ], nil)
+
+        case let .scrolled(dy, revealed):
+            let points = Int((Double(abs(dy)) / scale).rounded())
+            let edge = dy > 0 ? "bottom" : "top"
+            let url = try await crop(revealed)
+            return ([
+                "ok": true,
+                "changed": true,
+                "scrolledBy": points,
+                "scrolledPx": dy,
+                "revealed": screenBlock(revealed),
+                "path": url.path,
+                "summary": "content scrolled ~\(points) pt (\(abs(dy)) px, new content at the \(edge)) — edge strip at \(url.path)",
+            ], nil)
+
+        case let .regions(regions, changedFraction):
+            var rows: [[String: Any]] = []
+            for region in regions {
+                let url = try await crop(region)
+                rows.append(["rect": screenBlock(region), "path": url.path])
+            }
+            return ([
+                "ok": true,
+                "changed": true,
+                "regionCount": rows.count,
+                "regions": rows,
+                "changedFraction": (changedFraction * 10_000).rounded() / 10_000,
+                "summary": "\(rows.count) changed region(s) in \(described) since \(since) — crops written",
+            ], nil)
+
+        case let .wholesale(changedFraction):
+            return (nil, "\(Int(changedFraction * 100))% of the frame changed — a diff would not be smaller than the truth; returning the full capture")
+        }
+    }
+
+    /// Off the main actor for the same reason `writePNG` is: normalizing or diffing a
+    /// full-display frame is tens of milliseconds of pixel work, and the menu bar (and its
+    /// `isDriving` honesty) must not freeze for it.
+    @concurrent private func normalizedBytes(of image: CGImage) async -> [UInt8]? {
+        ScreenDiff.normalizedBytes(of: image)
+    }
+
+    @concurrent private func analyzeFrames(
+        before: [UInt8], after: [UInt8], width: Int, height: Int
+    ) async -> FrameDiff.Analysis? {
+        FrameDiff.analyze(before: before, after: after, width: width, height: height)
     }
 
     /// Where a caller-supplied capture path may land, and why there is a rail at all.

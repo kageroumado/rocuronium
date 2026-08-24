@@ -21,7 +21,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium apps
   rocuronium windows    --app <name>
   rocuronium find       --app <name> [--label <text>] [--role <button|…>]
-  rocuronium read       --app <name> [--label <text>] [--role <r>]
+  rocuronium read       --app <name> [--label <text>] [--role <r>] [--since <token>]
   rocuronium wait       --app <name> --label <text> [--role <r>] [--gone] [--timeout <s, max 25>]
   rocuronium type       --app <name> --text <text> [--label <text>] [--role <r>]
   rocuronium click      --app <name> [--label <text>] [--role <r>] [--x <n> --y <n>]
@@ -44,6 +44,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
   rocuronium park       --app <name> [--x <n> --y <n>]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
+                        [--since <token>]
   rocuronium mcp        (serve these commands as MCP tools over stdio)
   rocuronium guide      (print the operator's manual — evidence, presence, refusals)
 
@@ -53,6 +54,10 @@ Options:
   --json                   print the raw reply
 
 'read' dumps an app's text via accessibility — no pixels, works behind a locked screen.
+Every 'read' and 'screenshot' reply carries an observation token; pass it back as
+--since to get only what changed — appeared/vanished/value-changed elements for 'read',
+changed-region crops (or "content scrolled ~N") for 'screenshot'. A token that cannot be
+diffed honestly (evicted, other window, resized) degrades to a full reply with a note.
 'key' posts a bare named key (escape, return, tab, arrows, home/end, page up/down) with
 optional modifiers — for what 'type' (text) and 'shortcut' (menu items) cannot send;
 AppKit honors it, Electron ignores posted keycodes. '--role' narrows a label match when
@@ -121,7 +126,7 @@ if command == "display" || command == "demo", let action = arguments.first, !act
     payload["action"] = action
     arguments.removeFirst()
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
@@ -250,6 +255,11 @@ case "find":
     print("\n\(matches.count) shown · \(reply["elementsVisited"] ?? 0) elements visited"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
 
+case "read" where reply["delta"] != nil:
+    print(reply["delta"] as? String ?? "")
+    print("\n\(reply["summary"] as? String ?? "")")
+    if let token = reply["token"] as? String { print("token \(token)") }
+
 case "read":
     for line in reply["lines"] as? [[String: Any]] ?? [] {
         let indent = String(repeating: "  ", count: line["depth"] as? Int ?? 0)
@@ -264,6 +274,8 @@ case "read":
     }
     print("\nread \(reply["scope"] as? String ?? "?") · \(reply["characters"] ?? 0) chars · \(reply["elementsVisited"] ?? 0) elements"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED: \(reply["truncationReason"] as? String ?? "?")" : ""))
+    if let note = reply["diffNote"] as? String { print("→ \(note)") }
+    if let token = reply["token"] as? String { print("token \(token)") }
     if let referral = reply["referral"] as? [String: Any] {
         print("→ \(referral["reason"] ?? "")")
         print("→ use \(referral["channel"] ?? "?"): \(referral["advice"] ?? "")")
@@ -313,7 +325,23 @@ case "park":
     }
 
 case "screenshot":
-    print(reply["path"] as? String ?? "done")
+    if let regions = reply["regions"] as? [[String: Any]], reply["changed"] != nil {
+        // Diff reply: region crops, a scroll report, or "nothing changed".
+        if regions.isEmpty, reply["changed"] as? Bool == false {
+            print(reply["summary"] as? String ?? "no visible change")
+        }
+        for (index, region) in regions.enumerated() {
+            let rect = region["rect"] as? [String: Any] ?? [:]
+            print("region \(index + 1): @(\(Int(rect["x"] as? Double ?? 0)),\(Int(rect["y"] as? Double ?? 0))) "
+                + "\(Int(rect["w"] as? Double ?? 0))x\(Int(rect["h"] as? Double ?? 0)) → \(region["path"] ?? "?")")
+        }
+    } else if reply["scrolledBy"] != nil {
+        print(reply["summary"] as? String ?? "content scrolled")
+    } else {
+        print(reply["path"] as? String ?? "done")
+        if let note = reply["diffNote"] as? String { print("→ \(note)") }
+    }
+    if let token = reply["token"] as? String { print("token \(token)") }
 
 case "activity":
     for entry in reply["entries"] as? [[String: Any]] ?? [] {
