@@ -10,9 +10,10 @@ struct RocuroniumApp: App {
             MenuPopover(engine: engine)
         } label: {
             // The icon is the safety indicator: the jellyfish is filled while the engine is
-            // driving something, outlined when idle. A user must never have to wonder
-            // whether an agent has hands.
-            Image(nsImage: engine.isDriving ? MenuBarGlyph.driving : MenuBarGlyph.idle)
+            // driving something, outlined when idle, and badged while stray windows sit on
+            // the virtual display where a human cannot see them. A user must never have to
+            // wonder whether an agent has hands — or windows.
+            Image(nsImage: MenuBarGlyph.glyph(driving: engine.isDriving, badged: engine.strayCount > 0))
         }
         .menuBarExtraStyle(.window)
     }
@@ -28,6 +29,9 @@ final class EngineHost {
     /// Mirrors `EmergencyStop` for the popover; refreshed on the presence timer and by the
     /// resume button, since the flag itself is a plain atomic the UI cannot observe.
     private(set) var isHalted = false
+    /// Windows on the virtual display that nobody parked — invisible to the human, so the
+    /// menu bar badges and the popover names them. Refreshed on the presence timer.
+    private(set) var strayCount = 0
 
     private let router = CommandRouter()
     private var server: ControlServer?
@@ -62,6 +66,7 @@ final class EngineHost {
         while !Task.isCancelled {
             presence = UserPresence.read()
             isHalted = EmergencyStop.isHalted
+            strayCount = router.virtualDisplayStrayCount
             try? await Task.sleep(for: .seconds(5))
         }
     }
