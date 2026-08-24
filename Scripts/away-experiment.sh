@@ -22,7 +22,7 @@ set -u
 
 R="/Applications/Rocuronium.app/Contents/Resources/rocuronium"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG="$REPO/Docs/away-experiment-$(date +%Y-%m-%d-%H%M).log"
+LOG="$REPO/Docs/Archive/away-experiment-$(date +%Y-%m-%d-%H%M).log"
 WIKI_URL="https://en.wikipedia.org/wiki/Rocuronium_bromide"
 
 if [ "${1:-}" = "--arm" ]; then
