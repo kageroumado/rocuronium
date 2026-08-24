@@ -245,27 +245,51 @@ it should know that a human just touched the keyboard.
 
 ## 10. The virtual display as a lease
 
-The headless virtual screen (`Test Display.app`) is the strongest isolation available: windows
-parked there occupy none of the pixels a human is looking at. It is also wasteful to leave
-running and confusing to find unexpectedly, so it is modeled as a **lease**, not a mode —
-acquired for a reason, released when done.
+The headless virtual screen is the strongest isolation available: windows parked there occupy
+none of the pixels a human is looking at. It is also wasteful to leave running and confusing
+to find unexpectedly, so it is modeled as a **lease**, not a mode — acquired for a reason,
+released when done.
+
+The display is created **in process** by `VirtualDisplayManager`, on the private
+`CGVirtualDisplay` ObjC classes (the macOS 26 SDK exports the symbols in CoreGraphics.tbd for
+linkage; no public header exists, so a local bridging header declares them). 1920×1080 @2x,
+named "Rocuronium Display", origin at `(mainWidth, 0)` so the main display — and with it the
+menu bar, notification banners, and system prompts — keeps its zero origin; creation asserts
+`CGMainDisplayID()` is unchanged and rolls back otherwise. In process, "the display exists"
+and "we own it" are the same fact: attach is the object's nonzero `displayID` (no launch
+polling, no name matching), and the display dies with the last lease or the daemon. Creation
+failure degrades to "isolation unavailable", never a crash — the private API's shape has
+moved across SDK versions.
 
 Two rules keep it from becoming a liability, both learned from Adrafinil's hold design:
 
-- **Ownership.** The display is torn down only if this app started it. One the user started is
-  theirs, and is left exactly as found.
+- **Ownership.** Our display dies with its leases; a display the user started
+  (Test Display.app, `glass.kagerou.testdisplay`) is *adopted* as a parking target and never
+  torn down — theirs is left exactly as found.
 - **Expiry.** Every lease has a deadline and renews rather than duplicates, so a crashed agent
   cannot strand a virtual screen and concurrent tasks share one display instead of racing.
+  And **teardown always un-parks first**: expiry and release sweep every still-parked window
+  back to its recorded `before` frame before the display goes (tearing the display out from
+  under a window strands it where nobody can see or reach it — measured on a real Finder
+  window), and the daemon's startup sweeps any window left on no display back to the main
+  screen.
 
-Test Display exposes no URL scheme or CLI, so the bridge launches and terminates the bundle
-(`glass.kagerou.testdisplay`) with `activates = false`, then waits for the screen to actually
-register — launching is not attaching.
-
-Over the socket this is three verbs. `display acquire|release|status` manages leases — always
-explicit, never a side effect of another command, so a stray virtual screen is traceable to a
-lease's recorded reason. `park --app` moves an app's primary window onto the virtual screen
-(or to `--x/--y`, which is also the undo: the reply carries the window's previous position),
-with the landing read back as evidence because the window manager may clamp or refuse.
+Over the socket this is three verbs. `display acquire|release|status` manages leases.
+`park --app` moves an app's primary window onto the virtual screen (or to `--x/--y`, which is
+also the undo: the reply carries the window's previous position), with the landing read back
+as evidence because the window manager may clamp or refuse. Parking with no lease in force
+takes an **auto-lease** — reason recorded from the command, id in the reply, visible in
+`display status`, so a stray virtual screen stays traceable to a recorded reason (the
+load-bearing guarantee; the two-step ceremony was only ever its carrier). Auto-leases track
+the windows they parked and release themselves when the last one is returned or closes;
+explicit leases release only by the holder's hand. Attaching a display while a human is at
+the keyboard is a visible event, so that step is presence-gated behind `allowDisplayAttach`,
+mirroring `allowHardwareInput`. The ledger of parked windows also defines **strays** —
+windows on the virtual display nobody parked (a saved frame restored there at launch, a
+second window of a parked app): `windows` and `display status` name them, release warns and
+sweeps them, and the menu bar badges while any exist. The rung-4 occlusion refusal keeps
+*suggesting* park (a machine-readable `suggestion` field) and never auto-parks — moving a
+visible window off-screen as a side effect of a failed click is the agent's call, not ours.
 `screenshot` is the default vision backend made concrete — capture and hand the pixels to the
 calling model. An `--app` capture uses `SCContentFilter(desktopIndependentWindow:)`, never a
 region of the display: a region returns whatever is topmost there, and an occluded window

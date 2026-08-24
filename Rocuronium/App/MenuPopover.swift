@@ -16,7 +16,7 @@ struct MenuPopover: View {
 
     /// Which sections are visible, so appearing/disappearing cards glide instead of snapping.
     private var layoutSignature: String {
-        "\(hero)|\(engine.canCaptureScreen)|\(engine.startupError != nil)|\(engine.activityLog.entries.count)"
+        "\(hero)|\(engine.canCaptureScreen)|\(engine.startupError != nil)|\(engine.activityLog.entries.count)|\(engine.strayCount)"
     }
 
     private enum Hero: Hashable {
@@ -58,6 +58,16 @@ struct MenuPopover: View {
 
                 if hero != .blocked, !engine.canCaptureScreen {
                     screenRecordingCard
+                }
+
+                if engine.strayCount > 0 {
+                    problemCard(
+                        icon: "macwindow.badge.plus", tint: Theme.halted,
+                        title: engine.strayCount == 1
+                            ? "A stray window is on the virtual display"
+                            : "\(engine.strayCount) stray windows are on the virtual display",
+                        detail: "Nobody parked them, so nobody will sweep them home — they are invisible from here. 'display status' names them; releasing the display sweeps them back.",
+                    )
                 }
 
                 if !engine.activityLog.entries.isEmpty {

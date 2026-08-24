@@ -4,199 +4,466 @@ import Observation
 /// `nonisolated` because the module defaults to main-actor isolation, and these are read from
 /// default arguments and error descriptions that are not themselves isolated.
 private nonisolated enum Constants {
-    static let bundleIdentifier = "glass.kagerou.testdisplay"
-    static let applicationPath = "/Applications/Test Display.app"
-    /// How long to wait for the virtual screen to register after launch.
-    static let attachTimeout: Duration = .seconds(6)
-    static let pollInterval: Duration = .milliseconds(250)
-    /// Backstop: no lease outlives this without renewal.
+    /// Test Display.app — a user-owned virtual display this bridge will park onto but never
+    /// tear down. Its running state is the adoption signal.
+    static let testDisplayBundleIdentifier = "glass.kagerou.testdisplay"
+    /// Backstop: no explicit lease outlives this without renewal.
     static let defaultLeaseDuration: Duration = .seconds(30 * 60)
+    /// Auto-leases are shorter: teardown always un-parks first, so expiry is safe, and a
+    /// forgotten park should not pin an invisible display for half an hour. Renewed by any
+    /// command that touches an app with a parked window.
+    static let autoLeaseDuration: Duration = .seconds(10 * 60)
+    /// How often the maintenance pass prunes closed windows and recounts strays.
+    static let maintenanceInterval: Duration = .seconds(60)
+    /// Bounded wait for the willTerminate un-park sweep, so a wedged AX target cannot stall
+    /// quit; the startup sweep reaps whatever is left on the next launch.
+    static let terminationSweepTimeout: TimeInterval = 2
+    /// Where swept windows land when their original frame is unknown or no longer on any
+    /// display: inset from the main display's corner, clear of the menu bar.
+    static let sweepInset = 40.0
 }
 
-/// Borrows a headless virtual display for the duration of a task, then puts it away.
+/// Owns the headless virtual display for the duration of a task, then puts it away.
 ///
 /// A virtual screen is the strongest isolation available: windows parked there are invisible
 /// and unreachable on the real display, so an agent can work without occupying any pixels the
 /// user is looking at. It is also expensive to leave running, and a stray one is confusing —
 /// so it is modeled as a **lease**, not a mode.
 ///
-/// Two rules keep it from becoming a liability:
-/// - Ownership: the display is only torn down if this app started it. A display the user
-///   started themselves is theirs, and is left exactly as found.
-/// - Expiry: a lease has a deadline. A crashed or wedged agent cannot strand a virtual screen,
-///   which is the same reasoning behind Adrafinil's hold TTLs.
+/// The display itself is created in process by `VirtualDisplayManager`, which makes the two
+/// old rules enforceable by construction rather than by protocol:
+/// - Ownership: our display dies with the last lease or with this process; a display the
+///   user started (Test Display.app) is adopted as a parking target and never torn down.
+/// - Expiry: a lease has a deadline, so a crashed or wedged agent cannot strand a virtual
+///   screen — and teardown always sweeps parked windows home *first*, because tearing the
+///   display out from under a window strands it somewhere no one can see or reach
+///   (measured on a real Finder window).
 @MainActor
 @Observable
 final class VirtualDisplayBridge {
     struct Lease: Identifiable, Sendable {
+        enum Kind: String, Sendable {
+            /// Asked for by name; released by whoever asked.
+            case explicit
+            /// Taken as a side effect of `park`; releases itself when its last parked
+            /// window is returned or closes. Traceable through its recorded reason.
+            case auto
+        }
+
         let id: UUID
         let reason: String
+        let kind: Kind
         let expiresAt: ContinuousClock.Instant
     }
 
-    private(set) var isInstalled = false
+    /// What a release did, for the reply that reports it.
+    struct ReleaseOutcome: Sendable {
+        var holdersRemaining: Int
+        var sweptParked: Int
+        var sweptStrays: Int
+        var tornDown: Bool
+    }
+
     /// Every outstanding lease, not just the latest. Concurrent tasks each hold their own, and
     /// the display is torn down only when the last one goes — previously a second caller was
     /// handed the *same* lease id, so whoever released first killed the display underneath the
     /// other, which is precisely what the refcount in Adrafinil's holds exists to prevent.
     private(set) var leases: [UUID: Lease] = [:]
-    /// Whether *we* launched the display. Determines whether we are allowed to close it.
-    private var startedByUs = false
+    /// The parked set: which windows are on the virtual display on purpose, and where they
+    /// belong. Everything else on that display is a stray.
+    private(set) var ledger = ParkLedger()
+    /// Strays as of the last count — for the menu bar badge, which cannot afford an AX walk
+    /// per redraw. Refreshed by the maintenance pass and after every park/release.
+    private(set) var strayCount = 0
+
+    /// A user-started Test Display screen this bridge parks onto but does not own. Cleared
+    /// when the screen goes away; never torn down.
+    private var adoptedDisplayID: CGDirectDisplayID?
+    private let manager = VirtualDisplayManager()
+    private let engine: Engine
     private var expiryTasks: [UUID: Task<Void, Never>] = [:]
+    private var maintenanceTask: Task<Void, Never>?
+    @ObservationIgnored private var terminationObserver: (any NSObjectProtocol)?
 
     /// Kept for the menu bar, which only needs to know whether anything is holding it.
     var activeLease: Lease? { leases.values.first }
 
-    var isRunning: Bool { runningApplication != nil }
-
-    init() {
-        isInstalled = FileManager.default.fileExists(atPath: Constants.applicationPath)
-    }
-
-    private var runningApplication: NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: Constants.bundleIdentifier).first
-    }
-
-    /// The screen the virtual display registered as, if it is attached.
-    ///
-    /// Matched by name rather than by "the one that is not main": with a real external monitor
-    /// attached, the naive test picks the user's second display and parks agent windows on a
-    /// screen they are looking at — the exact opposite of the intent.
-    var virtualScreen: NSScreen? {
-        guard isRunning else { return nil }
-        return NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains("Test Display") }
-    }
-
-    /// Every attached display's bounds, in the top-left-origin global space AX frames use.
-    ///
-    /// Deliberately not `NSScreen.frame`, which is bottom-left Cocoa space: a point compared
-    /// against the wrong space lands somewhere plausible on the primary display and nowhere
-    /// near right on any other.
-    var displayBounds: [CGRect] {
-        NSScreen.screens.compactMap { screen in
-            guard let number = screen.deviceDescription[
-                NSDeviceDescriptionKey("NSScreenNumber")
-            ] as? NSNumber else { return nil }
-            return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+    init(engine: Engine) {
+        self.engine = engine
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.terminationSweep() }
         }
     }
+
+    // MARK: - The display
+
+    /// The virtual display in force: ours when we created one, the adopted Test Display
+    /// screen otherwise. Matched by the exact `CGDirectDisplayID`, never by name — except at
+    /// adoption time, when the user's display is found once by its screen name because an
+    /// externally created display's id cannot be known any other way.
+    var displayID: CGDirectDisplayID? {
+        if let id = manager.displayID { return id }
+        if let adopted = adoptedDisplayID {
+            guard Self.onlineDisplayIDs().contains(adopted) else { return nil }
+            return adopted
+        }
+        return nil
+    }
+
+    var isAttached: Bool { displayID != nil }
+    /// Whether the display in force is ours to tear down.
+    var ownsDisplay: Bool { manager.displayID != nil }
+    var isAdopted: Bool { !ownsDisplay && displayID != nil }
 
     /// The virtual screen's bounds in the top-left-origin global space that AX frames and
     /// synthetic events use. `NSScreen.frame` is in Cocoa's bottom-left space; going through
     /// the display ID to `CGDisplayBounds` gets the flip right instead of doing it by hand.
     var virtualScreenBounds: CGRect? {
-        guard let screen = virtualScreen,
-              let number = screen.deviceDescription[
-                  NSDeviceDescriptionKey("NSScreenNumber")
-              ] as? NSNumber
-        else { return nil }
-        return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        displayID.map(CGDisplayBounds)
+    }
+
+    /// Every attached display's bounds, in the top-left-origin global space AX frames use.
+    var displayBounds: [CGRect] {
+        Self.onlineDisplayIDs().map(CGDisplayBounds)
+    }
+
+    private static func onlineDisplayIDs() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    /// The user's own Test Display screen, if its app is running and its screen is attached.
+    /// The name match lives only here, at adoption time — everything after resolves by id.
+    private func detectUserDisplay() -> CGDirectDisplayID? {
+        let running = !NSRunningApplication
+            .runningApplications(withBundleIdentifier: Constants.testDisplayBundleIdentifier)
+            .isEmpty
+        guard running else { return nil }
+        return NSScreen.screens.first {
+            $0.localizedName.localizedCaseInsensitiveContains("Test Display")
+        }.flatMap {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+                .map { CGDirectDisplayID($0.uint32Value) }
+        }
     }
 
     // MARK: - Lease lifecycle
 
-    /// Ensures a virtual display exists and returns a lease for it.
-    ///
-    /// Idempotent: an existing lease is extended rather than duplicated, so concurrent tasks
-    /// share one display instead of fighting over it.
-    /// Takes out a lease, starting the display if nothing is holding one yet.
-    ///
-    /// Each caller gets its own lease. Sharing is by refcount, not by handing out the same id.
+    /// Takes out a lease, bringing a display up if none is in force: the user's Test Display
+    /// screen is adopted when it is already attached, and our own display is created
+    /// otherwise. Each caller gets its own lease — sharing is by refcount, not by handing
+    /// out the same id.
     @discardableResult
     func acquire(
         reason: String,
-        duration: Duration = Constants.defaultLeaseDuration
-    ) async throws -> Lease {
-        guard isInstalled else { throw BridgeError.notInstalled }
-
-        if leases.isEmpty, runningApplication == nil {
-            try await launch()
+        duration: Duration? = nil,
+        kind: Lease.Kind = .explicit,
+    ) throws -> Lease {
+        if displayID == nil {
+            if let adopted = detectUserDisplay() {
+                adoptedDisplayID = adopted
+            } else {
+                adoptedDisplayID = nil
+                try manager.create()
+            }
         }
-        guard virtualScreen != nil else {
-            // Nothing is holding it and it never attached: don't leave a half-started display.
-            if leases.isEmpty { teardown() }
-            throw BridgeError.displayNeverAttached
-        }
+        guard isAttached else { throw BridgeError.displayNeverAttached }
 
+        let leaseDuration = duration
+            ?? (kind == .auto ? Constants.autoLeaseDuration : Constants.defaultLeaseDuration)
         let lease = Lease(
             id: UUID(),
             reason: reason,
-            expiresAt: ContinuousClock().now.advanced(by: duration),
+            kind: kind,
+            expiresAt: ContinuousClock().now.advanced(by: leaseDuration),
         )
         leases[lease.id] = lease
-        expiryTasks[lease.id] = Task { [weak self] in
-            try? await Task.sleep(for: duration)
-            guard !Task.isCancelled else { return }
-            self?.release(lease)
-        }
+        scheduleExpiry(of: lease, after: leaseDuration)
+        startMaintenance()
         return lease
     }
 
+    /// Whether taking a lease right now would attach a *new* display — the visible event the
+    /// presence gate on auto-acquire exists for. Adopting an already-attached screen is not.
+    var acquireWouldAttachDisplay: Bool {
+        displayID == nil && detectUserDisplay() == nil
+    }
+
     /// Release by id, for callers on the far side of the socket who hold a string, not a
-    /// `Lease`. Returns whether the id named an outstanding lease.
-    @discardableResult
-    func release(id: UUID) -> Bool {
-        guard let lease = leases[id] else { return false }
-        release(lease)
+    /// `Lease`. `nil` when the id names no outstanding lease.
+    func release(id: UUID) async -> ReleaseOutcome? {
+        guard let lease = leases[id] else { return nil }
+        return await release(lease)
+    }
+
+    /// Gives up one lease. Its parked windows are swept home first; the display goes away
+    /// only when the last holder lets go — and then only if it is ours.
+    func release(_ lease: Lease) async -> ReleaseOutcome {
+        guard leases.removeValue(forKey: lease.id) != nil else {
+            return ReleaseOutcome(holdersRemaining: leases.count, sweptParked: 0, sweptStrays: 0, tornDown: false)
+        }
+        expiryTasks.removeValue(forKey: lease.id)?.cancel()
+
+        var swept = await sweep(entries: ledger.removeAll(under: lease.id))
+        var sweptStrays = 0
+        var tornDown = false
+        if leases.isEmpty {
+            swept += await sweep(entries: ledger.removeAll())
+            sweptStrays = await sweepStrays()
+            tornDown = teardown()
+        }
+        await refreshStrayCount()
+        return ReleaseOutcome(
+            holdersRemaining: leases.count,
+            sweptParked: swept,
+            sweptStrays: sweptStrays,
+            tornDown: tornDown,
+        )
+    }
+
+    /// Drops every lease and sweeps everything home. For deliberate resets, where nothing
+    /// else is going to release them.
+    func releaseAll() async {
+        for task in expiryTasks.values { task.cancel() }
+        expiryTasks.removeAll()
+        leases.removeAll()
+        _ = await sweep(entries: ledger.removeAll())
+        _ = await sweepStrays()
+        _ = teardown()
+        await refreshStrayCount()
+    }
+
+    private func scheduleExpiry(of lease: Lease, after duration: Duration) {
+        expiryTasks[lease.id]?.cancel()
+        expiryTasks[lease.id] = Task(name: "virtual display lease expiry") { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            _ = await self?.release(lease)
+        }
+    }
+
+    /// Tears down our display. An adopted display is simply forgotten — the user's is not
+    /// ours to reclaim. Returns whether a display we owned actually went away.
+    private func teardown() -> Bool {
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+        adoptedDisplayID = nil
+        guard manager.displayID != nil else { return false }
+        manager.destroy()
         return true
     }
 
-    /// Gives up one lease. The display goes away only when the last holder lets go.
-    func release(_ lease: Lease) {
-        guard leases.removeValue(forKey: lease.id) != nil else { return }
-        expiryTasks.removeValue(forKey: lease.id)?.cancel()
-        guard leases.isEmpty else { return }
-        teardown()
+    // MARK: - The parked set
+
+    /// Records a landed park. When an auto-lease is in force the window counts against it;
+    /// explicit-lease parks are recorded for the sweep and the stray check but decrement
+    /// nothing. Parking also renews the auto-lease — activity on the display is the signal
+    /// it is still wanted.
+    func recordPark(pid: pid_t, title: String, before: CGRect?) {
+        let autoLease = leases.values.first { $0.kind == .auto }
+        ledger.recordPark(.init(pid: pid, title: title), before: before, leaseID: autoLease?.id)
+        if let autoLease { renew(autoLease) }
+        Task(name: "stray recount after park") { [weak self] in await self?.refreshStrayCount() }
     }
 
-    /// Drops every lease. For app termination, where nothing is going to release them.
-    func releaseAll() {
-        leases.removeAll()
-        for task in expiryTasks.values { task.cancel() }
-        expiryTasks.removeAll()
-        teardown()
-    }
-
-    private func teardown() {
-        // Cleared unconditionally: if the display died on us, leaving this set would make a
-        // later release terminate a display the *user* had since started themselves.
-        defer { startedByUs = false }
-        // Never close a display the user opened. Theirs is not ours to reclaim.
-        guard startedByUs, let application = runningApplication else { return }
-        application.terminate()
-    }
-
-    // MARK: - Launching
-
-    private func launch() async throws {
-        let url = URL(fileURLWithPath: Constants.applicationPath)
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false  // never steal focus to attach a screen
-        _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-        // Ownership is claimed the moment the app exists, not after it attaches: the wait below
-        // can throw, and a throw in between would strand a display nobody believes they own.
-        startedByUs = true
-
-        // Wait for the screen to actually register: launching is not attaching.
-        let deadline = ContinuousClock().now.advanced(by: Constants.attachTimeout)
-        while ContinuousClock().now < deadline {
-            if virtualScreen != nil { return }
-            try? await Task.sleep(for: Constants.pollInterval)
+    /// Records an un-park (the window moved off the virtual display, or closed). If that
+    /// drained an auto-lease, the lease releases itself; the id of the released lease is
+    /// returned so the caller can report it.
+    func recordUnpark(pid: pid_t, title: String) async -> UUID? {
+        guard let entry = ledger.recordUnpark(.init(pid: pid, title: title)) else { return nil }
+        guard let leaseID = entry.leaseID, ledger.leaseIsDrained(leaseID),
+              let lease = leases[leaseID], lease.kind == .auto else {
+            await refreshStrayCount()
+            return nil
         }
-        throw BridgeError.displayNeverAttached
+        _ = await release(lease)
+        return leaseID
+    }
+
+    func isParked(pid: pid_t, title: String) -> Bool {
+        ledger.contains(.init(pid: pid, title: title))
+    }
+
+    /// Pushes an auto-lease's deadline out. Called when a command touches an app that has a
+    /// window parked under it — a lease being used is a lease still wanted.
+    func renewAutoLease(touching pid: pid_t) {
+        let leaseIDs = Set(ledger.entries.filter { $0.window.pid == pid }.compactMap(\.leaseID))
+        for id in leaseIDs {
+            guard let lease = leases[id], lease.kind == .auto else { continue }
+            renew(lease)
+        }
+    }
+
+    private func renew(_ lease: Lease) {
+        let renewed = Lease(
+            id: lease.id, reason: lease.reason, kind: lease.kind,
+            expiresAt: ContinuousClock().now.advanced(by: Constants.autoLeaseDuration),
+        )
+        leases[lease.id] = renewed
+        scheduleExpiry(of: renewed, after: Constants.autoLeaseDuration)
+    }
+
+    // MARK: - Strays
+
+    struct StrayWindow: Sendable {
+        let pid: pid_t
+        let app: String
+        let title: String
+    }
+
+    /// Windows on the virtual display that the parked set does not account for: an app
+    /// restoring a saved frame there at launch, a second window of a parked app, a dialog
+    /// that outlived its lease. Zero cost when no display is attached.
+    func strays() async -> [StrayWindow] {
+        guard virtualScreenBounds != nil else { return [] }
+        let candidates = await windowsOnVirtualDisplay()
+        let parked = ledger.entries.map(\.window)
+        let strayRefs = ParkLedger.strays(onVirtualDisplay: candidates.map(\.0), parked: parked)
+        let strays = Set(strayRefs)
+        return candidates.filter { strays.contains($0.0) }.map {
+            StrayWindow(pid: $0.0.pid, app: $0.1, title: $0.0.title)
+        }
+    }
+
+    /// Every regular app's windows whose frame centers on the virtual display, with app
+    /// names for reporting. AX-walked per app, so this is for the maintenance pass and
+    /// on-demand status — never a per-redraw path.
+    private func windowsOnVirtualDisplay() async -> [(ParkLedger.WindowRef, String)] {
+        guard let bounds = virtualScreenBounds else { return [] }
+        let ownPid = ProcessInfo.processInfo.processIdentifier
+        var found: [(ParkLedger.WindowRef, String)] = []
+        for application in NSWorkspace.shared.runningApplications where application.activationPolicy == .regular {
+            let pid = application.processIdentifier
+            guard pid != ownPid else { continue }
+            guard let windows = try? await engine.windowList(pid: pid) else { continue }
+            for window in windows {
+                guard let frame = window.frame else { continue }
+                let center = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+                guard bounds.contains(center) else { continue }
+                found.append((
+                    .init(pid: pid, title: window.title),
+                    application.localizedName ?? "pid \(pid)",
+                ))
+            }
+        }
+        return found
+    }
+
+    private func refreshStrayCount() async {
+        strayCount = await strays().count
+    }
+
+    // MARK: - Sweeps
+
+    /// Moves swept entries back to their recorded `before` origins — or, when there is none
+    /// (or the recorded home is on a display that has since gone), to a fixed main-screen
+    /// point. Returns how many windows were actually asked to move.
+    private func sweep(entries: [ParkLedger.Entry]) async -> Int {
+        var swept = 0
+        for entry in entries {
+            let destination = sweepDestination(for: entry.before?.origin)
+            guard (try? await engine.moveWindow(
+                pid: entry.window.pid, title: entry.window.title, to: destination,
+            )) != nil else { continue }
+            swept += 1
+        }
+        return swept
+    }
+
+    /// Sweeps stray windows to the main screen before our display goes. Only for a display
+    /// we own: strays on the user's own Test Display are theirs to arrange.
+    private func sweepStrays() async -> Int {
+        guard ownsDisplay else { return 0 }
+        let strays = await strays()
+        var swept = 0
+        for stray in strays {
+            let destination = sweepDestination(for: nil)
+            guard (try? await engine.moveWindow(pid: stray.pid, title: stray.title, to: destination)) != nil else {
+                continue
+            }
+            swept += 1
+        }
+        return swept
+    }
+
+    /// Where a swept window goes: its recorded origin when that still lands on a current
+    /// display, the main display's inset corner otherwise.
+    private func sweepDestination(for recorded: CGPoint?) -> CGPoint {
+        if let recorded, displayBounds.contains(where: {
+            $0.insetBy(dx: -Constants.sweepInset, dy: -Constants.sweepInset).contains(recorded)
+        }), virtualScreenBounds?.contains(recorded) != true {
+            return recorded
+        }
+        let main = CGDisplayBounds(CGMainDisplayID())
+        return CGPoint(x: main.origin.x + Constants.sweepInset, y: main.origin.y + Constants.sweepInset)
+    }
+
+    // MARK: - Maintenance
+
+    /// While anything is leased: prune parked windows that no longer exist (their auto-lease
+    /// self-releases when drained) and keep the stray count honest for the menu bar.
+    private func startMaintenance() {
+        guard maintenanceTask == nil else { return }
+        maintenanceTask = Task(name: "virtual display maintenance") { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Constants.maintenanceInterval)
+                guard let self, !Task.isCancelled else { return }
+                await self.maintenanceTick()
+            }
+        }
+    }
+
+    private func maintenanceTick() async {
+        guard isAttached else { return }
+        for entry in ledger.entries {
+            let alive: Bool
+            if NSRunningApplication(processIdentifier: entry.window.pid) == nil {
+                alive = false
+            } else if let windows = try? await engine.windowList(pid: entry.window.pid) {
+                alive = windows.contains { $0.title == entry.window.title }
+            } else {
+                // The AX tree not answering is not evidence the window closed.
+                alive = true
+            }
+            guard !alive else { continue }
+            _ = await recordUnpark(pid: entry.window.pid, title: entry.window.title)
+        }
+        await refreshStrayCount()
+    }
+
+    // MARK: - Termination
+
+    /// Best-effort un-park on quit, bounded so a wedged AX target cannot stall termination.
+    /// The engine runs on its own executor, so blocking the main thread here cannot
+    /// deadlock the sweep — a timeout means some windows stay out, and the startup sweep
+    /// reclaims them on the next launch.
+    private func terminationSweep() {
+        let entries = ledger.removeAll()
+        guard ownsDisplay else { return }
+        if !entries.isEmpty {
+            let jobs = entries.map { ($0.window.pid, $0.window.title, sweepDestination(for: $0.before?.origin)) }
+            let engine = engine
+            let semaphore = DispatchSemaphore(value: 0)
+            Task.detached(name: "termination un-park") {
+                for (pid, title, destination) in jobs {
+                    _ = try? await engine.moveWindow(pid: pid, title: title, to: destination)
+                }
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + Constants.terminationSweepTimeout)
+        }
+        manager.destroy()
     }
 
     enum BridgeError: LocalizedError {
-        case notInstalled
         case displayNeverAttached
 
         var errorDescription: String? {
-            switch self {
-            case .notInstalled:
-                "Test Display is not installed at \(Constants.applicationPath)."
-            case .displayNeverAttached:
-                "Test Display launched but no virtual screen appeared."
-            }
+            "No virtual screen appeared — isolation is unavailable right now."
         }
     }
 }

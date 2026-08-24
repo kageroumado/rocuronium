@@ -42,7 +42,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium activity   (recent agent actions with their evidence verdicts)
   rocuronium demo       [show|reset|hide]  (deterministic practice window, --app Rocuronium)
   rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
-  rocuronium park       --app <name> [--x <n> --y <n>]
+  rocuronium park       --app <name> [--x <n> --y <n>] [--allow-display-attach]
   rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
   rocuronium mcp        (serve these commands as MCP tools over stdio)
   rocuronium guide      (print the operator's manual — evidence, presence, refusals)
@@ -62,8 +62,12 @@ call again, because the socket cancels requests at 30 s. 'launch' starts an app 
 taking focus and returns once it can be driven; 'activate' takes focus on purpose and is
 refused while a human is present unless --confirm. 'display' leases the headless virtual
 screen; 'park' moves an app's window onto it (or to an explicit point — the reply carries
-the previous position, which is how you put it back). 'screenshot' hands the pixels to
-you, the caller: your model does the looking.
+the previous position, which is how you put it back). Parking with no lease takes an
+auto-lease (reason recorded from the command, id in the reply) that releases itself when
+its last parked window is returned or closes; attaching a display while a human is at the
+keyboard needs --allow-display-attach, since attach is a visible event. 'display status'
+also lists strays — windows on the virtual display nobody parked. 'screenshot' hands the
+pixels to you, the caller: your model does the looking.
 
 'scroll --until-text' captures the window each step, OCRs it locally, and stops the moment
 the string is legible — deterministic where a pixel delta overshoots; the reply carries the
@@ -146,6 +150,7 @@ for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "
     payload[flag] = number
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
+if arguments.contains("--allow-display-attach") { payload["allowDisplayAttach"] = true }
 if arguments.contains("--submit") { payload["submit"] = true }
 if arguments.contains("--gone") { payload["gone"] = true }
 if arguments.contains("--press") { payload["press"] = true }
@@ -298,7 +303,17 @@ case "display":
     // The lease id is the one thing the caller must keep; print it where a script can grab it.
     if let lease = reply["lease"] as? String { print("lease \(lease)") }
     for lease in reply["leases"] as? [[String: Any]] ?? [] {
-        print("  · \(lease["id"] ?? "?")  (\(lease["reason"] ?? ""))")
+        let kind = (lease["kind"] as? String).map { " [\($0)]" } ?? ""
+        let parked = lease["parkedWindows"] as? Int ?? 0
+        print("  · \(lease["id"] ?? "?")\(kind)  (\(lease["reason"] ?? ""))"
+            + (parked > 0 ? "  \(parked) parked" : ""))
+    }
+    for window in reply["parked"] as? [[String: Any]] ?? [] {
+        print("  parked: '\(window["title"] ?? "?")'  pid \(window["pid"] ?? "?")")
+    }
+    // A stray is a window a human cannot see and nobody is going to sweep home.
+    for stray in reply["strays"] as? [[String: Any]] ?? [] {
+        print("  STRAY: '\(stray["title"] ?? "?")'  (\(stray["app"] ?? "?"), pid \(stray["pid"] ?? "?"))")
     }
     if let screen = reply["screen"] as? [String: Any] {
         print("screen @(\(Int(screen["x"] as? Double ?? 0)),\(Int(screen["y"] as? Double ?? 0))) "
@@ -311,6 +326,8 @@ case "park":
     if let before = reply["before"] as? [String: Any] {
         print("was @(\(Int(before["x"] as? Double ?? 0)),\(Int(before["y"] as? Double ?? 0)))")
     }
+    // The auto-lease id, for a caller who wants to release explicitly rather than un-park.
+    if let lease = reply["lease"] as? String { print("lease \(lease)") }
 
 case "screenshot":
     print(reply["path"] as? String ?? "done")

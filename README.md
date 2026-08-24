@@ -149,10 +149,16 @@ deliberate, legitimate act when the situation genuinely calls for it:
   moves the real cursor. Legitimate when nobody is present and the ghost rungs have
   demonstrably failed; the evidence will say `cursorMovedByUs: true` and the reply
   refuses if another window covers the target (see the park pattern).
-- **lease** (`park`) — parking a window onto the virtual display without holding a lease
-  is refused: the display could vanish out from under the window and strand it where no
-  one can see it. `display acquire` first; the lease has a reason and an expiry so a
-  crashed agent cannot leak a screen.
+- **lease** (`park`) — parking always happens under a lease, so the display cannot
+  vanish out from under the window and strand it where no one can see it. With no lease
+  in force, `park` takes an **auto-lease** (reason recorded from the command, id in the
+  reply, visible in `display status`) that releases itself when its last parked window
+  is returned or closes; teardown sweeps parked windows home first, always. Attaching a
+  display while a human is at the keyboard is a visible event, so that step is refused
+  without `allowDisplayAttach` unless presence reads away. `display status` also lists
+  **strays** — windows on the virtual display nobody parked (a saved frame restored
+  there, a second window of a parked app); release warns about them and sweeps them to
+  the main screen.
 - **`timeout` > 25** (`wait`) — the socket cancels requests at 30 s. A timed-out wait
   replies `callAgain: true`; loop on it rather than asking for a longer block.
 
@@ -163,8 +169,9 @@ reach a process through any occlusion. So a hardware click on an occluded target
 refused with the occluder named. The reliable sequence when hardware input is truly
 needed:
 
-    display acquire --reason "why" → park --app X → act with --allow-hardware-input
-    → park back (the reply carried the window's previous position) → display release
+    park --app X (auto-leases the display) → act with --allow-hardware-input
+    → park back (the reply carried the window's previous position; the auto-lease
+      releases itself and the display goes away)
 
 Windows on the virtual display occupy none of the pixels a human sees, which satisfies
 both the occlusion check and the politeness contract.

@@ -99,6 +99,12 @@ actor Engine {
         case menuPathNotFound(component: String, available: [String])
         case menuPathIsSubmenu(path: String, items: [String])
         case pathRefused(String)
+        /// A rung-4 refusal because another app's window covers the action point. Carries a
+        /// machine-readable `suggestion` (typically a `park` invocation) that the router
+        /// surfaces alongside the error — a suggestion, never an action taken unilaterally:
+        /// the occluded-target case often wants the occluder handled instead, and only the
+        /// calling agent has that context.
+        case occludedTarget(String, suggestion: String)
 
         var errorDescription: String? {
             switch self {
@@ -122,6 +128,8 @@ actor Engine {
             case let .menuPathIsSubmenu(path, items):
                 "'\(path)' is a submenu, not an item — pressing it would only open it on screen. Name one of its items: \(items.joined(separator: ", "))."
             case let .pathRefused(reason):
+                reason
+            case let .occludedTarget(reason, _):
                 reason
             }
         }
@@ -342,11 +350,20 @@ actor Engine {
 
     // MARK: - Actuation
 
-    /// Moves the app's primary window and reads its frame back as evidence.
-    func moveWindow(pid: pid_t, to point: CGPoint) async throws -> WindowMove {
+    /// Moves the app's primary window — or, with `title`, the window bearing that exact
+    /// title, which is how the un-park sweep returns a specific parked window — and reads
+    /// its frame back as evidence.
+    func moveWindow(pid: pid_t, title: String? = nil, to point: CGPoint) async throws -> WindowMove {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        guard let window = primaryWindow(of: AXElement(pid: pid)) else {
-            throw EngineError.notFound("a window for pid \(pid)")
+        let application = AXElement(pid: pid)
+        let window: AXElement?
+        if let title {
+            window = application.windows.first { $0.string(kAXTitleAttribute) == title }
+        } else {
+            window = primaryWindow(of: application)
+        }
+        guard let window else {
+            throw EngineError.notFound("a window\(title.map { " titled '\($0)'" } ?? "") for pid \(pid)")
         }
 
         let before = window.frame
@@ -1401,8 +1418,12 @@ actor Engine {
             }
         }
         if let pid, let ownerPid, ownerPid != pid {
-            throw EngineError.pathRefused(
+            let targetName = await MainActor.run {
+                NSRunningApplication(processIdentifier: pid)?.localizedName
+            }
+            throw EngineError.occludedTarget(
                 "'\(endpointOwner ?? "?")' covers the target app at (\(Int(actionPoint.x)), \(Int(actionPoint.y))) — the \(button != nil ? "drag" : "hover") would land on it instead. Activate or park first.",
+                suggestion: "park --app \(targetName ?? "pid \(pid)")",
             )
         }
 

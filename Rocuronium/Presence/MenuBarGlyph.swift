@@ -10,8 +10,21 @@ import AppKit
 enum MenuBarGlyph {
     static let idle = make(driving: false)
     static let driving = make(driving: true)
+    private static let idleBadged = make(driving: false, badged: true)
+    private static let drivingBadged = make(driving: true, badged: true)
 
-    private static func make(driving: Bool) -> NSImage {
+    /// The badge marks stray windows on the virtual display — windows a human cannot see
+    /// and nobody parked. An invisible hazard earns the one persistent mark this glyph has.
+    static func glyph(driving: Bool, badged: Bool) -> NSImage {
+        switch (driving, badged) {
+        case (false, false): idle
+        case (true, false): Self.driving
+        case (false, true): idleBadged
+        case (true, true): drivingBadged
+        }
+    }
+
+    private static func make(driving: Bool, badged: Bool = false) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: true) { _ in
             NSColor.black.setStroke()
@@ -49,6 +62,11 @@ enum MenuBarGlyph {
                 tentacle.lineWidth = driving ? 1.5 : 1.2
                 tentacle.lineCapStyle = .round
                 tentacle.stroke()
+            }
+            if badged {
+                // Top-right dot, clear of the bell. Template images are monochrome, so the
+                // badge reads as a mark, not a color — enough for "look at the popover".
+                NSBezierPath(ovalIn: NSRect(x: 13.0, y: 0.6, width: 4.4, height: 4.4)).fill()
             }
             return true
         }
