@@ -646,7 +646,15 @@ actor Engine {
     /// Discord). Confirmation channels are the focused element changing and window pixels;
     /// a quiet result stays `unverifiable` rather than `noEffect`, because a key that merely
     /// moves a caret changes almost nothing a window-scale diff can see.
-    func pressKey(pid: pid_t, keys: String) async throws -> Evidence {
+    /// How a bare key reaches its target: per-pid posted events (the ghost default), or the
+    /// console pipeline (session-level — the only channel key-equivalent dispatch hears,
+    /// gated by the router like all hardware input because it lands in global focus).
+    enum KeyDelivery: Sendable {
+        case process
+        case session
+    }
+
+    func pressKey(pid: pid_t, keys: String, delivery: KeyDelivery = .process) async throws -> Evidence {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         guard let chord = EventPoster.KeyChord.parse(keys) else {
             throw EngineError.unparseableKey(keys)
@@ -674,18 +682,25 @@ actor Engine {
         }
 
         let windowsBefore = onScreenWindowCount(pid)
-        await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, pid: pid)
+        switch delivery {
+        case .process:
+            await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, pid: pid)
+        case .session:
+            await HardwareInput.pressKey(chord)
+        }
         try? await Task.sleep(for: .milliseconds(300))
         cache.invalidate(pid: pid)
 
+        let rung: Evidence.Rung = delivery == .session ? .hardwareInput : .postedEvent
         let focusAfter = ElementQuery.focused(pid: pid)?.signature
         let focusChanged = focusAfter != focusBefore
-        let attempts: [Evidence.Attempt] = [.init(
-            rung: .postedEvent,
-            outcome: focusChanged
-                ? "key posted; the focused element changed"
-                : "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)",
-        )]
+        let outcome = switch (delivery, focusChanged) {
+        case (.process, true): "key posted; the focused element changed"
+        case (.process, false): "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)"
+        case (.session, true): "key pressed on the console pipeline; the focused element changed"
+        case (.session, false): "key pressed on the console pipeline (reaches key-equivalent dispatch in the frontmost app)"
+        }
+        let attempts: [Evidence.Attempt] = [.init(rung: rung, outcome: outcome)]
 
         let cursorAfter = EventPoster.cursorLocation
         let frontAfter = await MainActor.run { EventPoster.frontmostBundleID }
@@ -695,7 +710,7 @@ actor Engine {
         var evidence = Evidence(
             action: "key(\(chord.name))",
             target: target,
-            rung: .postedEvent,
+            rung: rung,
             verdict: focusChanged ? .confirmed : .unverifiable,
             readback: nil,
             pixelDelta: nil,

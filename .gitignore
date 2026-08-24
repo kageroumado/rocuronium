@@ -10,3 +10,6 @@ xcuserdata/
 # user's real session — browsing history, filenames. Results get distilled into
 # ROADMAP.md; the raw logs never leave this machine.
 Docs/Archive/away-experiment-*.log
+
+# Agent worktrees are their own checkouts, never content of this one.
+.claude/worktrees/

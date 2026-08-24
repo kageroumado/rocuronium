@@ -48,7 +48,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium guide      (print the operator's manual — evidence, presence, refusals)
 
 Options:
-  --allow-hardware-input   permit the one rung that moves the real cursor (default: no)
+  --allow-hardware-input   permit the hardware rung: real-cursor actions, session-level keys (default: no)
   --pid <n>                target a process directly (when two instances share a bundle id)
   --json                   print the raw reply
 

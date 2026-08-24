@@ -214,9 +214,16 @@ the other input verbs leave: committing a focused field wants a plain Return, wh
 `type` (text only) and `shortcut` (menu items only) cannot send. Per-pid, no cursor, no
 focus change. Measured reach: keys land in the app's **focused text control** — `key
 return` in a focused address bar commits navigation — but sheet key-equivalents do
-**not** actuate (`key escape` will not cancel a save sheet, even frontmost; press the
-sheet's button instead: `click --label Cancel --role button`). Electron/Chromium ignore
-posted keycodes entirely. An `unverifiable` verdict means exactly that, not "retry".
+**not** actuate on the per-pid channel (`key escape` will not cancel a save sheet, even
+frontmost; key-equivalent dispatch runs its own event handling). Two ways through:
+press the sheet's button by label (`click --label Cancel --role button` — the ghost
+answer, measured working), or `key --allow-hardware-input` — a **session-level**
+keystroke on the console pipeline, the channel human key-equivalents arrive on. The
+session form is gated like every hardware verb (refused while a human is present unless
+`confirm`, refused while locked) and additionally requires the target frontmost,
+because it lands in global focus.
+Electron/Chromium ignore posted keycodes entirely. An `unverifiable` verdict means
+exactly that, not "retry".
 
 ## Cursor paths: move and drag
 
@@ -266,7 +273,9 @@ app you targeted, so the window-count read-back can miss it and the verdict stay
 `unverifiable` for a menu that visibly opened — verify with a region `screenshot` when
 it matters. And once open, such a menu is not dismissible by any ghost mechanism
 (posted Escape to host and appex both no-op — menu tracking runs its own event loop;
-re-pressing does not toggle): choose an item, or quit the host app to tear it down.
+re-pressing does not toggle): choose an item, quit the host app to tear it down, or —
+when the hardware gates are passed and the host is frontmost — try a session-level
+Escape with `key --allow-hardware-input`, the channel a human's Escape arrives on.
 
 ## The demo stage
 

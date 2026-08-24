@@ -395,6 +395,25 @@ nonisolated enum HardwareInput {
         !Task.isCancelled && !EmergencyStop.isHalted && !UserPresence.read().screenLocked
     }
 
+    /// Presses a key chord on the console pipeline. Key-equivalent dispatch — sheet Escape,
+    /// default-button Return — hears these where per-pid posted events do not (those loops
+    /// run their own event handling). The cursor is untouched, but the keystroke lands in
+    /// the frontmost app's first responder like any human keypress, which is why the router
+    /// only reaches this when the target is frontmost and the hardware gates are passed.
+    static func pressKey(_ chord: EventPoster.KeyChord) async {
+        guard consoleIsStillOurs else { return }
+        InputAttribution.shared.noteSyntheticInput()
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: false)
+        else { return }
+        down.flags = chord.flags
+        up.flags = chord.flags
+        down.post(tap: .cghidEventTap)
+        try? await Task.sleep(for: Constants.clickHoldDuration)
+        up.post(tap: .cghidEventTap)
+    }
+
     /// Returns how much of `text` was actually delivered, so a run cut short is reported
     /// rather than assumed complete.
     @discardableResult

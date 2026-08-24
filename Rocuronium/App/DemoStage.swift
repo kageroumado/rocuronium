@@ -155,9 +155,11 @@ private struct DemoStageView: View {
             Divider()
 
             // The scroll flume: 120 fixed rows, so scroll --until-text, AXScrollToVisible,
-            // and bar writes all have known distances and a known needle.
+            // and bar writes all have known distances and a known needle. A plain VStack,
+            // never LazyVStack: off-screen rows must exist in the AX tree, or there is no
+            // off-screen element for AXScrollToVisible to be asked about.
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(1 ... 120, id: \.self) { row in
                         Text(row == 87 ? "Row 87 · the needle" : "Row \(row)")
                             .font(.callout.monospacedDigit())

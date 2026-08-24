@@ -218,14 +218,20 @@ enum MCPServer {
             only and `shortcut` reaches only keys a menu item carries. Delivered per-pid \
             without touching cursor or focus. Measured reach: lands in the app's focused \
             text control (`return` in an address bar commits navigation) — but sheet \
-            key-equivalents do NOT actuate: escape will not cancel a save sheet; press the \
-            sheet's button instead (click label 'Cancel' role 'button'). Electron/Chromium \
-            ignore posted keycodes entirely. For printable characters use `type`; for \
-            letter shortcuts use `shortcut`.
+            key-equivalents do NOT actuate on the per-pid channel: escape will not cancel \
+            a save sheet. Press the sheet's button instead (click label 'Cancel' role \
+            'button'), or pass allowHardwareInput for a session-level keystroke on the \
+            console pipeline — gated like all hardware input (a present human refuses it \
+            without confirm; locked screen always refuses) and only when the target is \
+            frontmost, since it lands in global focus. Electron/Chromium ignore posted \
+            keycodes entirely. For printable characters use `type`; for letter shortcuts \
+            use `shortcut`.
             """,
             properties: [
                 "app": ["type": "string"],
                 "keys": ["type": "string", "description": "escape, shift+tab, cmd+down, ..."],
+                "allowHardwareInput": ["type": "boolean", "description": "Deliver session-level on the console pipeline (reaches key-equivalent dispatch; target must be frontmost)"],
+                "confirm": ["type": "boolean", "description": "With allowHardwareInput: proceed although a human is present"],
             ], required: ["app", "keys"],
         ),
         tool(

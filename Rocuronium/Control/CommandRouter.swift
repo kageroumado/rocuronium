@@ -519,10 +519,11 @@ final class CommandRouter {
     /// Scrolls a scroll area: `to` positions absolutely via the scroll bar (read back as
     /// evidence), `dy`/`dx` post wheel events and let the bar or pixels testify.
     private func scroll(_ request: Request) async throws -> [String: Any] {
-        guard request.to != nil || request.dx != nil || request.dy != nil || request.untilText != nil else {
+        guard request.to != nil || request.dx != nil || request.dy != nil || request.untilText != nil
+            || request.label != nil else {
             return [
                 "ok": false,
-                "error": "'scroll' requires --dy/--dx (pixels; positive dy reveals content below), --to (0=top … 1=bottom), or --until-text <string> (OCR each step, stop on sight)",
+                "error": "'scroll' requires --label <element> (AXScrollToVisible — the one cursor-free scroll), --dy/--dx (pixels; positive dy reveals content below), --to (0=top … 1=bottom), or --until-text <string> (OCR each step, stop on sight)",
                 "presence": presenceBlock(),
             ]
         }
@@ -636,6 +637,13 @@ final class CommandRouter {
     /// Posts a bare named key (Escape, Return, arrows…) with optional modifiers. The gap the
     /// other input verbs leave: `type` is text-only and `shortcut` only reaches keys that a
     /// menu item carries — a file-picker dialog's Escape is neither.
+    ///
+    /// With `allowHardwareInput` the key is pressed on the console pipeline instead of
+    /// posted per-pid — the only channel that reaches key-equivalent dispatch (sheet
+    /// Escape, default-button Return). It lands in global focus like any human keypress,
+    /// so it is gated like the other hardware verbs and additionally requires the target
+    /// to be frontmost: a session keystroke aimed at a background app would land in
+    /// whatever the human is actually using.
     private func key(_ request: Request) async throws -> [String: Any] {
         guard let keys = request.keys else {
             return [
@@ -646,9 +654,39 @@ final class CommandRouter {
         }
         let pid = try resolve(request)
 
+        var delivery: Engine.KeyDelivery = .process
+        if request.allowHardwareInput == true {
+            let presence = UserPresence.read()
+            guard !presence.screenLocked else {
+                return [
+                    "ok": false,
+                    "error": "the screen is locked — a console keystroke would land in the login window's password field",
+                    "presence": presenceBlock(),
+                ]
+            }
+            guard presence.state == .away || request.confirm == true else {
+                return [
+                    "ok": false,
+                    "error": "presence is '\(presence.state.rawValue)' — a session-level key lands in global focus, "
+                        + "which belongs to the human right now. Pass confirm:true if that is genuinely intended.",
+                    "presence": presenceBlock(),
+                ]
+            }
+            let frontmostPid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+            guard frontmostPid == pid else {
+                return [
+                    "ok": false,
+                    "error": "the target is not frontmost — a session-level key would land in the frontmost app "
+                        + "instead. Activate the target first, or use the per-pid form (drop allowHardwareInput).",
+                    "presence": presenceBlock(),
+                ]
+            }
+            delivery = .session
+        }
+
         isDriving = true
         defer { isDriving = false }
-        let evidence = try await engine.pressKey(pid: pid, keys: keys)
+        let evidence = try await engine.pressKey(pid: pid, keys: keys, delivery: delivery)
         return evidenceReply(evidence)
     }
 
