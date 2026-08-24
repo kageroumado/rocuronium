@@ -926,9 +926,10 @@ actor Engine {
         // (pixel *and* line units, location set) were ignored by AppKit and Chromium alike,
         // presumably because wheel routing belongs to the window server. The frame moving
         // afterwards is the read-back.
-        // Attempted whether or not the element advertises the action: SwiftUI static text
-        // omits AXScrollToVisible from its action list yet honors it (measured on the demo
-        // stage's flume), and the frame read-back below is the judge either way.
+        // Attempted whether or not the element advertises the action, because advertisement
+        // and honoring disagree in both directions (measured 2026-08-24: SwiftUI static
+        // text omits the action yet accepts the call — and does nothing; Mail's list rows
+        // refuse it outright with -25205). The frame read-back below is the judge.
         if let label, let element = try? resolveNamed(pid: pid, label: label, role: role) {
             let advertised = element.actionNames.contains("AXScrollToVisible")
             let before = element.frame

@@ -202,12 +202,15 @@ resized capture, a truncated walk, or wholesale change — **degrades to the ful
 with `diffNote` naming why**, never to a silently wrong diff.
 
 `scroll` prefers `label`: the app is asked to bring that element into view
-(`AXScrollToVisible`), confirmed by the element's frame moving — the one cursor-free
-scroll that works (measured; posted wheel events are ignored by every toolkit, so a bare
-`--dy` will usually earn an honest `noEffect`). `--to 0..1` writes the scroll bar where
-one exists — found by attribute or, for the overlay scrollers modern AppKit hides from
-the attribute, by role walk. Safari's web content exposes a writable bar (measured:
-`--to` round-trips confirmed); Chromium and Electron never expose one.
+(`AXScrollToVisible`), confirmed by the element's frame moving — measured working on
+Chromium web content, and attempted whether or not the element advertises the action.
+But for content genuinely **off-screen**, do not expect it: SwiftUI accepts the call and
+does nothing, and AppKit list rows refuse it (measured on both) — the deterministic
+off-screen paths are `--to` and `--until-text`. Posted wheel events are ignored by every
+toolkit, so a bare `--dy` will usually earn an honest `noEffect`. `--to 0..1` writes the
+scroll bar where one exists — found by attribute or, for the overlay scrollers modern
+AppKit hides from the attribute, by role walk. Safari's web content exposes a writable
+bar (measured: `--to` round-trips confirmed); Chromium and Electron never expose one.
 
 `scroll --until-text <string>` is the deterministic form for content the tree does not
 expose: each step captures the target's window (window-true, occlusion-proof), OCRs it
