@@ -54,10 +54,16 @@ nonisolated enum TextDump {
         /// content while returning success codes, so reporting the page as empty would be a
         /// lie — the caller turns this into a referral naming the channel that can read it.
         let silentWebArea: AXElement?
+        /// Every visited element, text-less containers included — the record `read --since`
+        /// diffs against. Containers matter even though `lines` skips them: an appeared
+        /// popover is the ancestor its appeared buttons get grouped under. Costs nothing
+        /// extra: every field here was already read for `lines`.
+        let nodes: [TreeSnapshot.Node]
     }
 
     static func dump(root: AXElement) -> Results {
         var lines: [Line] = []
+        var nodes: [TreeSnapshot.Node] = []
         var visited = 0
         var characters = 0
         var truncationReason: String?
@@ -84,6 +90,10 @@ nonisolated enum TextDump {
             if value.count > Constants.valueCharacterCap {
                 value = String(value.prefix(Constants.valueCharacterCap)) + " […cut]"
             }
+            // Snapshotted before the title==value blanking below: that blanking is display
+            // economy, and letting it into the snapshot would flip an element's identity
+            // whenever its value drifts into or out of equality with its title.
+            nodes.append(.init(role: role, label: title, value: value, depth: depth))
             // A title that merely repeats the value carries no information, only tokens.
             if title == value { title = "" }
             if !title.isEmpty || !value.isEmpty {
@@ -130,6 +140,7 @@ nonisolated enum TextDump {
             truncated: truncationReason != nil,
             truncationReason: truncationReason,
             silentWebArea: silentWebArea,
+            nodes: nodes,
         )
     }
 }

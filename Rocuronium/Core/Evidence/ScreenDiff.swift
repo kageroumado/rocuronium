@@ -8,7 +8,8 @@ import Foundation
 /// milliseconds, and it works on interfaces that expose nothing useful through accessibility.
 /// A model is only needed for the harder question — did the **right** thing happen.
 nonisolated enum ScreenDiff {
-    private enum Constants {
+    /// Shared with `FrameDiff`, which clusters changed pixels with the same calibration.
+    enum Constants {
         /// Per-channel difference below this is compression noise, antialiasing, or a subtle
         /// hover shade — not evidence that anything happened.
         static let channelTolerance = 12
@@ -45,8 +46,9 @@ nonisolated enum ScreenDiff {
     }
 
     /// Redraws into a known layout so two captures are byte-comparable regardless of the
-    /// color space or alpha layout each arrived in.
-    private static func normalizedBytes(of image: CGImage) -> [UInt8]? {
+    /// color space or alpha layout each arrived in. Also the form `screenshot --since`
+    /// stores frames in, so the stored side of a diff never needs re-decoding.
+    static func normalizedBytes(of image: CGImage) -> [UInt8]? {
         let width = image.width
         let height = image.height
         var bytes = [UInt8](repeating: 0, count: width * height * Constants.bytesPerPixel)
