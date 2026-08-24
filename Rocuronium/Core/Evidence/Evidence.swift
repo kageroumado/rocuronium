@@ -54,6 +54,12 @@ nonisolated struct Evidence: Codable, Sendable {
     /// ladder was exhausted on a target it recognizes as unreachable.
     let referral: Referral?
 
+    /// A machine-readable next move for refusals that have one — the rung-4 occlusion
+    /// refusal suggests parking the target, say. A suggestion only: the caller has the task
+    /// context, and acting on it unilaterally would move a visible window as a side effect
+    /// of a failed click.
+    var suggestion: String? = nil
+
     struct Attempt: Codable, Sendable {
         let rung: Rung
         let outcome: String

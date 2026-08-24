@@ -17,9 +17,13 @@ final class CommandRouter {
     /// tell at a glance whether an agent currently has hands.
     private(set) var isDriving = false
 
+    /// Windows on the virtual display that nobody parked, as of the last maintenance count.
+    /// The menu bar badges on this — an invisible window deserves a visible indicator.
+    var virtualDisplayStrayCount: Int { virtualDisplay.strayCount }
+
     /// All accessibility work happens here, off the main actor. See `Engine`.
     private let engine = Engine()
-    private let virtualDisplay = VirtualDisplayBridge()
+    private let virtualDisplay: VirtualDisplayBridge
     /// Keeps the display awake for the whole agent session, not just per action.
     private let adrafinil = AdrafinilBridge()
     /// The visible-agent chrome: tint, bezel, jellyfish, ⌥⎋. Shown per the policy in
@@ -32,6 +36,7 @@ final class CommandRouter {
     let demoStage = DemoStageController()
 
     init() {
+        virtualDisplay = VirtualDisplayBridge(engine: engine)
         PresenceOverlayController.shared = overlay
         PresenceOverlayController.installRelayHooks()
         overlay.onEmergencyStop = { [activityLog] in
@@ -40,6 +45,40 @@ final class CommandRouter {
                 verdict: "halted",
                 summary: "Emergency stop — agent verbs refused until resumed from the menu bar",
             )
+        }
+        // A previous display teardown that never un-parked (a crash, a kill -9) leaves
+        // windows stranded where no display reaches. Sweep them home once, shortly after
+        // startup — the AX trees need a moment to answer after launch.
+        Task(name: "startup stranded-window sweep") { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            await self?.sweepStrandedWindows()
+        }
+    }
+
+    /// Moves every window whose frame is on no current display back onto the main screen.
+    /// `windows` already flags exactly these; this is the recovery half.
+    private func sweepStrandedWindows() async {
+        guard DisplayWake.perceptionIsReliable else { return }
+        let displays = virtualDisplay.displayBounds
+        guard !displays.isEmpty else { return }
+        let main = CGDisplayBounds(CGMainDisplayID())
+        let home = CGPoint(x: main.origin.x + 40, y: main.origin.y + 40)
+        let ownPid = ProcessInfo.processInfo.processIdentifier
+        for application in NSWorkspace.shared.runningApplications where application.activationPolicy == .regular {
+            let pid = application.processIdentifier
+            guard pid != ownPid, let windows = try? await engine.windowList(pid: pid) else { continue }
+            for window in windows where !window.minimized {
+                guard let frame = window.frame else { continue }
+                let center = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+                guard !displays.contains(where: { $0.contains(center) }) else { continue }
+                guard (try? await engine.moveWindow(pid: pid, title: window.title, to: home)) != nil else { continue }
+                activityLog.append(
+                    action: "sweep",
+                    target: "'\(window.title)' (\(application.localizedName ?? "pid \(pid)"))",
+                    verdict: "ok",
+                    summary: "startup sweep — the window was on no display; moved to (\(Int(home.x)), \(Int(home.y)))",
+                )
+            }
         }
     }
 
@@ -69,6 +108,10 @@ final class CommandRouter {
         var y: Double?
         /// Opt-in to the cursor-stealing rung. Absent means no.
         var allowHardwareInput: Bool?
+        /// Opt-in for `park` to attach a virtual display while a human is at the keyboard —
+        /// attach is a system-visible event, so it is presence-gated like hardware input.
+        /// Absent means no.
+        var allowDisplayAttach: Bool?
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?
@@ -182,7 +225,12 @@ final class CommandRouter {
             // Interpolating a Swift error enum prints its case name ("notInstalled"), which
             // tells the caller nothing; the description written for humans is the reply.
             let description = (error as? any LocalizedError)?.errorDescription ?? "\(error)"
-            return encode(["ok": false, "error": description])
+            var reply: [String: Any] = ["ok": false, "error": description]
+            // The occlusion refusal carries a machine-readable next move alongside the prose.
+            if case let Engine.EngineError.occludedTarget(_, suggestion) = error {
+                reply["suggestion"] = suggestion
+            }
+            return encode(reply)
         }
     }
 
@@ -219,7 +267,13 @@ final class CommandRouter {
         // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
         case "status", "diag", "request-capture", "display", "activity", "demo": break
-        default: adrafinil.noteActivity()
+        default:
+            adrafinil.noteActivity()
+            // A command aimed at an app with a parked window renews that window's
+            // auto-lease: the lease being used is the lease still being wanted.
+            if virtualDisplay.activeLease != nil, let pid = try? resolve(request) {
+                virtualDisplay.renewAutoLease(touching: pid)
+            }
         }
         // The overlay policy: cursor-taking work is always shown — hardware-input opt-ins
         // and the path verbs, which take the real cursor by construction — and everything
@@ -466,6 +520,7 @@ final class CommandRouter {
         let list = try await engine.windowList(pid: pid)
         let displays = virtualDisplay.displayBounds
         let virtualBounds = virtualDisplay.virtualScreenBounds
+        var strays = 0
         let rows = list.map { window -> [String: Any] in
             var row: [String: Any] = [
                 "title": window.title,
@@ -477,7 +532,14 @@ final class CommandRouter {
                 let center = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
                 if let display = displays.first(where: { $0.contains(center) }) {
                     row["display"] = block(for: display)
-                    row["onVirtualDisplay"] = display == virtualBounds
+                    let onVirtual = display == virtualBounds
+                    row["onVirtualDisplay"] = onVirtual
+                    // On the virtual display without being in the parked set: nobody put it
+                    // there, so nobody will sweep it home — the invisible-window hazard.
+                    if onVirtual, !virtualDisplay.isParked(pid: pid, title: window.title) {
+                        row["stray"] = true
+                        strays += 1
+                    }
                 } else {
                     // A window whose center is on no display is exactly the stranding the
                     // park lease rules exist to prevent — say so rather than omitting it.
@@ -490,7 +552,9 @@ final class CommandRouter {
             "ok": true,
             "windows": rows,
             "count": rows.count,
-            "summary": "\(rows.count) window(s)",
+            "strays": strays,
+            "summary": "\(rows.count) window(s)"
+                + (strays > 0 ? " · \(strays) stray(s) on the virtual display" : ""),
             "presence": presenceBlock(),
         ]
     }
@@ -1013,6 +1077,7 @@ final class CommandRouter {
         // The measurement behind a visual verdict. Exposing it is what makes a wrong
         // threshold discoverable from outside instead of reading as a mystery no-effect.
         if let pixelDelta = evidence.pixelDelta { reply["pixelDelta"] = pixelDelta }
+        if let suggestion = evidence.suggestion { reply["suggestion"] = suggestion }
         if let referral = evidence.referral {
             reply["referral"] = [
                 "channel": referral.channel,
@@ -1025,26 +1090,27 @@ final class CommandRouter {
 
     // MARK: - Virtual display
 
-    /// Lease lifecycle over the socket. Leases are explicit on purpose: an agent that wants a
-    /// display asks for one, gets an id, and gives it back — the display is never a silent
-    /// side effect of some other command, because a stray virtual screen is confusing and
-    /// whoever left it running should be findable in the lease's reason.
+    /// Lease lifecycle over the socket. Explicit leases stay first-class; `park` may also
+    /// take an *auto* lease as a recorded, traceable side effect (reason auto-filled from
+    /// the command, id in the park reply) — the load-bearing guarantee was always that a
+    /// virtual screen is traceable to a lease's recorded reason, not the two-step ceremony.
     private func display(_ request: Request) async throws -> [String: Any] {
         switch request.action {
         case "acquire":
             let lease: VirtualDisplayBridge.Lease
             if let minutes = request.minutes, minutes > 0 {
-                lease = try await virtualDisplay.acquire(
+                lease = try virtualDisplay.acquire(
                     reason: request.reason ?? "socket client",
                     duration: .seconds(minutes * 60),
                 )
             } else {
-                lease = try await virtualDisplay.acquire(reason: request.reason ?? "socket client")
+                lease = try virtualDisplay.acquire(reason: request.reason ?? "socket client")
             }
             var reply: [String: Any] = [
                 "ok": true,
                 "lease": lease.id.uuidString,
-                "summary": "virtual display leased (\(lease.reason))",
+                "summary": "virtual display leased (\(lease.reason))"
+                    + (virtualDisplay.isAdopted ? " — adopted the user's Test Display screen" : ""),
             ]
             if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
             return reply
@@ -1053,29 +1119,49 @@ final class CommandRouter {
             guard let id = request.lease.flatMap(UUID.init(uuidString:)) else {
                 return ["ok": false, "error": "'display release' requires --lease <id> from acquire"]
             }
-            guard virtualDisplay.release(id: id) else {
+            guard let outcome = await virtualDisplay.release(id: id) else {
                 return ["ok": false, "error": "no outstanding lease \(id.uuidString) — already released or expired"]
             }
-            let holders = virtualDisplay.leases.count
-            return [
-                "ok": true,
-                "leasesRemaining": holders,
-                "summary": holders == 0
-                    ? "released; no holders remain, display torn down (if it was ours)"
-                    : "released; \(holders) other holder(s) keep the display up",
-            ]
-
-        case "status", nil:
+            var pieces = [outcome.holdersRemaining == 0
+                ? "released; no holders remain" + (outcome.tornDown ? ", display torn down" : "")
+                : "released; \(outcome.holdersRemaining) other holder(s) keep the display up"]
+            if outcome.sweptParked > 0 { pieces.append("\(outcome.sweptParked) parked window(s) swept home") }
+            if outcome.sweptStrays > 0 {
+                pieces.append("WARNING: \(outcome.sweptStrays) stray window(s) nobody parked were on the display — swept to the main screen")
+            }
             var reply: [String: Any] = [
                 "ok": true,
-                "installed": virtualDisplay.isInstalled,
-                "running": virtualDisplay.isRunning,
-                "leases": virtualDisplay.leases.values.map {
-                    ["id": $0.id.uuidString, "reason": $0.reason] as [String: Any]
+                "leasesRemaining": outcome.holdersRemaining,
+                "sweptParked": outcome.sweptParked,
+                "summary": pieces.joined(separator: " · "),
+            ]
+            if outcome.sweptStrays > 0 { reply["sweptStrays"] = outcome.sweptStrays }
+            return reply
+
+        case "status", nil:
+            let strays = await virtualDisplay.strays()
+            var reply: [String: Any] = [
+                "ok": true,
+                "attached": virtualDisplay.isAttached,
+                "ownedByUs": virtualDisplay.ownsDisplay,
+                "adopted": virtualDisplay.isAdopted,
+                "leases": virtualDisplay.leases.values.map { lease -> [String: Any] in
+                    [
+                        "id": lease.id.uuidString,
+                        "reason": lease.reason,
+                        "kind": lease.kind.rawValue,
+                        "parkedWindows": virtualDisplay.ledger.entries(under: lease.id).count,
+                    ]
                 },
-                "summary": virtualDisplay.isRunning
-                    ? "running · \(virtualDisplay.leases.count) lease(s)"
-                    : (virtualDisplay.isInstalled ? "installed, not running" : "Test Display.app is not installed"),
+                "parked": virtualDisplay.ledger.entries.map { entry -> [String: Any] in
+                    ["pid": entry.window.pid, "title": entry.window.title]
+                },
+                "strays": strays.map { ["pid": $0.pid, "app": $0.app, "title": $0.title] },
+                "summary": virtualDisplay.isAttached
+                    ? (virtualDisplay.isAdopted ? "attached (user's Test Display)" : "attached (ours)")
+                        + " · \(virtualDisplay.leases.count) lease(s) · \(virtualDisplay.ledger.entries.count) parked"
+                        + (strays.isEmpty ? "" : " · \(strays.count) STRAY window(s) nobody parked")
+                    : "no virtual display attached",
             ]
             if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
             return reply
@@ -1088,9 +1174,14 @@ final class CommandRouter {
     /// Moves an app's primary window — onto the virtual display by default, or to an explicit
     /// point (which is also how a caller puts a window back where it found it: `park` replies
     /// carry the window's previous position).
+    ///
+    /// Parking with no lease in force takes an **auto** lease (reason filled from the
+    /// command, id in the reply, visible in `display status`), which releases itself when
+    /// its last parked window is returned or closes. Attaching a display while a human is
+    /// at the keyboard is a visible event, so that one step is presence-gated behind
+    /// `allowDisplayAttach` — adopting an already-attached screen is not.
     private func park(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
-        let destination: CGPoint
         if let x = request.x, let y = request.y {
             // A window sent where no display reaches is findable only by reading the `before`
             // block out of this reply — recoverable, but only if someone kept it. Refuse
@@ -1110,34 +1201,82 @@ final class CommandRouter {
                         .joined(separator: ", "),
                 ]
             }
-            destination = point
-        } else if let bounds = virtualDisplay.virtualScreenBounds {
-            // Parking onto the virtual screen requires holding a lease, even when the screen
-            // already exists. Without this, a window can be moved onto a display nobody is
-            // keeping alive — and when it goes (our teardown, an expiry, or the user quitting
-            // a display they started themselves) the window is stranded somewhere its owner
-            // cannot see or reach. Found by doing exactly that to a real Finder window.
-            guard !virtualDisplay.leases.isEmpty else {
-                return [
-                    "ok": false,
-                    "error": "the virtual display is running but you hold no lease on it — run 'display acquire' first, "
-                        + "so the display cannot disappear out from under the parked window. Pass --x/--y to move a window anyway.",
-                ]
+            isDriving = true
+            defer { isDriving = false }
+            let move = try await engine.moveWindow(pid: pid, to: point)
+            var reply = parkReply(for: move)
+            // Moving a parked window back off the virtual display is the un-park: it
+            // decrements the auto-lease that parked it, which self-releases when drained.
+            if move.landed, virtualDisplay.virtualScreenBounds?.contains(point) != true,
+               virtualDisplay.isParked(pid: pid, title: move.window) {
+                let released = await virtualDisplay.recordUnpark(pid: pid, title: move.window)
+                reply["unparked"] = true
+                if let released {
+                    reply["leaseReleased"] = released.uuidString
+                    reply["summary"] = "\(reply["summary"] ?? "") · last parked window returned, auto-lease released"
+                }
             }
-            // Inset from the corner so the title bar is reachable even if the display's
-            // menu bar overlaps its top edge.
-            destination = CGPoint(x: bounds.origin.x + 40, y: bounds.origin.y + 40)
-        } else {
+            return reply
+        }
+
+        // Parking onto the virtual screen happens under a lease, always: without one, a
+        // window can be moved onto a display nobody is keeping alive — and when it goes,
+        // the window is stranded somewhere its owner cannot see or reach. Found by doing
+        // exactly that to a real Finder window. With no lease in force, park takes one out
+        // itself and reports it.
+        var autoLease: VirtualDisplayBridge.Lease?
+        if virtualDisplay.leases.isEmpty {
+            if virtualDisplay.acquireWouldAttachDisplay {
+                let presence = UserPresence.read()
+                guard presence.state == .away || request.allowDisplayAttach == true else {
+                    return [
+                        "ok": false,
+                        "error": "presence is '\(presence.state.rawValue)' — parking would attach a virtual display, "
+                            + "which is a visible event on the screen a human is using. Pass allowDisplayAttach:true "
+                            + "if that is genuinely intended, or wait until presence reads 'away'.",
+                        "presence": presenceBlock(),
+                    ]
+                }
+            }
+            autoLease = try virtualDisplay.acquire(
+                reason: "auto: park --app \(request.app ?? "pid \(pid)")",
+                kind: .auto,
+            )
+        }
+        guard let bounds = virtualDisplay.virtualScreenBounds else {
             return [
                 "ok": false,
-                "error": "no virtual display is attached — run 'display acquire' first, or pass --x/--y for an explicit destination",
+                "error": "no virtual screen is attached and none could be brought up — isolation is unavailable",
             ]
         }
+        // Inset from the corner so the title bar is reachable even if the display's
+        // menu bar overlaps its top edge.
+        let destination = CGPoint(x: bounds.origin.x + 40, y: bounds.origin.y + 40)
 
         isDriving = true
         defer { isDriving = false }
         let move = try await engine.moveWindow(pid: pid, to: destination)
+        var reply = parkReply(for: move)
+        if move.landed {
+            virtualDisplay.recordPark(
+                pid: pid,
+                title: move.window,
+                before: move.before.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) },
+            )
+        } else if let autoLease {
+            // The lease existed only for this park; nothing landed on the display, so
+            // holding it would leave a screen up for no window.
+            _ = await virtualDisplay.release(autoLease)
+        }
+        if let autoLease, move.landed {
+            reply["lease"] = autoLease.id.uuidString
+            reply["leaseKind"] = "auto"
+            reply["summary"] = "\(reply["summary"] ?? "") · auto-lease \(autoLease.id.uuidString.prefix(8))… taken (\(autoLease.reason))"
+        }
+        return reply
+    }
 
+    private func parkReply(for move: Engine.WindowMove) -> [String: Any] {
         var reply: [String: Any] = [
             "ok": move.landed,
             "window": move.window,

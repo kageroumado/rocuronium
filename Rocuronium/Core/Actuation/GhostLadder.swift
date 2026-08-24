@@ -191,18 +191,26 @@ nonisolated struct GhostLadder {
         // Refuse instead, and name what is in the way. (Parking the target on the virtual
         // display is the reliable way to make this check pass.)
         if let owner = HardwareInput.ownerOfWindow(at: aim), owner != pid {
-            let occluder = await MainActor.run {
-                NSRunningApplication(processIdentifier: owner)?.localizedName ?? "pid \(owner)"
+            let (occluder, targetName) = await MainActor.run {
+                (
+                    NSRunningApplication(processIdentifier: owner)?.localizedName ?? "pid \(owner)",
+                    NSRunningApplication(processIdentifier: pid)?.localizedName,
+                )
             }
             attempts.append(.init(
                 rung: .hardwareInput,
                 outcome: "refused: '\(occluder)' covers the target at (\(Int(aim.x)), \(Int(aim.y))) — a real click there would hit it, not us",
             ))
-            return await finish(
+            var evidence = await finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
             ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            // A suggestion, never an auto-park: moving a visible window off-screen as a side
+            // effect of a failed click is the caller's decision — often the occluder is the
+            // thing to handle, and only the agent has that context.
+            evidence.suggestion = "park --app \(targetName ?? "pid \(pid)")"
+            return evidence
         }
 
         switch action {
