@@ -926,8 +926,11 @@ actor Engine {
         // (pixel *and* line units, location set) were ignored by AppKit and Chromium alike,
         // presumably because wheel routing belongs to the window server. The frame moving
         // afterwards is the read-back.
-        if let label, let element = try? resolveNamed(pid: pid, label: label, role: role),
-           element.actionNames.contains("AXScrollToVisible") {
+        // Attempted whether or not the element advertises the action: SwiftUI static text
+        // omits AXScrollToVisible from its action list yet honors it (measured on the demo
+        // stage's flume), and the frame read-back below is the judge either way.
+        if let label, let element = try? resolveNamed(pid: pid, label: label, role: role) {
+            let advertised = element.actionNames.contains("AXScrollToVisible")
             let before = element.frame
             let code = element.perform("AXScrollToVisible")
             try? await Task.sleep(for: .milliseconds(300))
@@ -958,7 +961,8 @@ actor Engine {
                 rung: .accessibility,
                 outcome: code == .success
                     ? "AXScrollToVisible reported success but the element did not move and is not verifiably visible"
-                    : "AXScrollToVisible failed (\(code.rawValue))",
+                    : "AXScrollToVisible failed (\(code.rawValue))"
+                    + (advertised ? "" : " — the element does not advertise the action"),
             ))
         }
 

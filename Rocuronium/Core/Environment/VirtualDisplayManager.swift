@@ -96,12 +96,32 @@ final class VirtualDisplayManager {
     /// Places the virtual display immediately to the right of the main display, so no
     /// existing window's coordinates change and parked windows live at positive x ≥ the
     /// main display's width.
+    ///
+    /// The origin write must wait for the window server to register the display: configured
+    /// in the same beat as creation, `CGConfigureDisplayOrigin` returns success while the
+    /// arrangement ignores it, and macOS default-places the screen at negative x (measured
+    /// 2026-08-24 — the display landed at (-1920, 0)). Poll for the id to become active,
+    /// configure, and verify the bounds actually moved.
     private func positionToRightOfMain(_ id: CGDirectDisplayID, mainDisplay: CGDirectDisplayID) {
         let mainWidth = Int32(CGDisplayBounds(mainDisplay).width)
-        var configuration: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else { return }
-        CGConfigureDisplayOrigin(configuration, id, mainWidth, 0)
-        CGCompleteDisplayConfiguration(configuration, .permanently)
+        for _ in 0 ..< 20 where !displayIsActive(id) {
+            usleep(100_000)
+        }
+        for _ in 0 ..< 3 {
+            var configuration: CGDisplayConfigRef?
+            guard CGBeginDisplayConfiguration(&configuration) == .success, let configuration else { return }
+            CGConfigureDisplayOrigin(configuration, id, mainWidth, 0)
+            CGCompleteDisplayConfiguration(configuration, .permanently)
+            usleep(150_000)
+            if Int32(CGDisplayBounds(id).origin.x) == mainWidth { return }
+        }
+    }
+
+    private func displayIsActive(_ id: CGDirectDisplayID) -> Bool {
+        var active = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &active, &count) == .success else { return false }
+        return active.prefix(Int(count)).contains(id)
     }
 
     enum CreationError: LocalizedError {
