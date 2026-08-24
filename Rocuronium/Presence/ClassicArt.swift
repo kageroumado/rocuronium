@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The original smooth jellyfish: a soft bell, five tentacles that lag behind it on their
+/// Remi, the original smooth jellyfish: a soft bell, five tentacles that lag behind it on their
 /// own periods, and a drawn face. It is the one the app shipped with, and it stays — a cast
 /// of five is not worse than a cast of four, and retiring the creature everybody already
 /// recognises to make room for newcomers is a trade nobody asked for.

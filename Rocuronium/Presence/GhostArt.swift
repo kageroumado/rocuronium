@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ghost. Not a jellyfish, and that is deliberate — it was one for a while, with oral
+/// Koko, the ghost. Not a jellyfish, and that is deliberate — it was one for a while, with oral
 /// arms and marginal tentacles and a gonad ring showing through the bell, and all of it was
 /// anatomically earned and none of it was wanted.
 ///
