@@ -187,12 +187,6 @@ final class VirtualDisplayBridge {
         return lease
     }
 
-    /// Whether taking a lease right now would attach a *new* display — the visible event the
-    /// presence gate on auto-acquire exists for. Adopting an already-attached screen is not.
-    var acquireWouldAttachDisplay: Bool {
-        displayID == nil && detectUserDisplay() == nil
-    }
-
     /// Release by id, for callers on the far side of the socket who hold a string, not a
     /// `Lease`. `nil` when the id names no outstanding lease.
     func release(id: UUID) async -> ReleaseOutcome? {

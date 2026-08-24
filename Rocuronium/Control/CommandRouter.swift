@@ -113,7 +113,6 @@ final class CommandRouter {
         /// Opt-in for `park` to attach a virtual display while a human is at the keyboard —
         /// attach is a system-visible event, so it is presence-gated like hardware input.
         /// Absent means no.
-        var allowDisplayAttach: Bool?
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?
@@ -1242,9 +1241,10 @@ final class CommandRouter {
     ///
     /// Parking with no lease in force takes an **auto** lease (reason filled from the
     /// command, id in the reply, visible in `display status`), which releases itself when
-    /// its last parked window is returned or closes. Attaching a display while a human is
-    /// at the keyboard is a visible event, so that one step is presence-gated behind
-    /// `allowDisplayAttach` — adopting an already-attached screen is not.
+    /// its last parked window is returned or closes. Attach needs no presence gate:
+    /// creating a `CGVirtualDisplay` is visually silent on the real screen (measured
+    /// 2026-08-24 with a present observer — no flash, no reflow), and the lease is
+    /// already traceable through its recorded reason, `display status`, and the menu bar.
     private func park(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         if let x = request.x, let y = request.y {
@@ -1291,18 +1291,6 @@ final class CommandRouter {
         // itself and reports it.
         var autoLease: VirtualDisplayBridge.Lease?
         if virtualDisplay.leases.isEmpty {
-            if virtualDisplay.acquireWouldAttachDisplay {
-                let presence = UserPresence.read()
-                guard presence.state == .away || request.allowDisplayAttach == true else {
-                    return [
-                        "ok": false,
-                        "error": "presence is '\(presence.state.rawValue)' — parking would attach a virtual display, "
-                            + "which is a visible event on the screen a human is using. Pass allowDisplayAttach:true "
-                            + "if that is genuinely intended, or wait until presence reads 'away'.",
-                        "presence": presenceBlock(),
-                    ]
-                }
-            }
             autoLease = try virtualDisplay.acquire(
                 reason: "auto: park --app \(request.app ?? "pid \(pid)")",
                 kind: .auto,

@@ -156,9 +156,10 @@ deliberate, legitimate act when the situation genuinely calls for it:
   vanish out from under the window and strand it where no one can see it. With no lease
   in force, `park` takes an **auto-lease** (reason recorded from the command, id in the
   reply, visible in `display status`) that releases itself when its last parked window
-  is returned or closes; teardown sweeps parked windows home first, always. Attaching a
-  display while a human is at the keyboard is a visible event, so that step is refused
-  without `allowDisplayAttach` unless presence reads away. `display status` also lists
+  is returned or closes; teardown sweeps parked windows home first, always. Attaching
+  the display is visually silent on the real screen — measured with a present observer:
+  no flash, no window reflow — so parking needs no presence gate; the recorded reason,
+  `display status`, and the menu bar keep it traceable. `display status` also lists
   **strays** — windows on the virtual display nobody parked (a saved frame restored
   there, a second window of a parked app); release warns about them and sweeps them to
   the main screen.

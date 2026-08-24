@@ -305,11 +305,10 @@ enum MCPServer {
         ),
         tool(
             "park",
-            "Move an app's primary window onto the virtual display (or to explicit x/y — the reply carries the previous position, which is the undo). Landing is read back as evidence. With no lease in force this takes an auto-lease (id in the reply) that releases itself — and sweeps its windows home — when the last parked window is returned or closes. Attaching a display while a human is at the keyboard is refused without allowDisplayAttach, since attach is a visible event.",
+            "Move an app's primary window onto the virtual display (or to explicit x/y — the reply carries the previous position, which is the undo). Landing is read back as evidence. With no lease in force this takes an auto-lease (id in the reply) that releases itself — and sweeps its windows home — when the last parked window is returned or closes. Attaching the display is visually silent on the real screen (measured); the lease and the menu bar make it traceable.",
             properties: [
                 "app": ["type": "string"],
                 "x": ["type": "number"], "y": ["type": "number"],
-                "allowDisplayAttach": ["type": "boolean", "description": "Attach a virtual display even though someone is at the Mac"],
             ], required: ["app"],
         ),
         tool(
