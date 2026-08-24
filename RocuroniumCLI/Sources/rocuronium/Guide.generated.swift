@@ -180,6 +180,20 @@ screenshot, and it works behind a locked screen. Bounded (elements, characters, 
 are different answers. A web area that yields no text is reported as **hidden, not
 blank**, with a referral to the channel that can read the DOM.
 
+**Pay for the change, not the frame.** Every `read` and `screenshot` reply carries an
+observation `token`; pass it back as `--since <token>` and the reply becomes the delta
+against that observation. For `read` that is a structural diff — elements appeared
+(grouped under their topmost appeared ancestor: "appeared: AXPopover 'Save options'
+containing [AXButton 'Cancel', AXButton 'Save']"), elements vanished, and values old →
+new — instead of the window's whole text. For `screenshot` it is changed-region crops:
+the count, each region's screen rect, and a small PNG per region, so the caller reads a
+300×200 popover crop instead of the frame; a large vertical translation is reported as
+"content scrolled ~N pt" with an edge-strip crop of just the newly revealed content.
+The daemon keeps a few recent observations per target (LRU-bounded); a token that
+cannot be diffed honestly — evicted, another process, a different window or scope, a
+resized capture, a truncated walk, or wholesale change — **degrades to the full reply
+with `diffNote` naming why**, never to a silently wrong diff.
+
 `scroll` prefers `label`: the app is asked to bring that element into view
 (`AXScrollToVisible`), confirmed by the element's frame moving — the one cursor-free
 scroll that works (measured; posted wheel events are ignored by every toolkit, so a bare
