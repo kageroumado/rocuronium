@@ -326,6 +326,37 @@ struct JellyfishStateView: View {
     /// picker draws a live swatch of a style that is not currently chosen.
     var style: JellyStyle?
 
+    /// Where to put the 64×84 design box inside a view that clips, so the creature stays in
+    /// its own frame while it swims.
+    ///
+    /// The overlay draws edge to edge and can overflow freely — it lives on a full-screen
+    /// canvas with nothing to hit. Every *boxed* presentation (the picker's swatches, the
+    /// popover hero, the demo gallery) clips, and `bodyOffset` moves the creature by up to
+    /// 12 units up and 3 down out of 84, and 4 either side out of 64 — a seventh of the
+    /// height. Drawn flush, every style therefore swam out of the top of its own tile on
+    /// each acting pulse.
+    ///
+    /// So the box is placed inside a *travel* box big enough to hold the design box plus the
+    /// full excursion, and the headroom is asymmetric because the surge is: far more of it
+    /// is needed above than below.
+    static func roomForTheBounce(in size: CGSize) -> CGRect {
+        // A unit of slack past the measured excursion. Sized exactly to it, Koko's crown
+        // and Remi's tentacle tips came within half a point of the edge, which is contained
+        // but has nothing left for antialiasing.
+        let up = 13.0, down = 4.0, side = 4.5
+        let travel = CGSize(
+            width: JellyfishArt.designSize.width + side * 2,
+            height: JellyfishArt.designSize.height + up + down,
+        )
+        let k = min(size.width / travel.width, size.height / travel.height)
+        let box = CGSize(width: JellyfishArt.designSize.width * k, height: JellyfishArt.designSize.height * k)
+        return CGRect(
+            x: (size.width - box.width) / 2,
+            y: (size.height - travel.height * k) / 2 + up * k,
+            width: box.width, height: box.height,
+        )
+    }
+
     var body: some View {
         // Read the store here rather than inside the Canvas closure: observation tracks
         // what `body` touches, and a pick made in the popover has to repaint the hero and
@@ -335,7 +366,7 @@ struct JellyfishStateView: View {
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,
-                    rect: CGRect(origin: .zero, size: size),
+                    rect: Self.roomForTheBounce(in: size),
                     time: timeline.date.timeIntervalSinceReferenceDate,
                     phase: phase,
                     style: drawn,

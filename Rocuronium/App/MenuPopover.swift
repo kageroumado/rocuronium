@@ -109,7 +109,7 @@ struct MenuPopover: View {
                         .symbolRenderingMode(.hierarchical)
                 } else {
                     JellyfishStateView(phase: jellyfishPhase, dimmed: dimmed)
-                        .frame(width: 44, height: 52)
+                        .frame(width: 44, height: 58)
                 }
             }
             .frame(width: 44)
@@ -240,7 +240,7 @@ struct MenuPopover: View {
             Text("Mascot")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
-            HStack(spacing: Theme.Space.xs) {
+            HStack(spacing: 2) {
                 ForEach(JellyStyle.allCases) { style in
                     let chosen = styles.style == style
                     Button {
@@ -248,7 +248,7 @@ struct MenuPopover: View {
                     } label: {
                         VStack(spacing: Theme.Space.xs) {
                             JellyfishStateView(phase: jellyfishPhase, style: style)
-                                .frame(width: 44, height: 58)
+                                .frame(width: 48, height: 66)
                             Text(style.title)
                                 .font(.caption2.weight(chosen ? .semibold : .regular))
                                 .foregroundStyle(chosen ? Theme.agent : .secondary)

@@ -10,11 +10,11 @@ import Observation
 /// would not. Classic predates that rule and keeps its place regardless: it is the creature
 /// people already recognise.
 enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
-    /// The smooth jellyfish the app shipped with: soft bell, five lagging tentacles.
+    /// Remi — the smooth jellyfish the app shipped with: soft bell, five lagging tentacles.
     case classic
     /// The 14×18 sprite, four frames, with the forehead glyph the status light radiates from.
     case bitjelly
-    /// A round sheet with a hem that never holds still. Lights from inside.
+    /// Koko — a round sheet with a hem that never holds still. Lights from inside.
     case ghost
     /// A clear bell with a curtain of aurora standing up inside it.
     case aurora
@@ -23,11 +23,14 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// The name shown in the picker. Deliberately not the raw value: `classic` and `ghost`
+    /// stay as they are in `UserDefaults`, so naming a creature never orphans the preference
+    /// of anyone already using it.
     var title: String {
         switch self {
-        case .classic: "Classic"
+        case .classic: "Remi"
         case .bitjelly: "Bitjelly"
-        case .ghost: "Ghost"
+        case .ghost: "Koko"
         case .aurora: "Aurora"
         case .sparkler: "Sparkler"
         }
@@ -49,12 +52,16 @@ enum JellyStyle: String, CaseIterable, Identifiable, Sendable {
     ///
     /// These are tuned so the *whole* creature lands inside the box, legs included. The
     /// canvas clips, so a value that only fits the bell silently amputates the tendrils.
+    ///
+    /// They are measured against the bell at its **tallest**, not at rest: every creature
+    /// stretches on the contraction — Aurora by 15% — and an anchor derived from the resting
+    /// height puts her crown outside the box on every acting pulse.
     var anchorY: Double {
         switch self {
         case .classic, .bitjelly: 0
         case .ghost: 39
-        case .aurora: 27
-        case .sparkler: 26
+        case .aurora: 31
+        case .sparkler: 29
         }
     }
 
