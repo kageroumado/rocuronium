@@ -52,80 +52,6 @@ enum JellyPalette {
 enum JellyfishArt {
     static let designSize = CGSize(width: 64, height: 84)
 
-    private struct Tentacle {
-        let start: CGPoint
-        let curves: [(c1: CGPoint, c2: CGPoint, to: CGPoint)]
-
-        var path: Path {
-            var path = Path()
-            path.move(to: start)
-            for curve in curves {
-                path.addCurve(to: curve.to, control1: curve.c1, control2: curve.c2)
-            }
-            return path
-        }
-    }
-
-    private static let longTentacles: [Tentacle] = [
-        .init(start: .init(x: 17, y: 43), curves: [
-            (.init(x: 15.5, y: 52), .init(x: 19, y: 59), .init(x: 15.5, y: 68)),
-            (.init(x: 14, y: 72.5), .init(x: 16, y: 77), .init(x: 14.5, y: 80)),
-        ]),
-        .init(start: .init(x: 24.5, y: 44.5), curves: [
-            (.init(x: 24, y: 54), .init(x: 21.5, y: 60), .init(x: 24.5, y: 69)),
-            (.init(x: 25.8, y: 73), .init(x: 24, y: 77.5), .init(x: 25, y: 81)),
-        ]),
-        .init(start: .init(x: 32, y: 45), curves: [
-            (.init(x: 32.5, y: 55), .init(x: 30, y: 62), .init(x: 33, y: 71)),
-            (.init(x: 34, y: 74.5), .init(x: 32.5, y: 79), .init(x: 33.5, y: 82)),
-        ]),
-        .init(start: .init(x: 39.5, y: 44.5), curves: [
-            (.init(x: 40.5, y: 54), .init(x: 38, y: 60), .init(x: 41, y: 68)),
-            (.init(x: 42.3, y: 72), .init(x: 40.5, y: 76.5), .init(x: 41.5, y: 80)),
-        ]),
-        .init(start: .init(x: 47, y: 43), curves: [
-            (.init(x: 48.5, y: 52), .init(x: 45.5, y: 59), .init(x: 48.5, y: 67)),
-            (.init(x: 50, y: 71), .init(x: 48.5, y: 75.5), .init(x: 49.5, y: 79)),
-        ]),
-    ]
-
-    /// The needs-human posture: tentacles curled up — visibly holding, touching nothing.
-    private static let curledTentacles: [Tentacle] = [
-        .init(start: .init(x: 17, y: 43), curves: [
-            (.init(x: 14, y: 47), .init(x: 16, y: 51), .init(x: 19.5, y: 50)),
-            (.init(x: 22, y: 49.2), .init(x: 20.5, y: 45.5), .init(x: 18, y: 46.5)),
-        ]),
-        .init(start: .init(x: 24.5, y: 44.5), curves: [
-            (.init(x: 22.5, y: 49.5), .init(x: 25, y: 53), .init(x: 28, y: 51.5)),
-            (.init(x: 30.2, y: 50.4), .init(x: 28.5, y: 47), .init(x: 26.2, y: 48)),
-        ]),
-        .init(start: .init(x: 32, y: 45), curves: [
-            (.init(x: 30.5, y: 50.5), .init(x: 33.5, y: 54), .init(x: 36.2, y: 52)),
-            (.init(x: 38.2, y: 50.5), .init(x: 36, y: 47.2), .init(x: 34, y: 48.5)),
-        ]),
-        .init(start: .init(x: 39.5, y: 44.5), curves: [
-            (.init(x: 38, y: 49.5), .init(x: 41, y: 52.8), .init(x: 43.8, y: 51)),
-            (.init(x: 45.8, y: 49.6), .init(x: 43.8, y: 46.4), .init(x: 41.8, y: 47.6)),
-        ]),
-        .init(start: .init(x: 47, y: 43), curves: [
-            (.init(x: 45.5, y: 47.5), .init(x: 48, y: 51), .init(x: 51, y: 49.5)),
-            (.init(x: 53.2, y: 48.4), .init(x: 51.4, y: 45), .init(x: 49.2, y: 46.2)),
-        ]),
-    ]
-
-    private static let bellPath: Path = {
-        var path = Path()
-        path.move(to: CGPoint(x: 32, y: 7))
-        path.addCurve(to: CGPoint(x: 7.5, y: 31), control1: CGPoint(x: 16, y: 7), control2: CGPoint(x: 7.5, y: 20))
-        path.addCurve(to: CGPoint(x: 17, y: 41), control1: CGPoint(x: 7.5, y: 37), control2: CGPoint(x: 12, y: 40.5))
-        path.addCurve(to: CGPoint(x: 32, y: 42), control1: CGPoint(x: 22, y: 41.5), control2: CGPoint(x: 26.5, y: 42))
-        path.addCurve(to: CGPoint(x: 47, y: 41), control1: CGPoint(x: 37.5, y: 42), control2: CGPoint(x: 42, y: 41.5))
-        path.addCurve(to: CGPoint(x: 56.5, y: 31), control1: CGPoint(x: 52, y: 40.5), control2: CGPoint(x: 56.5, y: 37))
-        path.addCurve(to: CGPoint(x: 32, y: 7), control1: CGPoint(x: 56.5, y: 20), control2: CGPoint(x: 48, y: 7))
-        path.closeSubpath()
-        return path
-    }()
-
     /// Smoothstep interpolation through keyframes, `t` in 0…1 — the prototype's CSS
     /// keyframe animations as a pure function.
     private static func keyframed(_ t: Double, _ keys: [(Double, Double)]) -> Double {
@@ -142,13 +68,40 @@ enum JellyfishArt {
         return keys.last?.1 ?? 0
     }
 
+    /// The whole-body motion — surge while acting, hover while thinking, drift otherwise —
+    /// as a pure function of time. Keeping it a function rather than an inline transform is
+    /// what lets a lagging part ask where the body *was*: Bitjelly's strands trail by
+    /// evaluating this in the past instead of carrying a history buffer.
+    ///
+    /// The idle rotation is deliberately not here. It is a rotation, not a translation, and
+    /// a strand only needs to know where its root travelled.
+    static func bodyOffset(time: TimeInterval, phase: OverlayModel.Phase) -> CGPoint {
+        switch phase {
+        case .acting:
+            let t = (time / 1.25).truncatingRemainder(dividingBy: 1)
+            return CGPoint(x: 0, y: keyframed(t, [(0, 0), (0.16, 3), (0.46, -12), (0.78, -5), (1, 0)]))
+        case .thinking, .needsHuman:
+            return CGPoint(x: 0, y: -3.5 + 3.5 * cos(time * 2 * .pi / 2.6))
+        default:
+            return CGPoint(x: 4 * sin(time * 2 * .pi / 7), y: -4 - 4 * sin(time * 2 * .pi / 4.1))
+        }
+    }
+
     /// Draws the jellyfish scaled into `rect`. `lean` tilts the whole creature into its
     /// direction of travel (degrees); `moving` speeds the choreography up while escorting.
+    ///
+    /// The glow, the body motion and the lean are shared by every style — they are the
+    /// state channel and the choreography, which must not change when the skin does. Only
+    /// the creature itself is style-specific.
     static func draw(
         in context: GraphicsContext, rect: CGRect,
         time: TimeInterval, phase: OverlayModel.Phase,
-        lean: Double = 0, moving: Bool = false
+        lean: Double = 0, moving: Bool = false,
+        style: JellyStyle? = nil
     ) {
+        // Resolved here, not in a default argument: default arguments are evaluated at the
+        // call site, which for a `Canvas` renderer is a nonisolated context.
+        let style = style ?? JellyStyleStore.shared.style
         var ctx = context
         ctx.translateBy(x: rect.minX, y: rect.minY)
         ctx.scaleBy(x: rect.width / designSize.width, y: rect.height / designSize.height)
@@ -175,14 +128,11 @@ enum JellyfishArt {
 
         // Whole-body motion: surge while acting, hover while thinking, drift otherwise.
         var body = ctx
+        let offset = bodyOffset(time: time, phase: phase)
+        body.translateBy(x: offset.x, y: offset.y)
         switch phase {
-        case .acting:
-            let t = (time / 1.25).truncatingRemainder(dividingBy: 1)
-            body.translateBy(x: 0, y: keyframed(t, [(0, 0), (0.16, 3), (0.46, -12), (0.78, -5), (1, 0)]))
-        case .thinking, .needsHuman:
-            body.translateBy(x: 0, y: -3.5 + 3.5 * cos(time * 2 * .pi / 2.6))
+        case .acting, .thinking, .needsHuman: break
         default:
-            body.translateBy(x: 4 * sin(time * 2 * .pi / 7), y: -4 - 4 * sin(time * 2 * .pi / 4.1))
             body.translateBy(x: 32, y: 25)
             body.rotate(by: .degrees(1.5 * sin(time * 2 * .pi / 9)))
             body.translateBy(x: -32, y: -25)
@@ -193,105 +143,25 @@ enum JellyfishArt {
             body.translateBy(x: -32, y: -25)
         }
 
-        // Tentacles first, behind the bell. Lagging wave: each has its own period and phase.
-        let tentacles = phase == .needsHuman ? curledTentacles : longTentacles
-        let periods = [3.1, 3.5, 2.9, 3.4, 3.2]
-        let offsets = [0.0, 0.35, 0.6, 0.2, 0.5]
-        let tentacleGradient = Gradient(colors: [JellyPalette.bellRim, JellyPalette.bellMid, JellyPalette.pink])
-        for (index, tentacle) in tentacles.enumerated() {
-            let period = pulsing ? periods[index] * 0.42 : periods[index]
-            let sway = 3.5 * sin((time + offsets[index]) * 2 * .pi / period)
-            var tctx = body
-            tctx.translateBy(x: tentacle.start.x, y: tentacle.start.y)
-            tctx.rotate(by: .degrees(sway))
-            tctx.translateBy(x: -tentacle.start.x, y: -tentacle.start.y)
-            tctx.stroke(
-                tentacle.path,
-                with: .linearGradient(
-                    tentacleGradient,
-                    startPoint: CGPoint(x: tentacle.start.x, y: 43),
-                    endPoint: CGPoint(x: tentacle.start.x, y: 82),
-                ),
-                style: StrokeStyle(lineWidth: 2.4, lineCap: .round),
-            )
-        }
-
-        // The bell, squashing-and-stretching toward the target while acting (the propel —
-        // the pre-action telegraph the design replaced the ghost's glancing eyes with).
-        var bell = body
-        if pulsing {
-            let t = (time / 1.25).truncatingRemainder(dividingBy: 1)
-            let sx = keyframed(t, [(0, 1), (0.16, 1.14), (0.42, 0.93), (0.7, 1.02), (1, 1)])
-            let sy = keyframed(t, [(0, 1), (0.16, 0.8), (0.42, 1.09), (0.7, 0.98), (1, 1)])
-            bell.translateBy(x: 32, y: 21)
-            bell.scaleBy(x: sx, y: sy)
-            bell.translateBy(x: -32, y: -21)
-        }
-        bell.fill(
-            bellPath,
-            with: .radialGradient(
-                Gradient(stops: [
-                    .init(color: JellyPalette.bellTop.opacity(0.92), location: 0),
-                    .init(color: JellyPalette.bellMid.opacity(0.92), location: 0.46),
-                    .init(color: JellyPalette.bellRim.opacity(0.92), location: 0.88),
-                ]),
-                center: CGPoint(x: 32, y: 16), startRadius: 0, endRadius: 40,
-            ),
-        )
-        bell.fill(
-            Path(ellipseIn: CGRect(x: 17, y: 13, width: 30, height: 22)),
-            with: .color(.white.opacity(0.22)),
-        )
-        // The face. Expression is the state made legible up close, the way the glow is
-        // from afar: a blink on a slow clock keeps it alive; the gaze (the glint) wanders
-        // idle, scans while thinking, and locks toward travel while acting; needs-human
-        // widens the eyes and adds worried brows.
-        let blinkPhase = (time / 4.4).truncatingRemainder(dividingBy: 1)
-        let blink = blinkPhase < 0.055 ? sin(blinkPhase / 0.055 * .pi) : 0
-        let (gazeX, gazeY, eyeScale, squint): (Double, Double, Double, Double) = switch phase {
-        case .thinking: (0.9 * sin(time * 2 * .pi / 1.9), -1.0, 1, 1)
-        case .acting: (max(-1, min(1, lean / 13)) * 1.2, 0.3, 1, 0.78)
-        case .needsHuman: (0, 0.6, 1.15, 1)
-        default: (0.6 * sin(time * 2 * .pi / 3.1), 0.4 * sin(time * 2 * .pi / 4.3), 1, 1)
-        }
-        let eyeRadius = 2.6 * eyeScale
-        let eyeHeight = eyeRadius * squint * (1 - 0.85 * blink)
-        for eyeX in [26.0, 38.0] {
-            bell.fill(
-                Path(ellipseIn: CGRect(
-                    x: eyeX - eyeRadius, y: 32.5 - eyeHeight,
-                    width: eyeRadius * 2, height: eyeHeight * 2,
-                )),
-                with: .color(JellyPalette.eye),
-            )
-            if blink < 0.5 {
-                bell.fill(
-                    Path(ellipseIn: CGRect(x: eyeX + 0.05 + gazeX, y: 30.75 + gazeY * 0.8, width: 1.7, height: 1.7)),
-                    with: .color(.white),
-                )
+        // The creature itself. Everything above this line — the halo, the body motion, the
+        // lean — is shared, because that is the state channel and the choreography, and it
+        // must not change when the skin does.
+        switch style {
+        case .bitjelly:
+            BitjellyArt.drawBody(in: body, time: time, phase: phase, lean: lean, moving: moving)
+        case .ghost, .aurora, .sparkler:
+            // The vector three are drawn about their own origin in their own units, so each
+            // gets placed into the 64×84 box by its own anchor and scale. A creature with
+            // long legs has to be drawn smaller to fit, and that is a real difference in how
+            // big it looks — not a crop.
+            var creature = body
+            creature.translateBy(x: designSize.width / 2, y: style.anchorY)
+            creature.scaleBy(x: style.unit, y: style.unit)
+            switch style {
+            case .ghost: GhostArt.draw(in: creature, time: time, phase: phase)
+            case .aurora: AuroraArt.draw(in: creature, time: time, phase: phase)
+            default: SparklerArt.draw(in: creature, time: time, phase: phase)
             }
-        }
-        if phase == .needsHuman {
-            // Worried brows: inner ends raised.
-            var leftBrow = Path()
-            leftBrow.move(to: CGPoint(x: 23, y: 27.6))
-            leftBrow.addLine(to: CGPoint(x: 28.3, y: 25.9))
-            var rightBrow = Path()
-            rightBrow.move(to: CGPoint(x: 35.7, y: 25.9))
-            rightBrow.addLine(to: CGPoint(x: 41, y: 27.6))
-            for brow in [leftBrow, rightBrow] {
-                bell.stroke(
-                    brow,
-                    with: .color(JellyPalette.eye.opacity(0.8)),
-                    style: StrokeStyle(lineWidth: 1.1, lineCap: .round),
-                )
-            }
-        }
-        for cheekX in [20.5, 43.5] {
-            bell.fill(
-                Path(ellipseIn: CGRect(x: cheekX - 1.5, y: 34.5, width: 3, height: 3)),
-                with: .color(JellyPalette.pink.opacity(0.7)),
-            )
         }
     }
 }
@@ -308,7 +178,8 @@ struct OverlayEffectsView: View {
     @State private var follow = EscortState()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        let style = JellyStyleStore.shared.style
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
 
@@ -377,6 +248,7 @@ struct OverlayEffectsView: View {
                     phase: model.phase,
                     lean: follow.lean,
                     moving: follow.isMoving,
+                    style: style,
                 )
             }
         }
@@ -448,15 +320,23 @@ enum SigilArt {
 struct JellyfishStateView: View {
     let phase: OverlayModel.Phase
     var dimmed = false
+    /// `nil` follows whatever style the user picked; a value pins one, which is how the
+    /// picker draws a live swatch of a style that is not currently chosen.
+    var style: JellyStyle?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        // Read the store here rather than inside the Canvas closure: observation tracks
+        // what `body` touches, and a pick made in the popover has to repaint the hero and
+        // the demo gallery immediately, not on the next unrelated invalidation.
+        let drawn = style ?? JellyStyleStore.shared.style
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,
                     rect: CGRect(origin: .zero, size: size),
                     time: timeline.date.timeIntervalSinceReferenceDate,
                     phase: phase,
+                    style: drawn,
                 )
             }
         }
@@ -602,13 +482,15 @@ private struct BezelMarkView: View {
     let model: OverlayModel
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        let style = JellyStyleStore.shared.style
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,
                     rect: CGRect(origin: .zero, size: size),
                     time: timeline.date.timeIntervalSinceReferenceDate,
                     phase: model.phase == .hidden ? .idle : model.phase,
+                    style: style,
                 )
             }
         }
