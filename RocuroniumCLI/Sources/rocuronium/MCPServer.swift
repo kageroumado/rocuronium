@@ -46,12 +46,17 @@ enum MCPServer {
             `label` to read one element's subtree; omit it for the whole main window. \
             Web page content that exposes no accessibility text is reported with a referral \
             naming the channel that can read the DOM — an empty dump there means 'hidden', \
-            never 'blank page'.
+            never 'blank page'. Every reply carries an observation `token`; pass it back as \
+            `since` on the next read of the same scope to get ONLY what changed — elements \
+            appeared/vanished and values old → new — instead of the whole window. A token \
+            that cannot be diffed honestly (evicted, different window, truncated walk, \
+            wholesale change) degrades to a full read with `diffNote` naming why.
             """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
+                "since": ["type": "string", "description": "Observation token from a prior read of the same scope; reply becomes the structural delta"],
             ], required: ["app"],
         ),
         tool(
@@ -334,12 +339,24 @@ enum MCPServer {
         ),
         tool(
             "screenshot",
-            "Capture pixels for the calling model to look at: an app's window (occlusion-proof, works while parked), an explicit region, or the main display. Returns the PNG path.",
+            """
+            Capture pixels for the calling model to look at: an app's window \
+            (occlusion-proof, works while parked), an explicit region, or the main display. \
+            Returns the PNG path. Every reply carries an observation `token`; pass it back \
+            as `since` on the next capture of the same target to get only the CHANGED \
+            regions as small crops (count, screen rects, and paths) instead of the frame — \
+            read a 300x200 popover crop, not the window. Large vertical translation is \
+            reported as "content scrolled ~N" with an edge-strip crop of the newly revealed \
+            content. A token that cannot be diffed (evicted, resized, different target, \
+            wholesale change) degrades to a full capture with `diffNote` naming why. \
+            `since` is incompatible with `path`.
+            """,
             properties: [
                 "app": ["type": "string"],
                 "x": ["type": "number"], "y": ["type": "number"],
                 "w": ["type": "number"], "h": ["type": "number"],
                 "path": ["type": "string", "description": "Where to write the PNG. Must end in .png, must not already exist, and must be under Desktop, Downloads, Pictures, /tmp, or the app's captures folder. Omit for a default path."],
+                "since": ["type": "string", "description": "Observation token from a prior capture of the same target; reply becomes changed-region crops or a scroll report"],
             ], required: [],
         ),
     ]
