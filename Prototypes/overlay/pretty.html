@@ -1,0 +1,737 @@
+<meta charset="utf-8">
+<title>The Cast</title>
+<style>
+  :root {
+    --ground:#F5F5FA; --panel:#FFF; --panel-2:#EDEDF5;
+    --ink:#191922; --ink-2:#5F5F72; --ink-3:#92929F; --hair:#E2E2EC;
+    --agent:#5E5CE6; --agent-soft:#E9E8FC; --warn:#C77E27;
+    --font-ui:system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+    --font-round:ui-rounded,"SF Pro Rounded",system-ui,sans-serif;
+    --font-data:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(20,18,40,.06),0 14px 44px rgba(30,25,70,.12);
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --ground:#101015;--panel:#191921;--panel-2:#21212C;--ink:#F0F0F6;--ink-2:#ABABBE;
+    --ink-3:#757585;--hair:#2C2C3A;--agent:#7D7AFF;--agent-soft:#2B2954;--warn:#E7A64C;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 18px 50px rgba(0,0,0,.5);}}
+  :root[data-theme="dark"]{
+    --ground:#101015;--panel:#191921;--panel-2:#21212C;--ink:#F0F0F6;--ink-2:#ABABBE;
+    --ink-3:#757585;--hair:#2C2C3A;--agent:#7D7AFF;--agent-soft:#2B2954;--warn:#E7A64C;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 18px 50px rgba(0,0,0,.5);}
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--font-ui);
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+    padding:clamp(18px,4vw,40px) 16px 80px}
+  .shell{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+  :focus-visible{outline:2px solid var(--agent);outline-offset:2px;border-radius:6px}
+
+  h1{font-family:var(--font-round);font-weight:800;font-size:clamp(25px,4.8vw,34px);
+    letter-spacing:-.5px;line-height:1.1;margin:0}
+  .lede{color:var(--ink-2);max-width:66ch;margin:0;font-size:14.5px}
+  .lede b{color:var(--ink);font-weight:650}
+
+  .rail{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;
+    gap:10px 14px;padding:10px 14px;border-radius:13px;
+    background:color-mix(in srgb,var(--panel) 88%,transparent);
+    backdrop-filter:saturate(180%) blur(14px);border:1px solid var(--hair);box-shadow:var(--shadow)}
+  .rail .lab{font:650 11px var(--font-ui);text-transform:uppercase;letter-spacing:.8px;color:var(--ink-3)}
+  .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--hair);
+    border-radius:10px;padding:3px;gap:2px}
+  .seg button{appearance:none;border:0;background:transparent;color:var(--ink-2);
+    font:600 12.5px var(--font-ui);padding:5px 11px;border-radius:7px;cursor:pointer}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-selected="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(20,18,40,.14)}
+  .seg button[data-s="needs"][aria-selected="true"]{color:var(--warn)}
+  .rail .spacer{flex:1 1 auto}
+  .check{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);cursor:pointer;user-select:none}
+  .check input{accent-color:var(--agent)}
+  .zoom{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
+  .zoom input{accent-color:var(--agent);width:88px}
+  .zoom output{font:600 11.5px var(--font-data);color:var(--ink)}
+
+  .card{background:var(--panel);border:1px solid var(--hair);border-radius:16px;
+    box-shadow:var(--shadow);overflow:hidden;margin-bottom:20px}
+  .card>header{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;padding:15px 20px 0}
+  .card>header h2{margin:0;font-family:var(--font-round);font-weight:750;font-size:18px;letter-spacing:-.2px}
+  .card>header .kind{font:600 12.5px var(--font-ui);color:var(--ink-3)}
+  .split{display:grid;grid-template-columns:minmax(300px,1.25fr) minmax(230px,1fr);
+    gap:18px;padding:14px 20px 20px;align-items:start}
+  @media(max-width:760px){.split{grid-template-columns:1fr}}
+  .stage{position:relative;border-radius:12px;overflow:hidden;border:1px solid #14161f;
+    background:radial-gradient(120% 120% at 50% 38%,#0E1018,#040407 78%)}
+  .stage canvas{display:block;width:100%;height:auto}
+  .stage .cap{position:absolute;left:13px;bottom:10px;font:600 11px var(--font-data);color:#4E5570}
+  .note{margin:0 0 11px;font-size:13.4px;color:var(--ink-2)}
+  .note b{color:var(--ink);font-weight:650}
+  dl.spec{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.4px;
+    border-top:1px solid var(--hair);padding-top:10px}
+  dl.spec dt{color:var(--ink-3);font:650 11px var(--font-ui);text-transform:uppercase;letter-spacing:.6px;padding-top:2px}
+  dl.spec dd{margin:0;color:var(--ink-2)}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:2px;border:1px solid rgba(128,128,128,.35)}
+
+  /* the size that actually matters */
+  .truth{padding:14px 20px 20px}
+  .truth h3{margin:0 0 4px;font:750 14px var(--font-round)}
+  .truth p{margin:0 0 12px;font-size:13px;color:var(--ink-2)}
+  .strip{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .chip{border-radius:10px;border:1px solid #14161f;overflow:hidden;
+    background:radial-gradient(120% 120% at 50% 40%,#12141C,#050508 80%)}
+  .chip canvas{display:block}
+  .chip figcaption{font:600 10.5px var(--font-data);color:var(--ink-3);text-align:center;padding:3px 0 5px}
+  figure{margin:0}
+  .foot{color:var(--ink-3);font-size:12.5px}
+  .foot code{font-family:var(--font-data)}
+</style>
+
+<div class="shell">
+  <h1>The Cast</h1>
+  <p class="lede">
+    The species catalogue is gone. These are not specimens — they are <b>moods</b>, each built
+    to say the same four things Bitjelly says: standing by, thinking, working, and needing
+    you. A ghost, who is not a jellyfish at all; an aurora that holds weather inside its bell; and a sparkler that sends its light away down its legs.
+    <br><br>
+    <b>That is the four.</b> Bitjelly keeps its own page, being the only pixel one; the three
+    vector ones are here. The shipped smooth jellyfish is retired. Each has a <b>different
+    light mechanism</b>, which was the rule the last slot had to satisfy — a bloom, a
+    curtain, a glyph and a run of beads stay apart at 46 pt, where four palettes would not.
+    <br><br>
+    <b>Three were cut on the way here.</b> Ember, a paper lantern, was the most legible of
+    them and the least like the others — a warm opaque body in a cast built on light passing
+    through water. Beacon, an oxblood bell with a cold light lapping its rim, read as a
+    warning light rather than as somebody to have on a desktop. A fried egg jelly was cute
+    and real and simply not wanted.
+    <br><br>
+    Flip the state on the rail; all three change at once. The strip at the bottom draws them
+    at <b>46 pt</b>, which is the only size that decides anything — a mascot that reads
+    beautifully at 300 px and turns to soup in the menu bar is not a mascot.
+  </p>
+
+  <div class="rail" role="group" aria-label="Preview controls">
+    <span class="lab">State</span>
+    <div class="seg" role="tablist" id="phaseSeg">
+      <button role="tab" data-s="idle" aria-selected="true">Idle</button>
+      <button role="tab" data-s="thinking" aria-selected="false">Thinking</button>
+      <button role="tab" data-s="acting" aria-selected="false">Acting</button>
+      <button role="tab" data-s="needs" aria-selected="false">Needs you</button>
+    </div>
+    <label class="check"><input type="checkbox" id="faceChk" checked> Face</label>
+    <label class="check"><input type="checkbox" id="slowChk"> Half speed</label>
+    <span class="zoom">Zoom <input type="range" id="zoom" min="4" max="18" step="1" value="10"><output id="zoomOut">10×</output></span>
+    <span class="spacer"></span>
+    <div class="seg" role="tablist" id="themeSeg">
+      <button role="tab" data-t="" aria-selected="true">Auto</button>
+      <button role="tab" data-t="light" aria-selected="false">Light</button>
+      <button role="tab" data-t="dark" aria-selected="false">Dark</button>
+    </div>
+  </div>
+
+  <div id="cards"></div>
+
+  <article class="card">
+    <div class="truth">
+      <h3>At 46 pt</h3>
+      <p>The overlay draws the mascot into a 46×60 box beside the cursor, and the menu bar
+        gives it less than that. Every state, every creature, at the real size.</p>
+      <div class="strip" id="strip"></div>
+    </div>
+  </article>
+
+  <p class="foot"><code>Prototypes/overlay/pretty.html</code> · the four, one state language · honours <code>prefers-reduced-motion</code></p>
+</div>
+
+<script>
+"use strict";
+(() => {
+  const TAU=Math.PI*2;
+  const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+  const lerp=(a,b,t)=>a+(b-a)*t;
+  const easeOutCubic=t=>1-Math.pow(1-t,3);
+  const smoother=t=>t*t*t*(t*(t*6-15)+10);
+  const rgba=(hex,a)=>{const n=parseInt(hex.slice(1),16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;};
+
+  const PI={idle:0,thinking:1,acting:2,needs:3};
+  const CAP={idle:"drifting · standing by",thinking:"hovering · thinking",
+             acting:"driving · working",needs:"held · needs a human"};
+
+  /* A fast squeeze and a long glide back. The asymmetry — plus the dip below zero at the
+     end, which is the refill overshoot — is the whole difference between a swimming bell
+     and a bouncing ball. Shared by all three so they are visibly the same animal family. */
+  function contraction(u){
+    if(u<0.26) return easeOutCubic(u/0.26);
+    const v=(u-0.26)/0.74;
+    return (1-smoother(v))-0.17*Math.sin(Math.PI*Math.pow(v,0.72));
+  }
+  /* One dial per state, read by every creature's light however it expresses light. */
+  function lightSpeed(p){return {idle:0.22,thinking:0.65,acting:1.7,needs:2.4}[p];}
+  function lightLevel(p,t,c){
+    if(p==="needs") return Math.sin(t*TAU*1.5)>-0.2?1:0.16;   // a warning light, not a fade
+    if(p==="acting") return 0.55+0.45*Math.max(0,c);
+    if(p==="thinking") return 0.46+0.32*Math.sin(t*TAU/1.1);
+    return 0.26+0.14*Math.sin(t*TAU/3.2);
+  }
+  const CURL=p=>p==="needs"?1:0;
+
+  class Sim{
+    constructor(sp,seed=0){this.sp=sp;this.seed=seed;this.t=seed*3.1;
+      this.c=0;this.pc=0;this.by=0;this.vy=0;this.bx=0;this.u=0;this.hist=[];}
+    step(dt,phase){
+      const i=PI[phase],sp=this.sp,period=sp.period[i],amp=sp.amp[i];
+      this.t+=dt;
+      const u=(this.t/period)%1; this.u=u;
+      const c=contraction(u)*amp;
+      const dc=(c-this.pc)/Math.max(dt,1/240); this.pc=c; this.c=c;
+      this.vy-=Math.max(0,dc)*(sp.thrust||3.2); this.vy*=Math.exp(-2.2*dt); this.vy-=this.by*7*dt;
+      this.by+=this.vy*dt+0.5*Math.sin((this.t+this.seed)*TAU/6.3)*dt;
+      // A ceiling on the surge. Acting thrust that reads well on its own carried the bell
+      // clean out of the top of the stage — and out of the overlay's 46×60 rect too.
+      // Clamped here rather than at draw time so a lagging tendril trails what is actually
+      // on screen instead of where an unclamped body would have been.
+      this.by=clamp(this.by,-6,6);
+      this.bx=Math.sin((this.t+this.seed)*TAU/8.1)*1.4;
+      this.hist.push({t:this.t,x:this.bx,y:this.by});
+      while(this.hist.length>2&&this.t-this.hist[0].t>1.8) this.hist.shift();
+    }
+    lag(age){const w=this.t-age,h=this.hist;
+      if(h.length<2||w<=h[0].t){const o=h[0]||{x:this.bx,y:this.by};return [o.x-this.bx,o.y-this.by];}
+      for(let i=h.length-1;i>0;i--) if(h[i-1].t<=w){
+        const a=h[i-1],b=h[i],f=(w-a.t)/Math.max(b.t-a.t,1e-6);
+        return [lerp(a.x,b.x,f)-this.bx,lerp(a.y,b.y,f)-this.by];}
+      return [0,0];}
+  }
+
+  /* ---------- shared vector helpers ---------- */
+  /** a tapered ribbon, filled rather than stroked so the tip actually vanishes */
+  function ribbon(g,pts,w0,w1,style){
+    const L=[],R=[],n=pts.length;
+    for(let i=0;i<n;i++){
+      const a=pts[Math.max(0,i-1)],b=pts[Math.min(n-1,i+1)];
+      let dx=b[0]-a[0],dy=b[1]-a[1];
+      const m=Math.hypot(dx,dy)||1; dx/=m; dy/=m;
+      const w=lerp(w0,w1,i/(n-1))/2;
+      L.push([pts[i][0]-dy*w,pts[i][1]+dx*w]);
+      R.push([pts[i][0]+dy*w,pts[i][1]-dx*w]);
+    }
+    g.beginPath(); g.moveTo(L[0][0],L[0][1]);
+    for(let i=1;i<n;i++) g.lineTo(L[i][0],L[i][1]);
+    for(let i=n-1;i>=0;i--) g.lineTo(R[i][0],R[i][1]);
+    g.closePath(); g.fillStyle=style; g.fill();
+  }
+  /** trailing points that remember where the body was, so a strand lags instead of steering */
+  function trail(sim,x0,y0,len,segs,sway,freq,ph,curl){
+    const pts=[];
+    for(let k=0;k<=segs;k++){
+      const t=k/segs;
+      const [lx,ly]=sim.lag(k*0.045);
+      const s=Math.sin(sim.t*TAU/freq-k*0.5+ph)*sway*(0.2+t);
+      const drop=curl?Math.sin(t*Math.PI)*len*0.45:t*len;
+      pts.push([x0+s+lx*0.9,y0+drop+ly*0.9]);
+    }
+    return pts;
+  }
+  /** A point on a cubic, so a curve that was drawn can also be walked. */
+  function bez3(p0,c1,c2,p3,s){
+    const m=1-s, a=m*m*m, b=3*m*m*s, c=3*m*s*s, d=s*s*s;
+    return [a*p0[0]+b*c1[0]+c*c2[0]+d*p3[0], a*p0[1]+b*c1[1]+c*c2[1]+d*p3[1]];
+  }
+
+  /** The face, identical across all three — that is what makes them a cast rather than
+      three unrelated drawings. Blink on a slow clock, gaze that wanders idle and scans
+      while thinking, worried brows only when a human is actually needed. */
+  function face(g,sim,phase,x,y,spread,r,ink,glint,blush){
+    if(!UI.face) return;
+    const bu=((sim.t+sim.seed)/3.9)%1, blink=bu<0.05;
+    const wide=phase==="needs"?1.15:1, squint=phase==="acting"?0.78:1;
+    const rr=r*wide, hh=rr*squint*(blink?0.12:1);
+    let gx=0,gy=0;
+    if(phase==="thinking"){gx=0.30*r*Math.sin(sim.t*TAU/1.9); gy=-0.28*r;}
+    else if(phase==="acting"){gy=0.10*r;}
+    else if(phase==="needs"){gy=0.18*r;}
+    else {gx=0.22*r*Math.sin(sim.t*TAU/3.1); gy=0.14*r*Math.sin(sim.t*TAU/4.3);}
+    if(blush) for(const side of [-1,1]){          // behind the eyes, so a blink never clips it
+      g.beginPath();
+      g.ellipse(x+side*(spread+r*1.05),y+r*1.05,r*0.68,r*0.46,0,0,TAU);
+      g.fillStyle=blush; g.fill();
+    }
+    for(const side of [-1,1]){
+      const ex=x+side*spread;
+      g.beginPath(); g.ellipse(ex,y,rr,Math.max(hh,0.05),0,0,TAU);
+      g.fillStyle=ink; g.fill();
+      if(!blink&&glint!==null){
+        g.beginPath(); g.ellipse(ex+gx+r*0.26,y+gy-r*0.3,r*0.3,r*0.3,0,0,TAU);
+        g.fillStyle=glint||"rgba(255,255,255,.92)"; g.fill();
+      }
+    }
+    if(phase==="needs"){
+      g.strokeStyle=ink; g.lineWidth=r*0.32; g.lineCap="round";
+      for(const side of [-1,1]){
+        g.beginPath();
+        g.moveTo(x+side*(spread+r*1.5),y-r*1.9);
+        g.lineTo(x+side*(spread-r*0.5),y-r*2.6);
+        g.stroke();
+      }
+    }
+  }
+
+  /* ================= the three ================= */
+  const CAST={};
+
+  /* ---- 1. GHOST ---- */
+  CAST.ghost={
+    label:"Ghost", kind:"not a jellyfish, and that is fine",
+    period:[6.4,4.0,2.2,3.6], amp:[0.20,0.28,0.46,0.18], thrust:1.8,
+    scale:0.94, anchor:0.38, stageH:400,
+    pal:{veil:"#F1EDFF",core:"#FFFFFF",deep:"#A9A2DC",
+         eye:"#2B2450",blush:"rgba(255,150,190,.36)",alarm:"#FFC46B"},
+    note:"It was a ghost jellyfish for one round — oral arms, marginal tentacles, a gonad ring showing through the bell, all of it anatomically earned and none of it wanted. <b>It is just a ghost now.</b> A round head, a hem that never holds still, two big lit eyes and a blush. The whole sheet runs off <b>one travelling wave</b>: it reaches the crown first, then the shoulders, then each hem lobe a fixed step later, and the body leans about its own hem so the head swings further than the tail. The hem used to billow on five private clocks while the head sat there like a rock.",
+    read:"it lights up from inside, like a held breath",
+    draw(g,sim,phase){
+      const c=Math.max(0,sim.c), lev=lightLevel(phase,sim.t,sim.c), P=this.pal;
+      // Wide and round. Chubby reads friendly; a tall dome over a long drape reads as
+      // something standing at the end of a corridor.
+      const W=7.8*(1-0.10*c), H=6.6*(1+0.13*c);
+      const curl=CURL(phase);
+      const S=(curl?7:11.5)*(1-0.10*c);
+      const tint=phase==="needs"?P.alarm:P.veil;
+      const [lx,ly]=sim.lag(0.07);
+      const waist=S*0.38, Wb=W*1.06;
+      const dx=lx*0.35, dy=ly*0.40;
+      const LOBES=5, rest=waist+(S-waist)*0.52;
+
+      // One clock for the whole sheet. Every part reads the same travelling wave at its own
+      // offset — crown first, then the shoulders, then each hem lobe a fixed step later —
+      // so what you see is a single ripple passing down the body rather than a top and a
+      // bottom moving on unrelated timers. The lobes used to have five private periods,
+      // which is why the hem was alive and the head was a rock.
+      const wave=off=>Math.sin(sim.t*TAU/3.0-off);
+      const tilt=wave(0)*0.058;
+
+      // two wisps trailing behind, blurred by being drawn where the body used to be
+      for(let s=1;s>=0;s--){
+        const [wx,wy]=sim.lag(0.16+s*0.13);
+        const k=1.10+s*0.22;
+        const wg=g.createRadialGradient(wx,-H*0.3+wy,0.5,wx,-H*0.3+wy,W*k*1.7);
+        wg.addColorStop(0,rgba(tint,0.10-s*0.035));
+        wg.addColorStop(1,rgba(tint,0));
+        g.fillStyle=wg;
+        g.beginPath(); g.ellipse(wx,(-H*0.3+wy)+S*0.25,W*k*1.5,(H+S*0.5)*k,0,0,TAU); g.fill();
+      }
+
+      // The sheet leans about its own hem, so the head swings further than the tail does —
+      // which is what "the top moves too" has to mean for something with no skeleton.
+      g.save();
+      g.translate(0,waist); g.rotate(tilt); g.translate(0,-waist);
+
+      // The body: one closed silhouette, dome into hem with no corner between them. An
+      // outline that turns at the shoulder and then strikes out sideways puts a visible
+      // kink exactly where a sheet should be at its softest.
+      const shL=wave(0.75)*0.80, shR=wave(-0.75)*0.80;   // shoulders, out of phase
+      const crown=wave(0.25)*0.70;
+      // The apex sits level with both of its neighbouring controls, so the crown keeps a
+      // horizontal tangent and rides the wave without developing a corner at the top.
+      const apexY=-H*1.58+crown*0.8;
+      g.beginPath();
+      g.moveTo(-Wb+dx,waist+dy);
+      g.bezierCurveTo(-Wb*1.03,-H*0.90+shL,-W*0.60,apexY,crown*1.3,apexY);
+      g.bezierCurveTo(W*0.60,apexY,Wb*1.03,-H*0.90+shR,Wb+dx,waist+dy);
+      for(let i=0;i<LOBES;i++){
+        const t0=i/LOBES,t1=(i+1)/LOBES;
+        const x0=lerp(Wb,-Wb,t0), x1=lerp(Wb,-Wb,t1), span=x0-x1;
+        // Cubic, not quadratic: a quadratic can only make a point, and cloth does not come
+        // to a point. The notches stop a third of the way back up, so it is one hem that
+        // ripples rather than five separate tongues.
+        const swell=wave(1.7+i*0.52)*1.5;
+        const tip=(i%2?S:S*0.84)+swell;
+        const last=i===LOBES-1;
+        const nx=last?-Wb:x1, ny=last?waist:rest+wave(2.0+i*0.52)*0.9;
+        g.bezierCurveTo(
+          x0-span*0.50+lx*0.8, tip+ly*0.9,
+          nx+span*0.50+lx*0.8, tip+ly*0.9,
+          nx+dx, ny+dy);
+      }
+      g.closePath();
+      // Pearl, not steel. The old ramp ran white into a cold blue-grey, which is the colour
+      // of a thing that has been dead a while.
+      const bg=g.createLinearGradient(0,-H*1.58,0,S*1.04);
+      bg.addColorStop(0,rgba(P.core,0.74+0.24*lev));
+      bg.addColorStop(0.32,rgba(tint,0.58+0.20*lev));
+      bg.addColorStop(0.60,rgba(tint,0.36));
+      bg.addColorStop(0.84,rgba(P.deep,0.17));
+      bg.addColorStop(1,rgba(P.deep,0.01));
+      g.fillStyle=bg; g.fill();
+
+      // the light it is made of, blooming out past its own edge
+      const hg=g.createRadialGradient(0,-H*0.60,0.4,0,-H*0.40,W*2.3);
+      hg.addColorStop(0,rgba(tint,0.22*lev));
+      hg.addColorStop(1,rgba(tint,0));
+      g.fillStyle=hg;
+      g.beginPath(); g.ellipse(0,-H*0.40,W*2.3,H*2.3,0,0,TAU); g.fill();
+
+      // a crown highlight — a gradient that never reaches its own edge, because a flat
+      // ellipse read as a bald patch
+      const kx=crown*1.1, ky=-H*0.88+crown*0.7;
+      const kg=g.createRadialGradient(kx,ky-0.04,0.3,kx,ky,W*0.80);
+      kg.addColorStop(0,rgba(P.core,0.30+0.18*lev));
+      kg.addColorStop(1,rgba(P.core,0));
+      g.fillStyle=kg;
+      g.beginPath(); g.ellipse(kx,ky,W*0.80,H*0.56,0,0,TAU); g.fill();
+
+      // Big, low, and lit. The one change that stopped it being frightening was giving the
+      // eyes a highlight — an unlit hole is a socket, and a socket is a skull. The face
+      // rides inside the lean, so the swing reads as a head tilt.
+      face(g,sim,phase,crown*0.5,-H*0.44+crown*0.3,W*0.32,1.30,
+           rgba(P.eye,0.90),"rgba(255,255,255,.95)",P.blush);
+      g.restore();
+    }};
+
+  /* ---- 2. AURORA ---- */
+  CAST.aurora={
+    label:"Aurora", kind:"weather in a bell",
+    period:[5.0,3.0,1.5,3.2], amp:[0.30,0.46,0.80,0.30], thrust:2.4,
+    scale:0.86, anchor:0.26, stageH:560,
+    pal:{glass:"#7FCDE8",rim:"#EAFBFF",fringe:"#FF3DC4",green:"#22FF9B",teal:"#2FE3FF",
+         crown:"#B44BFF",alarm:"#FFB03A",tent:"#CFF3FF"},
+    note:"A clear bell with a <b>curtain of light standing up inside it</b>, coloured the way a real aurora is — a magenta fringe along the bottom edge, brilliant green through the body, violet where it thins out at the top. Sixteen bands, each climbing on its own clock, laid down <b>additively</b> so the colours glow rather than tint. She was rebuilt once for being small: a flat-topped lid of a bell drawn at three-quarter scale, with a curtain that hit the crown and stopped dead. Now the shoulders are round, she is drawn at the same size as the others, and the curtain <b>fades out before it reaches the top</b> instead of being clipped by it.",
+    read:"the curtain speeds up and climbs the bell",
+    draw(g,sim,phase){
+      const c=Math.max(0,sim.c), lev=lightLevel(phase,sim.t,sim.c), spd=lightSpeed(phase), P=this.pal;
+      const W=8.4*(1-0.12*c), H=7.6*(1+0.15*c), sag=H*0.24;
+      const curl=CURL(phase);
+
+      // A wide shallow parasol — the same standard cap as the sparkler, but flatter and
+      // broader where hers is chubby. The old outline put both control points at the far
+      // corners, which gives a flat top and hard shoulders: a lid, not a bell.
+      const sagY=sag*1.15, rimX=W*0.94;
+      const hem=[[rimX,0],[W*0.58,sagY],[-W*0.58,sagY],[-rimX,0]];
+      const rootAt=u=>bez3(hem[0],hem[1],hem[2],hem[3],u);
+      const bell=()=>{
+        g.beginPath();
+        g.moveTo(-rimX,0);
+        g.bezierCurveTo(-W*1.08,-H*0.44,-W*0.78,-H*1.30,0,-H*1.30);
+        g.bezierCurveTo(W*0.78,-H*1.30,W*1.08,-H*0.44,rimX,0);
+        g.bezierCurveTo(hem[1][0],hem[1][1],hem[2][0],hem[2][1],hem[3][0],hem[3][1]);
+        g.closePath();
+      };
+
+      // Tendrils first, so the bell lands on top of their roots and the join disappears.
+      // Shorter than they were: length was eating the whole stage and forcing her to be
+      // drawn small to fit, which is most of why she looked small.
+      const N=9, LEN=curl?12:27;
+      for(let i=0;i<N;i++){
+        const u=0.07+i*(0.86/(N-1));
+        const [rx,ry]=rootAt(u);
+        const len=LEN*(0.54+0.46*Math.sin(u*Math.PI))*(0.86+0.28*((i*7)%5)/5);
+        const pts=trail(sim,rx,ry-0.6,len,30,1.5+0.9*Math.sin(u*Math.PI),2.4+i*0.31,i*0.77,curl);
+        ribbon(g,pts,0.78,0.02,rgba(P.tent,0.26));
+        const hue=phase==="needs"?P.alarm:(u<0.40?P.green:u>0.60?P.crown:P.teal);
+        for(let s2=0;s2<3;s2++){
+          const cut=Math.ceil(pts.length*(0.46-s2*0.13));
+          ribbon(g,pts.slice(0,cut),0.52,0.05,rgba(hue,0.09+0.18*lev));
+        }
+      }
+
+      g.save();
+      bell(); g.clip();
+      const bgl=g.createLinearGradient(0,-H*1.30,0,H*0.3);
+      bgl.addColorStop(0,rgba(P.rim,0.34)); bgl.addColorStop(1,rgba(P.glass,0.14));
+      g.fillStyle=bgl; g.fillRect(-W*1.2,-H*1.6,W*2.4,H*2.4);
+
+      // THE CURTAIN, drawn additively. Alpha-blending a colour over a dark bell can only
+      // make the bell paler; adding light to it is what makes an aurora look like it is
+      // emitting. The bands overlap by a quarter of their width so they fuse into one
+      // sheet instead of reading as sixteen bars.
+      g.globalCompositeOperation="lighter";
+      const BANDS=16, floor=sagY*0.72, span=W*1.88;
+      for(let i=0;i<BANDS;i++){
+        const t=i/(BANDS-1);
+        const x=lerp(-W*0.92,W*0.92,t), w=span/BANDS*1.25;
+        const ph=sim.t*spd*1.05+t*4.0;
+        // Capped so the fade completes inside the bell. It used to run to two and a half
+        // bell-heights, so the crown cut it off mid-gradient and the top of the bell was a
+        // flat bright bar rather than a curtain thinning out.
+        // Height varies only a little now; the shimmer is carried by `I` instead. Letting
+        // height do the work meant the short bands left the top of the bell empty, and a
+        // half-empty bell is what made her look small next to the others.
+        const tall=(0.82+0.18*Math.pow(Math.max(0,Math.sin(ph)),1.3))*H*1.56;
+        // a floor under `lev` so idle still has real colour in it — a curtain that is only
+        // visible while working is not a curtain, it is a progress bar
+        const I=(0.34+0.66*lev)*(0.42+0.58*Math.pow(Math.max(0,Math.sin(ph+0.6)),1.1));
+        const cg=g.createLinearGradient(0,floor,0,floor-tall);
+        if(phase==="needs"){
+          cg.addColorStop(0.00,rgba(P.alarm,0));
+          cg.addColorStop(0.12,rgba(P.alarm,0.90*I));
+          cg.addColorStop(0.55,rgba(P.alarm,0.38*I));
+          cg.addColorStop(1.00,rgba(P.alarm,0));
+        } else {
+          // The body of the curtain sits high. Weighting green to a quarter of the way up
+          // left the top two thirds of the bell as empty glass with a green stripe under
+          // it — an aurora is mostly aurora, not mostly sky.
+          cg.addColorStop(0.00,rgba(P.fringe,0.30*I));
+          cg.addColorStop(0.06,rgba(P.fringe,0.95*I));   // the nitrogen fringe
+          cg.addColorStop(0.20,rgba(P.green,1.00*I));    // the oxygen body
+          cg.addColorStop(0.46,rgba(P.green,0.88*I));
+          cg.addColorStop(0.66,rgba(P.teal,0.60*I));
+          cg.addColorStop(0.86,rgba(P.crown,0.34*I));
+          cg.addColorStop(1.00,rgba(P.crown,0));         // where it thins out
+        }
+        g.fillStyle=cg;
+        g.fillRect(x-w/2,floor-tall,w,tall);
+      }
+      // a sheen on the crown, so the top of the glass catches something even when the
+      // curtain up there has thinned to nothing
+      g.globalCompositeOperation="source-over";
+      const sh=g.createRadialGradient(-W*0.28,-H*1.12,0.4,-W*0.22,-H*1.00,W*0.92);
+      sh.addColorStop(0,rgba(P.rim,0.32)); sh.addColorStop(1,rgba(P.rim,0));
+      g.fillStyle=sh; g.fillRect(-W*1.2,-H*1.6,W*2.4,H*2.4);
+      g.restore();
+
+      // the rim, the one hard line on it — a bell needs one edge or it stops being glass
+      bell();
+      g.strokeStyle=rgba(P.rim,0.50); g.lineWidth=0.42; g.stroke();
+      // Big eyes and a blush, like the rest of the cast. She had neither, which is the
+      // other half of why she read as the small one — not size, seriousness.
+      face(g,sim,phase,0,-H*0.40,W*0.28,1.16,
+           rgba("#0E2430",0.88),"rgba(240,255,255,.95)","rgba(90,220,190,.30)");
+    }};
+
+  /* ---- 3. SPARKLER ---- */
+  CAST.sparkler={
+    label:"Sparkler", kind:"after the flower hat jelly",
+    period:[5.2,3.2,1.6,3.0], amp:[0.30,0.44,0.74,0.26], thrust:2.8,
+    scale:0.92, anchor:0.28, stageH:500,
+    pal:{hi:"#FFE9F4",bell:"#F79ACB",deep:"#B8478F",tent:"#F9C2DF",
+         bead:"#FFFAFD",beadGlow:"#FF9FD8",alarm:"#FFAE3A"},
+    note:"The other three keep their light <b>in the bell</b> — a bloom inside the ghost, a curtain inside the aurora, a glyph on Bitjelly's forehead. This one sends it away: little beads of light are born at the hem and <b>run all the way down the legs</b>, swelling as they go and dying at the tips. Speed is the state. She is built on a real one: the <b>flower hat jelly</b>, <i>Olindias formosa</i>, which is vivid pink, has dark pinstripes radiating from the crown to the margin, and carries <b>bioluminescent tips on its tentacles</b> — so the lights on the legs are not an invention, they are the animal's own. Her bell is the plain standard cap, chubby and wider than tall, because three cleverer silhouettes all failed by having a feature where a jellyfish has none. On needs-you they <b>stop dead where they are</b> and flash together, which is the only honest picture of an agent that is holding: still lit, still loaded, going nowhere until you say so.",
+    read:"the beads run faster, then stop dead and flash",
+    draw(g,sim,phase){
+      const c=Math.max(0,sim.c), lev=lightLevel(phase,sim.t,sim.c), spd=lightSpeed(phase), P=this.pal;
+      const W=6.9*(1-0.11*c), H=6.0*(1+0.16*c), sag=H*0.19;
+      const curl=CURL(phase);
+      const NT=9, LEN=curl?10:26, NB=3;
+      const beadCol=phase==="needs"?P.alarm:P.bead;
+      // one strobe for every bead on the animal, so a held state reads as a single alarm
+      const strobe=phase==="needs"?(Math.sin(sim.t*TAU*1.5)>-0.2?1:0.13):1;
+
+      // The standard jelly cap: a chubby rounded dome, wider than it is tall, widest a
+      // little above the rim so the margin tucks under the way a real bell's does.
+      //
+      // Three shapes were thrown away getting here, and each failed the same way — by
+      // having a feature where a jellyfish has none. A pinched bud (a point). A lobed
+      // crown from a radius modulated over angle (a nub, dead centre). A tall bell with a
+      // waist and a flare, which is a helmet. What is left is the shape everyone already
+      // has in their head when they picture a jellyfish, and it turns out that shape is
+      // cute on its own without help.
+      //
+      // The apex sits level with both neighbouring control points, so the crown holds a
+      // horizontal tangent and cannot grow a tip.
+      const sagY=sag*1.30, rimX=W*0.88;
+      const hem=[[rimX,0],[W*0.55,sagY],[-W*0.55,sagY],[-rimX,0]];
+      const bell=()=>{
+        g.beginPath();
+        g.moveTo(-rimX,0);
+        g.bezierCurveTo(-W*1.06,-H*0.52,-W*0.86,-H*1.34,0,-H*1.34);
+        g.bezierCurveTo(W*0.86,-H*1.34,W*1.06,-H*0.52,rimX,0);
+        g.bezierCurveTo(hem[1][0],hem[1][1],hem[2][0],hem[2][1],hem[3][0],hem[3][1]);
+        g.closePath();
+      };
+      // the hem is described once and then used twice — to close the bell, and to launch
+      // the beads off it
+      const rootAt=u=>bez3(hem[0],hem[1],hem[2],hem[3],u);
+
+      for(let i=0;i<NT;i++){
+        const u=0.07+i*(0.86/(NT-1));
+        const [rx,ry]=rootAt(u);
+        const len=LEN*(0.60+0.40*Math.sin(u*Math.PI));
+        const pts=trail(sim,rx,ry-0.4,len,24,1.5,2.6+i*0.27,i*0.8,curl);
+        ribbon(g,pts,0.55,0.02,rgba(P.tent,0.40));
+
+        for(let b=0;b<NB;b++){
+          const f=phase==="needs"
+            ? 0.28+b*0.24                       // frozen mid-leg, not restarted
+            : ((((sim.t*spd*0.42)-b/NB-i*0.11)%1)+1)%1;
+          const idx=f*(pts.length-1), i0=Math.floor(idx), fr=idx-i0;
+          const p0=pts[i0], p1=pts[Math.min(pts.length-1,i0+1)];
+          const bx=lerp(p0[0],p1[0],fr), by=lerp(p0[1],p1[1],fr);
+          // it swells on the way out and dies at the tip, so the leg does not look like a
+          // string of identical dots sliding along it
+          const env=Math.sin(f*Math.PI);
+          const a=(0.42+0.58*lev)*env*strobe;
+          if(a<0.04) continue;
+          const r=0.28+0.36*env;
+          // A warm halo under a near-white core. A single pale dot at low alpha over a dark
+          // stage just reads as a grey pearl threaded on the leg — the halo is what makes
+          // it a light rather than a bead.
+          const hg2=g.createRadialGradient(bx,by,0.05,bx,by,r*4.2);
+          hg2.addColorStop(0,rgba(phase==="needs"?P.alarm:P.beadGlow,0.55*a));
+          hg2.addColorStop(1,rgba(P.beadGlow,0));
+          g.fillStyle=hg2;
+          g.beginPath(); g.ellipse(bx,by,r*4.2,r*4.2,0,0,TAU); g.fill();
+          g.save();
+          g.shadowColor=rgba(P.beadGlow,0.95); g.shadowBlur=3+10*a;
+          g.beginPath(); g.ellipse(bx,by,r,r,0,0,TAU);
+          g.fillStyle=rgba(beadCol,Math.min(1,a)); g.fill();
+          g.restore();
+        }
+
+        // The real animal's tips stay lit whatever else it is doing — that is the whole
+        // reason it is called a flower hat. The travelling beads are ours; this is hers.
+        const [tx,ty]=pts[pts.length-1];
+        const ta=0.30+0.45*lev*strobe;
+        const tg=g.createRadialGradient(tx,ty,0.05,tx,ty,1.5);
+        tg.addColorStop(0,rgba(phase==="needs"?P.alarm:P.beadGlow,0.55*ta));
+        tg.addColorStop(1,rgba(P.beadGlow,0));
+        g.fillStyle=tg;
+        g.beginPath(); g.ellipse(tx,ty,1.5,1.5,0,0,TAU); g.fill();
+        g.beginPath(); g.ellipse(tx,ty,0.26,0.26,0,0,TAU);
+        g.fillStyle=rgba(beadCol,ta); g.fill();
+      }
+
+      g.save();
+      bell(); g.clip();
+      const bg=g.createRadialGradient(-W*0.26,-H*1.10,0.4,0,-H*0.3,W*1.8);
+      bg.addColorStop(0,rgba(P.hi,0.97));
+      bg.addColorStop(0.46,rgba(P.bell,0.94));
+      bg.addColorStop(1,rgba(P.deep,0.92));
+      g.fillStyle=bg; g.fillRect(-W*1.4,-H*1.8,W*2.8,H*2.6);
+      // the seam along the hem where the beads are made
+      const sg=g.createLinearGradient(0,sagY,0,-H*0.55);
+      sg.addColorStop(0,rgba(beadCol,0.50*lev*strobe));
+      sg.addColorStop(1,rgba(beadCol,0));
+      g.fillStyle=sg; g.fillRect(-W*1.4,-H*1.8,W*2.8,H*2.6);
+      // The flower hat jelly's pinstripes — dark opaque lines radiating from the top centre
+      // out to the margin. This is the detail that keeps her apart from the aurora now that
+      // they share the standard cap: the aurora is plain glass with weather inside it, and
+      // this one has a patterned skin.
+      for(let k=0;k<15;k++){
+        const t=(k/14)*2-1;
+        g.beginPath();
+        g.moveTo(t*W*0.05,-H*1.30);
+        g.quadraticCurveTo(t*W*0.66,-H*0.80,t*rimX*1.03,0.3);
+        g.strokeStyle=rgba(P.deep,0.30); g.lineWidth=0.32; g.stroke();
+      }
+      g.restore();
+      bell();
+      g.strokeStyle=rgba(P.hi,0.52); g.lineWidth=0.45; g.stroke();
+
+      // Just under the bell's own midpoint — the usual baby-schema placement is the bottom
+      // third, but that only works on a head wider than it is tall, and on a tall bell it
+      // turns the whole animal into forehead.
+      face(g,sim,phase,0,-H*0.44,W*0.30,1.14,
+           rgba("#3D0F2C",0.90),"rgba(255,247,251,.95)","rgba(226,72,140,.30)");
+    }};
+
+  /* ---------------- plumbing ---------------- */
+  const UI={phase:"idle",face:true,slow:false,zoom:10};
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const stages=[],visible=new WeakSet();
+  const io=new IntersectionObserver(es=>{for(const e of es)
+    e.isIntersecting?visible.add(e.target):visible.delete(e.target);},{rootMargin:"150px"});
+
+  const ORDER=["ghost","aurora","sparkler"];
+  const wrap=document.getElementById("cards");
+  ORDER.forEach((key,idx)=>{
+    const sp=CAST[key];
+    const card=document.createElement("article");
+    card.className="card";
+    card.innerHTML=`
+      <header><h2>${sp.label}</h2><span class="kind">${sp.kind}</span></header>
+      <div class="split">
+        <div class="stage"><canvas width="620" height="${sp.stageH||400}"></canvas><div class="cap"></div></div>
+        <div>
+          <p class="note">${sp.note}</p>
+          <dl class="spec">
+            <dt>Beat</dt><dd>${sp.period[0]}s idle → ${sp.period[2]}s working</dd>
+            <dt>State</dt><dd>${sp.read}</dd>
+            <dt>Palette</dt><dd>${Object.values(sp.pal).slice(0,6).map(v=>
+              `<span class="sw" style="background:${v}"></span>`).join("")}</dd>
+          </dl>
+        </div>
+      </div>`;
+    wrap.append(card);
+    const cv=card.querySelector("canvas"), cap=card.querySelector(".cap");
+    const sim=new Sim(sp,idx*1.7);
+    stages.push({canvas:cv,ctx:cv.getContext("2d"),sim,sp,warm:false,render(g,w,h){
+      cap.textContent=CAP[UI.phase];
+      g.save();
+      g.translate(Math.round(w/2),Math.round(h*(sp.anchor||0.42)));
+      // Aurora's tendrils are four bell-heights long. `scale` is how big the creature is
+      // against the others, not a crop — it is drawn smaller because it is genuinely long.
+      const k=UI.zoom*(sp.scale||1); g.scale(k,k);
+      g.translate(sim.bx,sim.by);
+      g.lineJoin="round";
+      sp.draw(g,sim,UI.phase);
+      g.restore();
+    }});
+    io.observe(cv);
+  });
+
+  // the 46 pt strip: every creature in every state, at the size that decides
+  const strip=document.getElementById("strip");
+  const PHASES=["idle","thinking","acting","needs"];
+  for(const key of ORDER){
+    for(const ph of PHASES){
+      const sp=CAST[key];
+      const fig=document.createElement("figure");
+      fig.className="chip";
+      fig.innerHTML=`<canvas width="112" height="140"></canvas><figcaption>${sp.label} · ${ph}</figcaption>`;
+      strip.append(fig);
+      const cv=fig.querySelector("canvas");
+      cv.style.width="56px"; cv.style.height="70px";
+      const sim=new Sim(sp,ORDER.indexOf(key)*1.7+PHASES.indexOf(ph)*0.4);
+      stages.push({canvas:cv,ctx:cv.getContext("2d"),sim,sp,fixed:ph,warm:false,render(g,w,h){
+        g.save();
+        g.translate(Math.round(w/2),Math.round(h*(sp.anchor||0.40)));
+        const k=2.2*(sp.scale||1); g.scale(k,k);
+        // The swim is scaled down and clamped here. At 46 pt the same thrust that reads as
+        // a surge on a 400 px stage carries the whole body out of the top of the box —
+        // which is exactly what the overlay's 46×60 rect would do too.
+        g.translate(sim.bx*0.45,clamp(sim.by,-3.2,3.2)*0.45);
+        g.lineJoin="round";
+        sp.draw(g,sim,ph);
+        g.restore();
+      }});
+      io.observe(cv);
+    }
+  }
+
+  function fit(cv){
+    const dpr=Math.min(devicePixelRatio||1,2);
+    const rc=cv.getBoundingClientRect();
+    const w=rc.width||cv.width,h=rc.height||cv.height;
+    if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+    return {w,h,dpr};
+  }
+  let last=performance.now();
+  function frame(now){
+    let dt=(now-last)/1000; last=now;
+    dt=clamp(dt,0,0.05)*(UI.slow?0.5:1);
+    for(const st of stages){
+      if(!visible.has(st.canvas)&&st.warm) continue;
+      const {w,h,dpr}=fit(st.canvas);
+      const ph=st.fixed||UI.phase;
+      if(!st.warm){for(let i=0;i<120;i++) st.sim.step(1/60,ph); st.warm=true;}
+      else if(!reduce) st.sim.step(dt,ph);
+      const g=st.ctx;
+      g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,w,h);
+      st.render(g,w,h);
+    }
+    requestAnimationFrame(frame);
+  }
+  function segment(id,apply){
+    const el=document.getElementById(id);
+    el.addEventListener("click",e=>{const b=e.target.closest("button"); if(!b)return;
+      [...el.querySelectorAll("button")].forEach(x=>x.setAttribute("aria-selected",String(x===b)));
+      apply(b);});
+  }
+  segment("phaseSeg",b=>{UI.phase=b.dataset.s;});
+  segment("themeSeg",b=>{const t=b.dataset.t;
+    t?document.documentElement.setAttribute("data-theme",t):document.documentElement.removeAttribute("data-theme");});
+  document.getElementById("faceChk").addEventListener("change",e=>{UI.face=e.target.checked;});
+  document.getElementById("slowChk").addEventListener("change",e=>{UI.slow=e.target.checked;});
+  const z=document.getElementById("zoom"),zo=document.getElementById("zoomOut");
+  z.addEventListener("input",()=>{UI.zoom=+z.value; zo.textContent=UI.zoom+"×";});
+
+  requestAnimationFrame(frame);
+})();
+</script>

@@ -64,6 +64,7 @@ struct MenuPopover: View {
                     activityCard
                 }
 
+                stylePickerCard
                 overlayToggleCard
                 bottomBar
             }
@@ -229,6 +230,51 @@ struct MenuPopover: View {
         }
     }
 
+    /// Live swatches rather than a segmented control with names in it: the thing being
+    /// chosen is a drawing, so the choice should be made by looking at drawings. Each
+    /// swatch animates in the phase the agent is actually in, so you pick the style while
+    /// watching it say the thing it will have to say.
+    private var stylePickerCard: some View {
+        @Bindable var styles = JellyStyleStore.shared
+        return VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            Text("Mascot")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: Theme.Space.xs) {
+                ForEach(JellyStyle.allCases) { style in
+                    let chosen = styles.style == style
+                    Button {
+                        styles.style = style
+                    } label: {
+                        VStack(spacing: Theme.Space.xs) {
+                            JellyfishStateView(phase: jellyfishPhase, style: style)
+                                .frame(width: 44, height: 58)
+                            Text(style.title)
+                                .font(.caption2.weight(chosen ? .semibold : .regular))
+                                .foregroundStyle(chosen ? Theme.agent : .secondary)
+                        }
+                        .padding(.vertical, Theme.Space.xs)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .background {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(chosen ? Theme.agent.opacity(0.14) : .clear)
+                            .strokeBorder(chosen ? Theme.agent.opacity(0.55) : .clear, lineWidth: 1)
+                    }
+                    .help(style.blurb)
+                    .accessibilityLabel("\(style.title) — \(style.blurb)")
+                    .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            HStack(spacing: 0) { Spacer(minLength: 0); MascotCredit() }
+        }
+        .padding(Theme.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
     private var overlayToggleCard: some View {
         @Bindable var model = engine.overlayModel
         return VStack(alignment: .leading, spacing: 2) {
@@ -281,6 +327,32 @@ struct MenuPopover: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Credits
+
+/// The faintest thing in the window, on purpose. The four mascots were drawn by someone
+/// other than the app's author, and the credit she asked for is one you have to be looking
+/// for — so it sits under the swatches, at nine points, at a quarter opacity, and only comes
+/// up to legible when the pointer is on it. It is next to the art rather than in the header
+/// because the person who goes looking for who drew the jellyfish is already looking at them.
+private struct MascotCredit: View {
+    @State private var hovering = false
+
+    var body: some View {
+        Link(destination: URL(string: "https://github.com/pharmacykitty")!) {
+            Text("jellyfish girl")
+                .font(.system(size: 9, design: .rounded))
+                .underline(hovering)
+                .foregroundStyle(.secondary)
+                .opacity(hovering ? 0.85 : 0.24)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Who drew the mascots")
+        .accessibilityLabel("Mascots by jellyfish girl")
     }
 }
 
