@@ -178,10 +178,11 @@ enum JellyfishArt {
 struct OverlayEffectsView: View {
     let model: OverlayModel
     @State private var follow = EscortState()
+    @State private var hidden = false
 
     var body: some View {
         let style = JellyStyleStore.shared.style
-        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: hidden)) { timeline in
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
 
@@ -255,6 +256,7 @@ struct OverlayEffectsView: View {
             }
         }
         .allowsHitTesting(false)
+        .pausedWhileWindowHidden($hidden)
     }
 }
 
@@ -325,6 +327,7 @@ struct JellyfishStateView: View {
     /// `nil` follows whatever style the user picked; a value pins one, which is how the
     /// picker draws a live swatch of a style that is not currently chosen.
     var style: JellyStyle?
+    @State private var hidden = false
 
     /// Where to put the 64×84 design box inside a view that clips, so the creature stays in
     /// its own frame while it swims.
@@ -362,7 +365,7 @@ struct JellyfishStateView: View {
         // what `body` touches, and a pick made in the popover has to repaint the hero and
         // the demo gallery immediately, not on the next unrelated invalidation.
         let drawn = style ?? JellyStyleStore.shared.style
-        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: hidden)) { timeline in
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,
@@ -374,13 +377,16 @@ struct JellyfishStateView: View {
             }
         }
         .opacity(dimmed ? 0.66 : 1)
+        .pausedWhileWindowHidden($hidden)
     }
 }
 
 /// The sigil cycling its wind-up forever — the demo stage's preview of the charge ring.
 struct SigilPreviewView: View {
+    @State private var hidden = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: hidden)) { timeline in
             Canvas { context, size in
                 let time = timeline.date.timeIntervalSinceReferenceDate
                 let cycle = time.truncatingRemainder(dividingBy: 2.4)
@@ -393,6 +399,7 @@ struct SigilPreviewView: View {
                 )
             }
         }
+        .pausedWhileWindowHidden($hidden)
     }
 }
 
@@ -513,10 +520,11 @@ struct BezelView: View {
 /// The bezel's small jellyfish mark — the same renderer, gently animated in place.
 private struct BezelMarkView: View {
     let model: OverlayModel
+    @State private var hidden = false
 
     var body: some View {
         let style = JellyStyleStore.shared.style
-        return TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        return TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: hidden)) { timeline in
             Canvas { context, size in
                 JellyfishArt.draw(
                     in: context,
@@ -527,6 +535,7 @@ private struct BezelMarkView: View {
                 )
             }
         }
+        .pausedWhileWindowHidden($hidden)
     }
 }
 
