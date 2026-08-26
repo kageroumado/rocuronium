@@ -1,4 +1,5 @@
 import AppKit
+import Propofol
 import SwiftUI
 
 /// A deterministic practice target: one window whose controls exist to be driven.

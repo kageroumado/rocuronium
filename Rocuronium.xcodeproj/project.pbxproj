@@ -90,6 +90,7 @@
 			);
 			name = Rocuronium;
 			packageProductDependencies = (
+				7B0000000000000000000002 /* Propofol */,
 			);
 			productName = Rocuronium;
 			productReference = 0B0929CD301FBEED006E2BB2 /* Rocuronium.app */;
@@ -146,6 +147,9 @@
 			);
 			mainGroup = 0B0929C4301FBEED006E2BB2;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7B0000000000000000000001 /* XCLocalSwiftPackageReference "propofol" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0B0929CE301FBEED006E2BB2 /* Products */;
 			projectDirPath = "";
@@ -471,6 +475,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		7B0000000000000000000001 /* XCLocalSwiftPackageReference "propofol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../propofol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7B0000000000000000000002 /* Propofol */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7B0000000000000000000001 /* XCLocalSwiftPackageReference "propofol" */;
+			productName = Propofol;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0B0929C5301FBEED006E2BB2 /* Project object */;
 }

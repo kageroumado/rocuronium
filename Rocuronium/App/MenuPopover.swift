@@ -1,4 +1,5 @@
 import AppKit
+import Propofol
 import SwiftUI
 
 /// The window-style popover attached to the menu-bar status item — the suite's shared
@@ -85,11 +86,7 @@ struct MenuPopover: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: Theme.Space.sm) {
-            Text("Rocuronium").font(.heroTitle)
-            Spacer()
-            AttributionLink()
-        }
+        PopoverHeader("Rocuronium")
     }
 
     // MARK: - Hero card
@@ -363,27 +360,5 @@ private struct MascotCredit: View {
         .onHover { hovering = $0 }
         .help("Who drew the mascots")
         .accessibilityLabel("Mascots by jellyfish girl")
-    }
-}
-
-// MARK: - AttributionLink
-
-private struct AttributionLink: View {
-    @State private var hovering = false
-
-    var body: some View {
-        Link(destination: URL(string: "https://github.com/kageroumado")!) {
-            HStack(spacing: 2) {
-                Text("made by kageroumado")
-                    .underline(hovering)
-                Image(systemName: "arrow.up.right")
-                    .font(.caption2)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
     }
 }
