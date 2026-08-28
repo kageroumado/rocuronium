@@ -380,14 +380,33 @@ final class CommandRouter {
         let style: JellyStyle = .sparkler
         let time = 0.35
 
+        let opaque = request.reason == "opaque"
         let view = Canvas { context, size in
-            let jellySize = min(size.width, size.height) * 0.65
+            if opaque {
+                context.fill(
+                    Path(CGRect(origin: .zero, size: size)),
+                    with: .linearGradient(
+                        Gradient(stops: [
+                            .init(color: Color(red: 0.94, green: 0.92, blue: 0.97), location: 0),
+                            .init(color: Color(red: 0.88, green: 0.84, blue: 0.95), location: 0.5),
+                            .init(color: Color(red: 0.82, green: 0.76, blue: 0.92), location: 1),
+                        ]),
+                        startPoint: CGPoint(x: size.width / 2, y: 0),
+                        endPoint: CGPoint(x: size.width / 2, y: size.height),
+                    ),
+                )
+            }
+            let jellyW = size.width * 0.58
+            let jellyH = jellyW * 1.3
             let rect = CGRect(
-                x: (size.width - jellySize) / 2,
-                y: (size.height - jellySize * 1.3) / 2,
-                width: jellySize,
-                height: jellySize * 1.3,
+                x: (size.width - jellyW) / 2,
+                y: size.height * 0.03,
+                width: jellyW,
+                height: jellyH,
             )
+            if opaque {
+                context.addFilter(.shadow(color: .black.opacity(0.18), radius: 12, y: 8))
+            }
             JellyfishArt.draw(in: context, rect: rect, time: time, phase: .idle, style: style)
         }
         .frame(width: w, height: h)
