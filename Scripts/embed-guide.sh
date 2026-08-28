@@ -1,19 +1,18 @@
 #!/bin/bash
-# Regenerate the CLI's embedded operator guide from README.md.
+# Regenerate the CLI's embedded operator guide from Docs/GUIDE.md.
 #
-# README.md is the single source; this bakes it into the binary so `rocuronium guide`
-# works with nothing but the CLI on hand — no repo, no docs directory, no skill. Called
-# by release.sh before the CLI build; the generated file is committed so a plain
-# `swift build` still compiles without running this.
+# GUIDE.md is the full operator manual; this bakes it into the binary so
+# `rocuronium guide` works with nothing but the CLI on hand. Called by
+# release.sh before the CLI build; the generated file is committed so a
+# plain `swift build` still compiles without running this.
 
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$PROJECT_DIR/README.md"
+SOURCE="$PROJECT_DIR/Docs/GUIDE.md"
 TARGET="$PROJECT_DIR/RocuroniumCLI/Sources/rocuronium/Guide.generated.swift"
 
-# A raw string with enough pound signs that no README content can terminate it early.
 {
-    echo "// Generated from README.md by Scripts/embed-guide.sh — edit the README, not this."
+    echo "// Generated from Docs/GUIDE.md by Scripts/embed-guide.sh — edit the guide, not this."
     echo "enum Guide {"
     echo '    static let text = ##"""'
     cat "$SOURCE"
@@ -21,4 +20,4 @@ TARGET="$PROJECT_DIR/RocuroniumCLI/Sources/rocuronium/Guide.generated.swift"
     echo "}"
 } > "$TARGET"
 
-echo "embedded $(wc -l < "$SOURCE" | tr -d ' ') lines of README.md into Guide.generated.swift"
+echo "embedded $(wc -l < "$SOURCE" | tr -d ' ') lines of GUIDE.md into Guide.generated.swift"

@@ -1,15 +1,11 @@
-// Generated from README.md by Scripts/embed-guide.sh — edit the README, not this.
+// Generated from Docs/GUIDE.md by Scripts/embed-guide.sh — edit the guide, not this.
 enum Guide {
     static let text = ##"""
-# rocuronium — drive this Mac without taking the cursor
+# Operator manual
 
-A menu bar app, a CLI, and an MCP server that let an agent see and operate macOS while a
-human keeps their cursor, their focus, and their trust. Every action returns **evidence**
-— what observably happened, verified by read-back or pixels — because return codes lie
-(`AXSetValue` reports success on WebKit while changing nothing).
-
-This file is the operator's manual. It ships inside the binary: `rocuronium guide`
-prints it, so an agent holding nothing but the CLI can learn the contract.
+The full reference for every verb, verdict, and edge case. This ships inside the
+binary (`rocuronium guide`), so an agent holding nothing but the CLI can learn the
+contract.
 
 ## The shape of things
 
