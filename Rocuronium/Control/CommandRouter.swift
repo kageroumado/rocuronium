@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 import ImageIO
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Decodes a JSON request, runs it against the engine, and encodes the reply.
@@ -359,9 +360,71 @@ final class CommandRouter {
                 "summary": "demo stage is up at (720, 200), 560×720 — fixed and reset unless action:show; "
                     + "drive it with --app Rocuronium",
             ]
+        case "render":
+            return renderJellyfish(request)
         default:
-            return ["ok": false, "error": "unknown demo action '\(request.action ?? "")' — use show, reset, or hide"]
+            return ["ok": false, "error": "unknown demo action '\(request.action ?? "")' — use show, reset, hide, or render"]
         }
+    }
+
+    private func renderJellyfish(_ request: Request) -> [String: Any] {
+        let w = request.w ?? 660
+        let h = request.h ?? 400
+        guard let path = request.path else {
+            return ["ok": false, "error": "'demo render' requires --path <file.png>"]
+        }
+        guard path.hasSuffix(".png") else {
+            return ["ok": false, "error": "path must end in .png"]
+        }
+
+        let style: JellyStyle = .sparkler
+        let time = 0.35
+
+        let view = Canvas { context, size in
+            var ctx = context
+            ctx.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 0.12, green: 0.08, blue: 0.28), location: 0),
+                        .init(color: Color(red: 0.06, green: 0.04, blue: 0.16), location: 0.6),
+                        .init(color: Color(red: 0.02, green: 0.02, blue: 0.08), location: 1),
+                    ]),
+                    startPoint: CGPoint(x: size.width / 2, y: 0),
+                    endPoint: CGPoint(x: size.width / 2, y: size.height),
+                ),
+            )
+            let jellySize = min(size.width, size.height) * 0.65
+            let rect = CGRect(
+                x: (size.width - jellySize) / 2,
+                y: (size.height - jellySize * 1.3) / 2,
+                width: jellySize,
+                height: jellySize * 1.3,
+            )
+            JellyfishArt.draw(in: ctx, rect: rect, time: time, phase: .idle, style: style)
+        }
+        .frame(width: w, height: h)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.cgImage else {
+            return ["ok": false, "error": "ImageRenderer failed"]
+        }
+        let url = URL(fileURLWithPath: path)
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+            return ["ok": false, "error": "cannot create PNG at '\(path)'"]
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            return ["ok": false, "error": "failed to write PNG"]
+        }
+        return [
+            "ok": true,
+            "path": path,
+            "width": image.width,
+            "height": image.height,
+            "summary": "rendered \(style.rawValue) jellyfish at \(image.width)x\(image.height) px to \(path)",
+        ]
     }
 
     /// The session's recent actions with their verdicts — the same entries the popover and
