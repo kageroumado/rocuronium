@@ -18,8 +18,6 @@ final class VirtualDisplayManager {
         /// logical resolution of half these dimensions — 1920×1080.
         static let pixelWidth: UInt32 = 3840
         static let pixelHeight: UInt32 = 2160
-        /// Distinct from Test Display's name on purpose: `windows` output and logs must be
-        /// able to tell the daemon's own display from the user's.
         static let displayName = "Rocuronium Display"
         static let productID: UInt32 = 0x1235
         static let vendorID: UInt32 = 0x3456

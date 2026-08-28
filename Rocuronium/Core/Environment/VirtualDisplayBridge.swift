@@ -4,9 +4,6 @@ import Observation
 /// `nonisolated` because the module defaults to main-actor isolation, and these are read from
 /// default arguments and error descriptions that are not themselves isolated.
 private nonisolated enum Constants {
-    /// Test Display.app — a user-owned virtual display this bridge will park onto but never
-    /// tear down. Its running state is the adoption signal.
-    static let testDisplayBundleIdentifier = "glass.kagerou.testdisplay"
     /// Backstop: no explicit lease outlives this without renewal.
     static let defaultLeaseDuration: Duration = .seconds(30 * 60)
     /// Auto-leases are shorter: teardown always un-parks first, so expiry is safe, and a
@@ -31,9 +28,8 @@ private nonisolated enum Constants {
 /// so it is modeled as a **lease**, not a mode.
 ///
 /// The display itself is created in process by `VirtualDisplayManager`, which makes the two
-/// old rules enforceable by construction rather than by protocol:
-/// - Ownership: our display dies with the last lease or with this process; a display the
-///   user started (Test Display.app) is adopted as a parking target and never torn down.
+/// rules enforceable by construction rather than by protocol:
+/// - Ownership: our display dies with the last lease or with this process.
 /// - Expiry: a lease has a deadline, so a crashed or wedged agent cannot strand a virtual
 ///   screen — and teardown always sweeps parked windows home *first*, because tearing the
 ///   display out from under a window strands it somewhere no one can see or reach
@@ -76,9 +72,6 @@ final class VirtualDisplayBridge {
     /// per redraw. Refreshed by the maintenance pass and after every park/release.
     private(set) var strayCount = 0
 
-    /// A user-started Test Display screen this bridge parks onto but does not own. Cleared
-    /// when the screen goes away; never torn down.
-    private var adoptedDisplayID: CGDirectDisplayID?
     private let manager = VirtualDisplayManager()
     private let engine: Engine
     private var expiryTasks: [UUID: Task<Void, Never>] = [:]
@@ -99,23 +92,8 @@ final class VirtualDisplayBridge {
 
     // MARK: - The display
 
-    /// The virtual display in force: ours when we created one, the adopted Test Display
-    /// screen otherwise. Matched by the exact `CGDirectDisplayID`, never by name — except at
-    /// adoption time, when the user's display is found once by its screen name because an
-    /// externally created display's id cannot be known any other way.
-    var displayID: CGDirectDisplayID? {
-        if let id = manager.displayID { return id }
-        if let adopted = adoptedDisplayID {
-            guard Self.onlineDisplayIDs().contains(adopted) else { return nil }
-            return adopted
-        }
-        return nil
-    }
-
+    var displayID: CGDirectDisplayID? { manager.displayID }
     var isAttached: Bool { displayID != nil }
-    /// Whether the display in force is ours to tear down.
-    var ownsDisplay: Bool { manager.displayID != nil }
-    var isAdopted: Bool { !ownsDisplay && displayID != nil }
 
     /// The virtual screen's bounds in the top-left-origin global space that AX frames and
     /// synthetic events use. `NSScreen.frame` is in Cocoa's bottom-left space; going through
@@ -136,41 +114,17 @@ final class VirtualDisplayBridge {
         return Array(ids.prefix(Int(count)))
     }
 
-    /// The user's own Test Display screen, if its app is running and its screen is attached.
-    /// The name match lives only here, at adoption time — everything after resolves by id.
-    private func detectUserDisplay() -> CGDirectDisplayID? {
-        let running = !NSRunningApplication
-            .runningApplications(withBundleIdentifier: Constants.testDisplayBundleIdentifier)
-            .isEmpty
-        guard running else { return nil }
-        return NSScreen.screens.first {
-            $0.localizedName.localizedCaseInsensitiveContains("Test Display")
-        }.flatMap {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
-                .map { CGDirectDisplayID($0.uint32Value) }
-        }
-    }
-
     // MARK: - Lease lifecycle
 
-    /// Takes out a lease, bringing a display up if none is in force: the user's Test Display
-    /// screen is adopted when it is already attached, and our own display is created
-    /// otherwise. Each caller gets its own lease — sharing is by refcount, not by handing
-    /// out the same id.
+    /// Takes out a lease, creating a display if none is in force. Each caller gets its own
+    /// lease — sharing is by refcount, not by handing out the same id.
     @discardableResult
     func acquire(
         reason: String,
         duration: Duration? = nil,
         kind: Lease.Kind = .explicit,
     ) throws -> Lease {
-        if displayID == nil {
-            if let adopted = detectUserDisplay() {
-                adoptedDisplayID = adopted
-            } else {
-                adoptedDisplayID = nil
-                try manager.create()
-            }
-        }
+        if displayID == nil { try manager.create() }
         guard isAttached else { throw BridgeError.displayNeverAttached }
 
         let leaseDuration = duration
@@ -195,7 +149,7 @@ final class VirtualDisplayBridge {
     }
 
     /// Gives up one lease. Its parked windows are swept home first; the display goes away
-    /// only when the last holder lets go — and then only if it is ours.
+    /// only when the last holder lets go.
     func release(_ lease: Lease) async -> ReleaseOutcome {
         guard leases.removeValue(forKey: lease.id) != nil else {
             return ReleaseOutcome(holdersRemaining: leases.count, sweptParked: 0, sweptStrays: 0, tornDown: false)
@@ -240,12 +194,10 @@ final class VirtualDisplayBridge {
         }
     }
 
-    /// Tears down our display. An adopted display is simply forgotten — the user's is not
-    /// ours to reclaim. Returns whether a display we owned actually went away.
+    /// Tears down the display. Returns whether it actually went away.
     private func teardown() -> Bool {
         maintenanceTask?.cancel()
         maintenanceTask = nil
-        adoptedDisplayID = nil
         guard manager.displayID != nil else { return false }
         manager.destroy()
         return true
@@ -368,10 +320,8 @@ final class VirtualDisplayBridge {
         return swept
     }
 
-    /// Sweeps stray windows to the main screen before our display goes. Only for a display
-    /// we own: strays on the user's own Test Display are theirs to arrange.
+    /// Sweeps stray windows to the main screen before the display goes.
     private func sweepStrays() async -> Int {
-        guard ownsDisplay else { return 0 }
         let strays = await strays()
         var swept = 0
         for stray in strays {
@@ -437,7 +387,7 @@ final class VirtualDisplayBridge {
     /// reclaims them on the next launch.
     private func terminationSweep() {
         let entries = ledger.removeAll()
-        guard ownsDisplay else { return }
+        guard manager.displayID != nil else { return }
         if !entries.isEmpty {
             let jobs = entries.map { ($0.window.pid, $0.window.title, sweepDestination(for: $0.before?.origin)) }
             let engine = engine
