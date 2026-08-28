@@ -35,6 +35,9 @@ nonisolated enum UserPresence {
         let idleSeconds: TimeInterval
         let screenLocked: Bool
         let displayAsleep: Bool
+        /// Whether this reading describes a session with no physical seat, in which case the
+        /// idle and lock fields describe *the console user's* world, not this one.
+        let offConsole: Bool
 
         /// Whether the agent may fall back to hardware input — the one rung that takes the
         /// cursor out of a human's hand. Only ever true when nobody is there to lose it.
@@ -43,7 +46,18 @@ nonisolated enum UserPresence {
         /// password field: failed attempts, lockout delays on a FileVault machine, and someone
         /// who just pressed Ctrl-Cmd-Q standing right there. Hardware input cannot usefully
         /// reach an app behind the lock screen anyway.
-        var mayTakeCursor: Bool { state == .away && !screenLocked }
+        ///
+        /// Off-console this is always true, and both clauses above are why it has to be stated
+        /// separately rather than falling out of the same test: nobody holds this session's
+        /// cursor, and its permanent "locked" reading is the absence of a viewer.
+        var mayTakeCursor: Bool { offConsole || (state == .away && !screenLocked) }
+
+        /// Whether a lock screen stands between the hardware rung and the apps it aims at.
+        ///
+        /// This is the question the gates actually want, and it is not `screenLocked`: an
+        /// off-console session reports itself locked for as long as no viewer is attached,
+        /// which is its normal state and puts no login window in front of anything.
+        var lockBlocksHardware: Bool { screenLocked && !offConsole }
 
         /// Whether perception can be trusted at all right now.
         var canSee: Bool { !displayAsleep }
@@ -51,7 +65,10 @@ nonisolated enum UserPresence {
         /// A sentence for the agent, since this is propagated into every status response and
         /// the agent is the one making the call.
         var advice: String {
-            switch state {
+            if offConsole {
+                return "This is an off-console session with no seat of its own — the idle and lock readings above belong to the console user, not here. Hardware input is fine and lands only in this session."
+            }
+            return switch state {
             case .present:
                 "A person is using this Mac right now. Stay on the ghost rungs; do not take the cursor or change the frontmost app."
             case .idle:
@@ -76,7 +93,14 @@ nonisolated enum UserPresence {
         let locked = screenIsLocked
         let asleep = DisplayWake.displayIsAsleep
 
-        let state: State = if locked || asleep {
+        // Off-console there is no one in this session to be present *to*: HIDIdleTime is a
+        // single system-wide counter driven by the seat's hardware, so it reports the console
+        // user's hands, and this session's lock flag only means no viewer is attached.
+        let offConsole = SessionContext.isOffConsole
+
+        let state: State = if offConsole {
+            .away
+        } else if locked || asleep {
             .away
         } else if idle < 0 {
             .unknown
@@ -93,6 +117,7 @@ nonisolated enum UserPresence {
             idleSeconds: max(0, idle),
             screenLocked: locked,
             displayAsleep: asleep,
+            offConsole: offConsole,
         )
     }
 

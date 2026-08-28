@@ -3,12 +3,16 @@ import Foundation
 
 /// The one rung that takes the real cursor and the real keyboard.
 ///
-/// Events go to `.cghidEventTap` — the system-wide console pipeline — so they behave exactly
-/// like a human's input: the pointer moves, the click activates whatever window is under it,
-/// keystrokes land in the frontmost app's first responder. That is the entire point (some
-/// targets honor nothing less) and the entire cost. It is reachable only when the caller
-/// passes `allowHardwareInput`, and its use is always visible in the evidence — this is the
-/// moment the user loses their hands, and the design treats it as such.
+/// Events go to `SessionContext.eventTap`, so they behave exactly like a human's input: the
+/// pointer moves, the click activates whatever window is under it, keystrokes land in the
+/// frontmost app's first responder. That is the entire point (some targets honor nothing less)
+/// and the entire cost. It is reachable only when the caller passes `allowHardwareInput`, and
+/// its use is always visible in the evidence — this is the moment the user loses their hands,
+/// and the design treats it as such.
+///
+/// The tap is chosen per session rather than fixed at `.cghidEventTap`, because the HID tap
+/// posts into the *seat*, not into the caller's session: from an off-console session it drives
+/// the console user's cursor. `SessionContext` carries the measurement and the mechanism.
 nonisolated enum HardwareInput {
     private enum Constants {
         static let clickHoldDuration: Duration = .milliseconds(30)
@@ -78,24 +82,24 @@ nonisolated enum HardwareInput {
         CGEvent(
             mouseEventSource: source, mouseType: .mouseMoved,
             mouseCursorPosition: point, mouseButton: .left,
-        )?.post(tap: .cghidEventTap)
+        )?.post(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.settleDelay)
         CGEvent(
             mouseEventSource: source, mouseType: .leftMouseDown,
             mouseCursorPosition: point, mouseButton: .left,
-        )?.post(tap: .cghidEventTap)
+        )?.post(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.clickHoldDuration)
         CGEvent(
             mouseEventSource: source, mouseType: .leftMouseUp,
             mouseCursorPosition: point, mouseButton: .left,
-        )?.post(tap: .cghidEventTap)
+        )?.post(tap: SessionContext.eventTap)
 
         if let restore {
             try? await Task.sleep(for: Constants.settleDelay)
             CGEvent(
                 mouseEventSource: source, mouseType: .mouseMoved,
                 mouseCursorPosition: restore, mouseButton: .left,
-            )?.post(tap: .cghidEventTap)
+            )?.post(tap: SessionContext.eventTap)
         }
     }
 
@@ -182,7 +186,7 @@ nonisolated enum HardwareInput {
             CGEvent(
                 mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: .mouseMoved,
                 mouseCursorPosition: restore, mouseButton: .left,
-            )?.post(tap: .cghidEventTap)
+            )?.post(tap: SessionContext.eventTap)
         }
         // The window server publishes the pointer a frame or two behind a 120 Hz post
         // stream, and the lag varies — an immediate read reported the cursor ~13 pt short
@@ -234,7 +238,7 @@ nonisolated enum HardwareInput {
                 event.setDoubleValueField(.mouseEventDeltaY, value: point.y - previous.y)
             }
             if type == button?.down { event.setIntegerValueField(.mouseEventClickState, value: 1) }
-            event.post(tap: .cghidEventTap)
+            event.post(tap: SessionContext.eventTap)
             previous = point
         }
 
@@ -278,7 +282,9 @@ nonisolated enum HardwareInput {
             var revoked = cancelled.isCancelled || EmergencyStop.isHalted
             if !revoked, lockCountdown <= 0 {
                 lockCountdown = 16
-                revoked = UserPresence.screenIsLocked
+                // Off-console the lock flag only tracks whether a viewer is attached, and a
+                // viewer detaching mid-path is not a human reclaiming anything.
+                revoked = UserPresence.screenIsLocked && SessionContext.isOnConsole
             }
             if revoked {
                 InputAttribution.shared.noteSyntheticInput()
@@ -391,8 +397,14 @@ nonisolated enum HardwareInput {
     ///   a tool built on "the evidence matches reality" must never do.
     /// - The human presses ⌥⎋. That is the fastest stop path in the system — the next sample
     ///   or character observes the flag, a held button is released, and the hands are theirs.
+    ///
+    /// The lock clause applies to the console only. An off-console session reports itself
+    /// locked whenever no viewer is attached, which is its ordinary resting state rather than
+    /// a human engaging a lock — gating on it there would refuse every keystroke in exactly
+    /// the session the engine is meant to drive, and there is no login window to mistype into.
     private static var consoleIsStillOurs: Bool {
-        !Task.isCancelled && !EmergencyStop.isHalted && !UserPresence.read().screenLocked
+        guard !Task.isCancelled, !EmergencyStop.isHalted else { return false }
+        return SessionContext.isOffConsole || !UserPresence.read().screenLocked
     }
 
     /// Presses a key chord on the console pipeline. Key-equivalent dispatch — sheet Escape,
@@ -409,9 +421,9 @@ nonisolated enum HardwareInput {
         else { return }
         down.flags = chord.flags
         up.flags = chord.flags
-        down.post(tap: .cghidEventTap)
+        down.post(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.clickHoldDuration)
-        up.post(tap: .cghidEventTap)
+        up.post(tap: SessionContext.eventTap)
     }
 
     /// Returns how much of `text` was actually delivered, so a run cut short is reported
@@ -431,8 +443,8 @@ nonisolated enum HardwareInput {
             else { continue }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            down.post(tap: SessionContext.eventTap)
+            up.post(tap: SessionContext.eventTap)
             delivered.unicodeScalars.append(scalars[index])
             try? await Task.sleep(for: Constants.perCharacterDelay)
         }

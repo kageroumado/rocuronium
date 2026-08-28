@@ -373,6 +373,7 @@ final class CommandRouter {
             "idleSeconds": Int(presence.idleSeconds),
             "screenLocked": presence.screenLocked,
             "displayAsleep": presence.displayAsleep,
+            "offConsole": presence.offConsole,
             "canSee": presence.canSee,
             "mayTakeCursor": presence.mayTakeCursor,
             "advice": presence.advice,
@@ -747,7 +748,7 @@ final class CommandRouter {
         var delivery: Engine.KeyDelivery = .process
         if request.allowHardwareInput == true {
             let presence = UserPresence.read()
-            guard !presence.screenLocked else {
+            guard !presence.lockBlocksHardware else {
                 return [
                     "ok": false,
                     "error": "the screen is locked — a console keystroke would land in the login window's password field",
@@ -787,7 +788,7 @@ final class CommandRouter {
     private func trace(_ request: Request, dragging: Bool) async throws -> [String: Any] {
         let verb = dragging ? "drag" : "move"
         let presence = UserPresence.read()
-        guard !presence.screenLocked else {
+        guard !presence.lockBlocksHardware else {
             return [
                 "ok": false,
                 "error": "the screen is locked — the cursor belongs to the login window right now",
@@ -1790,6 +1791,7 @@ final class CommandRouter {
             "state": presence.state.rawValue,
             "mayTakeCursor": presence.mayTakeCursor,
             "canSee": presence.canSee,
+            "offConsole": presence.offConsole,
             "advice": presence.advice,
         ]
     }

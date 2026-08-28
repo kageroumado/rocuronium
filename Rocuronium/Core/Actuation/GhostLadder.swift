@@ -156,7 +156,7 @@ nonisolated struct GhostLadder {
         }
         // The lock screen owns the console while locked: a hardware keystroke would land in
         // the password field. Ghost rungs are safe there — this one is categorically not.
-        guard !UserPresence.read().screenLocked else {
+        guard !UserPresence.read().lockBlocksHardware else {
             attempts.append(.init(
                 rung: .hardwareInput,
                 outcome: "refused: the screen is locked and hardware input would type into the lock screen",
