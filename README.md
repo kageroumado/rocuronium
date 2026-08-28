@@ -52,10 +52,10 @@ summary, over your expectations.
   blindly**: the action may well have landed, and a retry types it twice or presses it
   twice. Verify through another channel first — `read` the state, take a `screenshot`.
 
-Replies also carry `attempts` (each ladder rung tried and why it fell through),
+Replies also carry `attempts` (each reach tentacle tried and why it fell through),
 `cursorMovedByUs` / `focusTakenByUs` (the promises, as measurements), and sometimes a
 `referral` — a structured pointer to the channel that *can* reach a target the ghost
-rungs cannot (web page content wants `refrax-ctl`, CDP, or Safari's own scripting). A
+tentacles cannot (web page content wants `refrax-ctl`, CDP, or Safari's own scripting). A
 referral means "compose that tool yourself"; rocuronium deliberately does not shell out.
 
 ## Presence: who else is at this Mac
@@ -75,16 +75,16 @@ What gates on it:
   (WebKit content ignores cursor motion in inactive windows), retry after the focused
   app is quit or deactivated, or drive the app through its own automation channel.
 - **`move` / `drag`** — same gate as `activate`: they always take the real cursor
-  (there is no ghost rung for motion — measured), so they are refused unless `away` or
+  (there is no ghost tentacle for motion — measured), so they are refused unless `away` or
   confirmed, and refused outright while the screen is locked or the action point is
   covered by another app's window.
 - **Hardware input** (`allowHardwareInput`) — the advice tells you whether taking the
   cursor is acceptable; the engine additionally refuses it outright while the screen is
   locked or the aim point is covered by another app's window.
-- Everything else is ghost-safe by construction: rungs 0–3 never move the cursor and
+- Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor and
   never change the frontmost app, so they are fine while a human is typing.
 
-## The visible agent: overlay, ⌥⎋, and the activity log
+## The visible agent: overlay, ⌃⌥⇧⎋, and the activity log
 
 Cursor-taking work is visible work. Whenever a command opts into hardware input, and for
 `move`/`drag` always (they take the real cursor by construction), the app shows the
@@ -96,18 +96,18 @@ command is in flight, then drifting home to perch beside the bezel. Before each 
 click a sigil charges at the aim point for ~600 ms — that wind-up is a deliberate
 interrupt window, not decoration. The overlay lingers ~15 s after the last command, then
 fades. A "show overlay for every action" toggle in the menu bar popover extends it to
-ghost-rung commands too.
+ghost-tentacle commands too.
 
 **The cursor stays negotiable.** During a `move`/`drag`, a brushed mouse is absorbed —
 the glide bends elastically and eases back on path, still landing on the destination —
 while sustained deliberate motion (about a quarter second of it) makes the gesture yield:
 the button is released, the reply says "yielded to the hand on the mouse", and the cursor
-is yours. ⌥⎋ remains the hard stop.
+is yours. ⌃⌥⇧⎋ remains the hard stop.
 
-**⌥⎋ is the emergency stop.** While the overlay is visible, Option+Escape halts the
+**⌃⌥⇧⎋ is the emergency stop.** While the overlay is visible, Option+Escape halts the
 engine mid-action: a cursor trace aborts within one sample (a held drag button is
 released where it stopped), typing stops mid-character, walks bail out. After the halt,
-every acting and perceiving verb is refused with "halted by the human (⌥⎋) — resume from
+every acting and perceiving verb is refused with "halted by the human (⌃⌥⇧⎋) — resume from
 the Rocuronium menu bar"; `status` and `activity` still answer and report
 `halted: true`. **Resume is a button in the menu bar popover and nothing else** — no
 socket verb can clear the halt, so an agent cannot un-halt itself. If your verbs are
@@ -123,7 +123,7 @@ reading one log.
 When the display sleeps, **every app's accessibility tree collapses** — windows vanish,
 fields disappear, and a naive tool concludes "this app exposes nothing" and reports
 confident nonsense. Rocuronium refuses instead: perception verbs answer "I cannot see"
-and acting verbs wake the display first (rung 0).
+and acting verbs wake the display first (tentacle 0).
 
 A locked screen with an awake display is harmless: full trees are readable and ghost
 input works. Only hardware input is refused there — synthetic keystrokes would land in
@@ -145,8 +145,8 @@ deliberate, legitimate act when the situation genuinely calls for it:
   The consequence is named; `confirm: true` presses anyway. Use `resolveOnly: true` to
   audit what a shortcut or path would press, before the fact.
 - **`confirm`** (`activate`) — see presence above.
-- **`allowHardwareInput`** (`type`, `click`) — permits rung 4, the one mechanism that
-  moves the real cursor. Legitimate when nobody is present and the ghost rungs have
+- **`allowHardwareInput`** (`type`, `click`) — permits the sting, the one mechanism that
+  moves the real cursor. Legitimate when nobody is present and the ghost tentacles have
   demonstrably failed; the evidence will say `cursorMovedByUs: true` and the reply
   refuses if another window covers the target (see the park pattern).
 - **lease** (`park`) — parking always happens under a lease, so the display cannot
@@ -165,7 +165,7 @@ deliberate, legitimate act when the situation genuinely calls for it:
 
 ## The park-then-hardware pattern
 
-Rung 4 clicks whatever window is topmost at the coordinate — unlike ghost rungs, which
+The sting clicks whatever window is topmost at the coordinate — unlike ghost tentacles, which
 reach a process through any occlusion. So a hardware click on an occluded target is
 refused with the occluder named. The reliable sequence when hardware input is truly
 needed:
@@ -291,7 +291,7 @@ an error code for a press that fully worked.
 
 Controls that expose only `AXShowMenu` (menu buttons, and the remote elements System
 Settings panes host inside opaque provider groups) are clicked like any button: the
-press rung performs the show-menu action when no press action exists, and the menu
+press tentacle performs the show-menu action when no press action exists, and the menu
 appearing is the window-count consequence to watch for. Two measured caveats on the
 System Settings case: the opened menu's window belongs to the pane's *appex*, not the
 app you targeted, so the window-count read-back can miss it and the verdict stays

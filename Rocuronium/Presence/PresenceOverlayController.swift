@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Owns the overlay window and the session lifecycle: fade in on the first visible action,
-/// linger briefly after the last, and vanish instantly on ⌥⎋.
+/// linger briefly after the last, and vanish instantly on ⌃⌥⇧⎋.
 ///
 /// One borderless window on the primary screen (v1). It ignores every mouse event and sits
 /// above normal windows but below the lock screen, joining all Spaces so the session cue
@@ -14,7 +14,7 @@ final class PresenceOverlayController {
     static weak var shared: PresenceOverlayController?
 
     let model = OverlayModel()
-    /// Fires after ⌥⎋ has halted the engine and removed the chrome; the router logs it.
+    /// Fires after ⌃⌥⇧⎋ has halted the engine and removed the chrome; the router logs it.
     var onEmergencyStop: (@MainActor () -> Void)?
 
     private var window: NSWindow?
@@ -114,9 +114,9 @@ final class PresenceOverlayController {
 
     // MARK: - The emergency stop
 
-    /// ⌥⎋: halt the engine, then just stop and quietly remove the chrome — no ceremony.
+    /// ⌃⌥⇧⎋: halt the engine, then just stop and quietly remove the chrome — no ceremony.
     private func emergencyStop() {
-        EmergencyStop.halt(reason: "⌥⎋ pressed while the overlay was visible")
+        EmergencyStop.halt(reason: "⌃⌥⇧⎋ pressed while the overlay was visible")
         lingerTask?.cancel()
         hotkey.unregister()
         model.phase = .hidden

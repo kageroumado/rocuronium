@@ -118,7 +118,7 @@ enum MCPServer {
                 "label": ["type": "string", "description": "Target field's label; the focused element when omitted"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "submit": ["type": "boolean", "description": "Allow Return/Tab in the text"],
-                "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking rung as a last resort"],
+                "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
             ], required: ["app", "text"],
         ),
         tool(
@@ -275,7 +275,7 @@ enum MCPServer {
             Drag along a path with a mouse button held: down at `start`, real motion through \
             any `via` waypoints, up at `end`. Moves content, sliders, selection ranges, and \
             windows (title-bar drags work even on background windows, measured). Same \
-            hardware-rung rules as `move`: takes the physical cursor, presence-gated behind \
+            hardware-tentacle rules as `move`: takes the physical cursor, presence-gated behind \
             `confirm`, occlusion at the start point refused when `app` is given. An aborted \
             drag (lock/cancel mid-path) releases the button where it stopped — never left \
             held. Note: apps reading drag *deltas* get exact double-precision values; apps \
@@ -316,7 +316,7 @@ enum MCPServer {
             """
             The session's recent agent actions with their evidence verdicts (last 200, \
             newest last) — the same record the human sees in the menu bar. Read-only. Also \
-            reports `halted`: true means the human pressed ⌥⎋ and every acting/perceiving \
+            reports `halted`: true means the human pressed ⌃⌥⇧⎋ and every acting/perceiving \
             verb is refused until they resume from the Rocuronium menu bar — do not retry, \
             and do not attempt to work around it.
             """,
@@ -434,7 +434,7 @@ enum MCPServer {
         // Forward only the keys this tool declares. A schema is documentation, not a filter:
         // copying `arguments` wholesale would honor properties the tool never advertised —
         // `allowHardwareInput` smuggled into a tool whose schema has no such field, for
-        // instance, escalating past the rungs the description promised. `command` is assigned
+        // instance, escalating past the tentacles the description promised. `command` is assigned
         // after the copy so it can never be overridden by an argument.
         let declared = Set(schemaProperties(of: name))
         let arguments = (parameters["arguments"] as? [String: Any]) ?? [:]

@@ -3,8 +3,8 @@ import Foundation
 
 /// Caches accessibility walks between attempts.
 ///
-/// A full walk of an Electron app costs ~1.2 s for ~5,300 elements, and the ghost ladder may
-/// consult the tree several times while working through its rungs. Repeating that is the
+/// A full walk of an Electron app costs ~1.2 s for ~5,300 elements, and the ghost reach may
+/// consult the tree several times while working through its tentacles. Repeating that is the
 /// difference between an agent that feels immediate and one that feels broken.
 ///
 /// The hard part is not caching, it is knowing when the cache became a lie. Rather than trust
@@ -108,7 +108,7 @@ nonisolated final class TreeCache {
     }
 
     /// Drops everything for one process. Call after any action that is expected to change the
-    /// interface — the ghost ladder does this itself once an action is confirmed.
+    /// interface — the ghost reach does this itself once an action is confirmed.
     func invalidate(pid: pid_t) {
         entries[pid] = nil
     }

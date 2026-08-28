@@ -100,7 +100,7 @@ struct MenuPopover: View {
             (Theme.blocked, "Accessibility is required",
              "Add Rocuronium in System Settings, then relaunch — nothing works without it.", false)
         case .halted:
-            (Theme.halted, "Halted by you (⌥⎋)",
+            (Theme.halted, "Halted by you (⌃⌥⇧⎋)",
              "Every agent verb is refused until you resume. Only this popover can.", false)
         case .driving:
             (Theme.agent, "An agent has hands", drivingSubtitle, false)
@@ -157,7 +157,7 @@ struct MenuPopover: View {
             return "Display asleep — the engine is blind until an action wakes it"
         }
         return switch presence.state {
-        case .present: "You're at the keyboard — agents stay on the ghost rungs"
+        case .present: "You're at the keyboard — agents stay on the ghost tentacles"
         case .idle: "Quiet for a while — still your cursor, still your focus"
         case .away: "Nobody watching — hardware input may be permitted"
         case .unknown: "Presence unknown — treated as you being here"

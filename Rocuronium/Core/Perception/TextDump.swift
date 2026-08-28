@@ -4,7 +4,7 @@ import Foundation
 /// Collects the readable text of a subtree: static text, field values, button titles,
 /// checked states.
 ///
-/// This is the observe-side counterpart of the ghost ladder — for text-shaped questions it is
+/// This is the observe-side counterpart of the ghost reach — for text-shaped questions it is
 /// orders of magnitude cheaper in tokens than a screenshot, and it works while the screen is
 /// locked (though not while the display sleeps; callers guard with `DisplayWake` first).
 ///
@@ -76,7 +76,7 @@ nonisolated enum TextDump {
             // abandoned walk otherwise keeps the engine actor busy and every queued request
             // behind it times out too.
             if Task.isCancelled || EmergencyStop.isHalted || clock.now >= deadline {
-                truncationReason = EmergencyStop.isHalted ? "halted by the human (⌥⎋)" : "time budget reached"
+                truncationReason = EmergencyStop.isHalted ? "halted by the human (⌃⌥⇧⎋)" : "time budget reached"
                 return
             }
             visited += 1

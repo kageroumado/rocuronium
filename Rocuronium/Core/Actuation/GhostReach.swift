@@ -4,11 +4,11 @@ import ApplicationServices
 /// The core of the app: deliver an action by the least invasive means that actually works,
 /// and prove what happened.
 ///
-/// Rungs are attempted in order and each is verified before falling through. Rungs 0–3 never
+/// Tentacles are attempted in order and each is verified before falling through. Tentacles 0–3 never
 /// move the cursor or change the frontmost app; only `hardwareInput` does, and it is opt-in
 /// per call. Falling through to it is recorded in the evidence rather than done quietly,
 /// because that is the moment the user loses their hands.
-nonisolated struct GhostLadder {
+nonisolated struct GhostReach {
     /// Whether the caller accepts the cursor being taken if nothing else works.
     let allowHardwareInput: Bool
 
@@ -20,11 +20,11 @@ nonisolated struct GhostLadder {
 
     // MARK: - Entry point
 
-    /// Stop after the accessibility rung, whatever it reports.
+    /// Stop after the accessibility tentacle, whatever it reports.
     ///
-    /// For a menu item this is not a preference but a correctness requirement: the rungs below
+    /// For a menu item this is not a preference but a correctness requirement: the tentacles below
     /// aim real input at `frame.midX/midY`, and a closed menu item's rectangle is meaningless
-    /// — so a declined rung 1 would post a click at an arbitrary point inside the target app,
+    /// — so a declined tentacle 1 would post a click at an arbitrary point inside the target app,
     /// or, with hardware input allowed, move the physical cursor there. `AXPress` is the only
     /// meaningful way to actuate a menu item.
     let accessibilityOnly: Bool
@@ -42,7 +42,7 @@ nonisolated struct GhostLadder {
 
         let cursorBefore = EventPoster.cursorLocation
         let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
-        // Focus is sampled after rung 0, not here: while the display sleeps every tree is
+        // Focus is sampled after tentacle 0, not here: while the display sleeps every tree is
         // degenerate, so a pre-wake signature necessarily differs from a post-wake one and the
         // focus-delta click check below would read "confirmed" for every wake-then-click cycle
         // — precisely the unattended overnight case this exists for.
@@ -54,7 +54,7 @@ nonisolated struct GhostLadder {
         // is driving. This is the single most common way tools like this appear broken.
         guard AXIsProcessTrusted() else {
             attempts.append(.init(
-                rung: .accessibility,
+                tentacle: .accessibility,
                 outcome: "Accessibility is not granted — the system discards synthesized input silently",
             ))
             focusBefore = ElementQuery.focused(pid: pid)?.signature
@@ -64,9 +64,9 @@ nonisolated struct GhostLadder {
             )
         }
 
-        // Rung 0 — without this the tree below is a fiction.
+        // Tentacle 0 — without this the tree below is a fiction.
         let wake = await DisplayWake.ensureAwake()
-        attempts.append(.init(rung: .displayWake, outcome: wake.rawValue))
+        attempts.append(.init(tentacle: .displayWake, outcome: wake.rawValue))
         focusBefore = ElementQuery.focused(pid: pid)?.signature
         // A wake reshapes every tree, so focus deltas across it prove nothing.
         let focusDeltaIsUsable = wake != .woken
@@ -88,7 +88,7 @@ nonisolated struct GhostLadder {
         let hold = DisplayWake.Hold(reason: "Rocuronium is driving the interface")
         defer { hold?.release() }
 
-        // Rung 1 — accessibility, then read back. A success code proves nothing.
+        // Tentacle 1 — accessibility, then read back. A success code proves nothing.
         if let evidence = await tryAccessibility(
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore, refetch,
@@ -99,10 +99,10 @@ nonisolated struct GhostLadder {
         }
 
         // Menu items stop here: everything below aims at a rectangle that means nothing while
-        // the menu is closed. Rung 1's own verdict is the answer.
+        // the menu is closed. Tentacle 1's own verdict is the answer.
         if accessibilityOnly {
             attempts.append(.init(
-                rung: .postedEvent,
+                tentacle: .postedEvent,
                 outcome: "not attempted: this target is only meaningfully actuated through accessibility",
             ))
             return await finish(
@@ -112,7 +112,7 @@ nonisolated struct GhostLadder {
             )
         }
 
-        // Rung 2 — posted events, delivered to this process only.
+        // Tentacle 2 — posted events, delivered to this process only.
         if let evidence = await tryPostedEvents(
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
@@ -122,22 +122,22 @@ nonisolated struct GhostLadder {
             )
         }
 
-        // Rung 3 — a referral, not an adapter. Web page content is the one surface OS input
+        // Tentacle 3 — a referral, not an adapter. Web page content is the one surface OS input
         // cannot reach at all, and the channel that can (refrax-ctl, CDP, Safari's own
         // scripting) belongs to the calling agent, which holds the task context and the
         // launch flags. The honest move is structured evidence naming that channel.
         let referral = WebContent.referral(for: element, pid: pid)
         attempts.append(.init(
-            rung: .appAutomation,
+            tentacle: .appAutomation,
             outcome: referral.map { "unreachable by OS input — refer to \($0.channel)" }
                 ?? "no adapter for this target",
         ))
 
-        // Rung 4 — the cursor-stealing path. Never silent, never implicit.
+        // The sting — the cursor-stealing path. Never silent, never implicit.
         guard allowHardwareInput else {
-            attempts.append(.init(rung: .hardwareInput, outcome: "declined: not permitted by caller"))
+            attempts.append(.init(tentacle: .hardwareInput, outcome: "declined: not permitted by caller"))
             // The one verdict the design calls most important deserves the evidence we already
-            // captured: pixels are the only signal left once every rung has declined.
+            // captured: pixels are the only signal left once every tentacle has declined.
             return await finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
@@ -147,7 +147,7 @@ nonisolated struct GhostLadder {
         // A cancelled request must not go on to take the cursor: by this point the socket has
         // already told the caller the action timed out.
         guard !Task.isCancelled else {
-            attempts.append(.init(rung: .hardwareInput, outcome: "refused: the request was cancelled before the cursor was taken"))
+            attempts.append(.init(tentacle: .hardwareInput, outcome: "refused: the request was cancelled before the cursor was taken"))
             return await finish(
                 action, element, .postedEvent, .unverifiable, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
@@ -155,10 +155,10 @@ nonisolated struct GhostLadder {
             )
         }
         // The lock screen owns the console while locked: a hardware keystroke would land in
-        // the password field. Ghost rungs are safe there — this one is categorically not.
+        // the password field. Ghost tentacles are safe there — this one is categorically not.
         guard !UserPresence.read().lockBlocksHardware else {
             attempts.append(.init(
-                rung: .hardwareInput,
+                tentacle: .hardwareInput,
                 outcome: "refused: the screen is locked and hardware input would type into the lock screen",
             ))
             return await finish(
@@ -174,8 +174,8 @@ nonisolated struct GhostLadder {
         // plain nil-check passes and the midpoint lands one pixel below the bottom-left
         // corner — the Dock, or whatever hot corner is configured there.
         guard let frame = live.frame, frame.width >= 1, frame.height >= 1 else {
-            attempts.append(.init(rung: .hardwareInput, outcome: "element has no frame to aim the real cursor at"))
-            // Tagged with the last rung that actually posted anything: nothing was delivered
+            attempts.append(.init(tentacle: .hardwareInput, outcome: "element has no frame to aim the real cursor at"))
+            // Tagged with the last tentacle that actually posted anything: nothing was delivered
             // here, and a `hardwareInput` tag would falsely warn that the cursor was taken.
             return await finish(
                 action, element, .postedEvent, .unverifiable, nil, nil,
@@ -198,7 +198,7 @@ nonisolated struct GhostLadder {
                 )
             }
             attempts.append(.init(
-                rung: .hardwareInput,
+                tentacle: .hardwareInput,
                 outcome: "refused: '\(occluder)' covers the target at (\(Int(aim.x)), \(Int(aim.y))) — a real click there would hit it, not us",
             ))
             var evidence = await finish(
@@ -216,12 +216,12 @@ nonisolated struct GhostLadder {
         switch action {
         case let .setText(text):
             // The charge-up ring: when the overlay is visible this waits out the wind-up,
-            // which is the deliberate window in which ⌥⎋ can land before the click does.
+            // which is the deliberate window in which ⌃⌥⇧⎋ can land before the click does.
             await PresenceRelay.telegraph(aim)
             guard !EmergencyStop.isHalted else {
                 attempts.append(.init(
-                    rung: .hardwareInput,
-                    outcome: "halted by the human (⌥⎋) during the charge-up — the click was never delivered",
+                    tentacle: .hardwareInput,
+                    outcome: "halted by the human (⌃⌥⇧⎋) during the charge-up — the click was never delivered",
                 ))
                 return await finish(
                     action, element, .postedEvent, .unverifiable, nil, nil,
@@ -234,7 +234,7 @@ nonisolated struct GhostLadder {
             try? await Task.sleep(for: .milliseconds(200))
             // Look before typing. The occlusion check ran *before* the click, and the click
             // itself takes ~110 ms — long enough for an app finishing launch, a ⌘-Tab, or a
-            // modal from elsewhere to take the console. Unlike rung 2's `postToPid`, these
+            // modal from elsewhere to take the console. Unlike tentacle 2's `postToPid`, these
             // keystrokes go wherever the system's focus now is, so a payload with `submit`
             // could be a line run in a terminal or a message sent in an unrelated app.
             let targetBundle = await MainActor.run {
@@ -243,7 +243,7 @@ nonisolated struct GhostLadder {
             let frontNow = await MainActor.run { EventPoster.frontmostBundleID }
             guard frontNow == targetBundle else {
                 attempts.append(.init(
-                    rung: .hardwareInput,
+                    tentacle: .hardwareInput,
                     outcome: "clicked, but '\(frontNow)' holds the keyboard instead of the target — refusing to type into it",
                 ))
                 return await finish(
@@ -254,17 +254,17 @@ nonisolated struct GhostLadder {
             }
             let delivered = await HardwareInput.type(text)
             if delivered != text {
-                // The console was revoked partway through — a lock, a cancel, or ⌥⎋. Say how
+                // The console was revoked partway through — a lock, a cancel, or ⌃⌥⇧⎋. Say how
                 // far it got rather than letting a partial write be judged as if the whole
                 // payload had been attempted.
-                let cause = EmergencyStop.isHalted ? "the human halted it (⌥⎋)" : "the screen locked mid-run"
+                let cause = EmergencyStop.isHalted ? "the human halted it (⌃⌥⇧⎋)" : "the screen locked mid-run"
                 attempts.append(.init(
-                    rung: .hardwareInput,
+                    tentacle: .hardwareInput,
                     outcome: "typing stopped after \(delivered.count) of \(text.count) characters — \(cause)",
                 ))
             }
             try? await Task.sleep(for: .milliseconds(400))
-            // Same read-back discipline as rung 2: only the aimed-at element counts, and a
+            // Same read-back discipline as tentacle 2: only the aimed-at element counts, and a
             // handle killed by the focus change is re-resolved before it can misreport.
             let target = live.isValid ? live : (refetch() ?? live)
             let focused = ElementQuery.focused(pid: pid)
@@ -276,7 +276,7 @@ nonisolated struct GhostLadder {
             // that may well have landed.
             let verdict: Evidence.Verdict = arrived ? .confirmed : (landed == nil ? .unverifiable : .noEffect)
             attempts.append(.init(
-                rung: .hardwareInput,
+                tentacle: .hardwareInput,
                 outcome: arrived ? "confirmed by read-back" : (landed == nil ? "typed; target exposes no value to read back" : "typed, did not land in target"),
             ))
             return await finish(
@@ -289,8 +289,8 @@ nonisolated struct GhostLadder {
             await PresenceRelay.telegraph(aim)
             guard !EmergencyStop.isHalted else {
                 attempts.append(.init(
-                    rung: .hardwareInput,
-                    outcome: "halted by the human (⌥⎋) during the charge-up — the click was never delivered",
+                    tentacle: .hardwareInput,
+                    outcome: "halted by the human (⌃⌥⇧⎋) during the charge-up — the click was never delivered",
                 ))
                 return await finish(
                     action, element, .postedEvent, .unverifiable, nil, nil,
@@ -304,7 +304,7 @@ nonisolated struct GhostLadder {
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
             let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
                 ? .confirmed : .unverifiable
-            attempts.append(.init(rung: .hardwareInput, outcome: "clicked with the real cursor"))
+            attempts.append(.init(tentacle: .hardwareInput, outcome: "clicked with the real cursor"))
             return await finish(
                 action, element, .hardwareInput, verdict, nil, nil,
                 focusBefore, focusAfter,
@@ -313,7 +313,7 @@ nonisolated struct GhostLadder {
         }
     }
 
-    // MARK: - Rungs
+    // MARK: - Tentacles
 
     private func tryAccessibility(
         _ action: Action, _ element: AXElement, _ pid: pid_t,
@@ -326,7 +326,7 @@ nonisolated struct GhostLadder {
             let before = element.value
             let code = element.setValue(text)
             guard code == .success else {
-                attempts.append(.init(rung: .accessibility, outcome: "setValue failed (\(code.rawValue))"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "setValue failed (\(code.rawValue))"))
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
@@ -336,7 +336,7 @@ nonisolated struct GhostLadder {
             var readbackSource = element
             if !element.isValid, let replacement = refetch() {
                 attempts.append(.init(
-                    rung: .accessibility,
+                    tentacle: .accessibility,
                     outcome: "element handle went stale after the write — re-resolved via the original locator",
                 ))
                 readbackSource = replacement
@@ -354,7 +354,7 @@ nonisolated struct GhostLadder {
                 // untouched; otherwise report what is actually there.
                 if readback != before {
                     attempts.append(.init(
-                        rung: .accessibility,
+                        tentacle: .accessibility,
                         outcome: "value changed but does not match what was written — not retrying, to avoid duplicating it",
                     ))
                     return await finish(
@@ -363,10 +363,10 @@ nonisolated struct GhostLadder {
                         cursorBefore, frontBefore, attempts, pid,
                     )
                 }
-                attempts.append(.init(rung: .accessibility, outcome: "reported success, read-back unchanged"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "reported success, read-back unchanged"))
                 return nil
             }
-            attempts.append(.init(rung: .accessibility, outcome: "confirmed by read-back"))
+            attempts.append(.init(tentacle: .accessibility, outcome: "confirmed by read-back"))
             return await finish(
                 action, element, .accessibility, .confirmed, readback, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
@@ -377,19 +377,19 @@ nonisolated struct GhostLadder {
             // `AXShowMenu` counts as a press: menu buttons (and the remote elements System
             // Settings panes host) expose only it, and a human clicks them like any button.
             guard let pressish = element.pressishAction else {
-                attempts.append(.init(rung: .accessibility, outcome: "element exposes no press or show-menu action"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "element exposes no press or show-menu action"))
                 return nil
             }
             let code = element.perform(pressish)
             guard code == .success else {
-                attempts.append(.init(rung: .accessibility, outcome: "\(pressish) failed (\(code.rawValue))"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "\(pressish) failed (\(code.rawValue))"))
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
             // A press has no read-back; the honest verdict is unverifiable until the pixel
             // diff runs, which the caller supplies for visual targets.
             attempts.append(.init(
-                rung: .accessibility,
+                tentacle: .accessibility,
                 outcome: pressish == kAXPressAction
                     ? "press accepted"
                     : "show-menu action accepted — a menu appearing is the consequence to watch for",
@@ -437,12 +437,12 @@ nonisolated struct GhostLadder {
                 // Unreadable is not refuted. A nil read-back means the target exposes no
                 // value, or its handle died and could not be re-resolved — in neither case
                 // do we know the text failed to land. Falling through from here would let
-                // rung 4 retype the whole payload on top of a write that may have succeeded,
-                // and `contains` would then confirm the *doubled* text. Rung 1 already
-                // refuses to retry for exactly this reason; rung 2 must too.
+                // the sting retype the whole payload on top of a write that may have succeeded,
+                // and `contains` would then confirm the *doubled* text. Tentacle 1 already
+                // refuses to retry for exactly this reason; tentacle 2 must too.
                 guard landed != nil else {
                     attempts.append(.init(
-                        rung: .postedEvent,
+                        tentacle: .postedEvent,
                         outcome: "posted; the target exposes no readable value, so this cannot be confirmed or refuted — not retrying, to avoid typing it twice",
                     ))
                     return await finish(
@@ -452,14 +452,14 @@ nonisolated struct GhostLadder {
                     )
                 }
                 attempts.append(.init(
-                    rung: .postedEvent,
+                    tentacle: .postedEvent,
                     outcome: elsewhere
                         ? "posted, but the text landed in \(focused?.role ?? "?") '\(focused?.label ?? "")' instead"
                         : "posted, did not land in target",
                 ))
                 return nil
             }
-            attempts.append(.init(rung: .postedEvent, outcome: "confirmed by read-back"))
+            attempts.append(.init(tentacle: .postedEvent, outcome: "confirmed by read-back"))
             return await finish(
                 action, element, .postedEvent, .confirmed, landed, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
@@ -467,10 +467,10 @@ nonisolated struct GhostLadder {
             )
 
         case .click, .press:
-            // Zero-area counts as no frame — see the note on the hardware rung; a closed menu
+            // Zero-area counts as no frame — see the note on the hardware tentacle; a closed menu
             // item reports a 0×0 rect at the screen corner rather than nothing at all.
             guard let frame = element.frame, frame.width >= 1, frame.height >= 1 else {
-                attempts.append(.init(rung: .postedEvent, outcome: "element has no usable frame to click"))
+                attempts.append(.init(tentacle: .postedEvent, outcome: "element has no usable frame to click"))
                 return nil
             }
             await EventPoster.click(at: CGPoint(x: frame.midX, y: frame.midY), pid: pid)
@@ -480,7 +480,7 @@ nonisolated struct GhostLadder {
             // display wake intervened, which changes every signature by itself.
             let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
                 ? .confirmed : .unverifiable
-            attempts.append(.init(rung: .postedEvent, outcome: "click posted"))
+            attempts.append(.init(tentacle: .postedEvent, outcome: "click posted"))
             return await finish(
                 action, element, .postedEvent, verdict, nil, nil,
                 focusBefore, focusAfter, cursorBefore, frontBefore, attempts, pid,
@@ -519,7 +519,7 @@ nonisolated struct GhostLadder {
     // MARK: - Evidence assembly
 
     private func finish(
-        _ action: Action, _ element: AXElement, _ rung: Evidence.Rung,
+        _ action: Action, _ element: AXElement, _ tentacle: Evidence.Tentacle,
         _ verdict: Evidence.Verdict, _ readback: String?, _ pixelDelta: Double?,
         _ focusBefore: String?, _ focusAfter: String?,
         _ cursorBefore: CGPoint, _ frontBefore: String,
@@ -535,7 +535,7 @@ nonisolated struct GhostLadder {
         return Evidence(
             action: String(describing: action),
             target: "\(element.role) '\(element.label)'",
-            rung: rung,
+            tentacle: tentacle,
             verdict: verdict,
             readback: readback,
             pixelDelta: pixelDelta,

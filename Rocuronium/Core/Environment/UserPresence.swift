@@ -39,7 +39,7 @@ nonisolated enum UserPresence {
         /// idle and lock fields describe *the console user's* world, not this one.
         let offConsole: Bool
 
-        /// Whether the agent may fall back to hardware input — the one rung that takes the
+        /// Whether the agent may fall back to hardware input — the one tentacle that takes the
         /// cursor out of a human's hand. Only ever true when nobody is there to lose it.
         ///
         /// Never while the screen is locked. Synthetic keystrokes then go to the login window's
@@ -52,7 +52,7 @@ nonisolated enum UserPresence {
         /// cursor, and its permanent "locked" reading is the absence of a viewer.
         var mayTakeCursor: Bool { offConsole || (state == .away && !screenLocked) }
 
-        /// Whether a lock screen stands between the hardware rung and the apps it aims at.
+        /// Whether a lock screen stands between the hardware tentacle and the apps it aims at.
         ///
         /// This is the question the gates actually want, and it is not `screenLocked`: an
         /// off-console session reports itself locked for as long as no viewer is attached,
@@ -70,19 +70,19 @@ nonisolated enum UserPresence {
             }
             return switch state {
             case .present:
-                "A person is using this Mac right now. Stay on the ghost rungs; do not take the cursor or change the frontmost app."
+                "A person is using this Mac right now. Stay on the ghost tentacles; do not take the cursor or change the frontmost app."
             case .idle:
-                "No input for \(Int(idleSeconds / 60)) minutes, but the session is live. Prefer ghost rungs; a returning user must not find their cursor moving."
+                "No input for \(Int(idleSeconds / 60)) minutes, but the session is live. Prefer ghost tentacles; a returning user must not find their cursor moving."
             case .away:
                 if screenLocked {
                     "The screen is locked. Accessibility still works, but do not use hardware input — it would type into the login window."
                 } else if displayAsleep {
                     "Nobody is watching and the display is asleep — wake it before trusting anything you read."
                 } else {
-                    "Nobody is watching. Hardware input is acceptable if the ghost rungs fail."
+                    "Nobody is watching. Hardware input is acceptable if the ghost tentacles fail."
                 }
             case .unknown:
-                "Presence unknown; assuming someone is here. Stay on the ghost rungs."
+                "Presence unknown; assuming someone is here. Stay on the ghost tentacles."
             }
         }
     }

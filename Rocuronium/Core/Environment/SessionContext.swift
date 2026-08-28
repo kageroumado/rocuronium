@@ -24,10 +24,10 @@ import Synchronization
 /// whichever session holds the console. That is the same seat-global behavior measured for
 /// virtual HID devices, arriving by a different door.
 ///
-/// The consequence for the ghost ladder is worth stating, because it is the opposite of the
-/// intuition: rung 4 in an off-console session is not *safer* than on the console, it is more
+/// The consequence for the ghost reach is worth stating, because it is the opposite of the
+/// intuition: the sting in an off-console session is not *safer* than on the console, it is more
 /// dangerous, because it reaches across into a session where a human is present and where none
-/// of this engine's protections — presence gates, the overlay, ⌥⎋ — are watching.
+/// of this engine's protections — presence gates, the overlay, ⌃⌥⇧⎋ — are watching.
 nonisolated enum SessionContext {
     private enum Constants {
         /// A session changes console-ness only at a fast user switch, so a second of staleness
@@ -56,7 +56,7 @@ nonisolated enum SessionContext {
     /// display session, or a user backgrounded by fast user switching.
     static var isOffConsole: Bool { !isOnConsole }
 
-    /// Where the hardware rung must post so its events land in *this* session.
+    /// Where the hardware tentacle must post so its events land in *this* session.
     static var eventTap: CGEventTapLocation { isOnConsole ? .cghidEventTap : .cgSessionEventTap }
 
     private static func readOnConsole() -> Bool {

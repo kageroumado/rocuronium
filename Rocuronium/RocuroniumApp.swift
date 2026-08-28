@@ -39,7 +39,7 @@ final class EngineHost {
     var activityLog: ActivityLog { router.activityLog }
     var overlayModel: OverlayModel { router.overlay.model }
 
-    /// The one way back from ⌥⎋ — a human clicking a button in this popover.
+    /// The one way back from ⌃⌥⇧⎋ — a human clicking a button in this popover.
     func resumeFromHalt() {
         router.resumeFromHalt()
         isHalted = false

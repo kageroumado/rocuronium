@@ -49,7 +49,7 @@ rocuronium — drive this Mac without taking the cursor
   rocuronium guide      (print the operator's manual — evidence, presence, refusals)
 
 Options:
-  --allow-hardware-input   permit the hardware rung: real-cursor actions, session-level keys (default: no)
+  --allow-hardware-input   permit the hardware tentacle: real-cursor actions, session-level keys (default: no)
   --pid <n>                target a process directly (when two instances share a bundle id)
   --json                   print the raw reply
 
@@ -88,7 +88,7 @@ pointer where the path ends unless --restore. With --app they refuse when anothe
 window covers the action point, and they report the target's window count before/after —
 a flyout appearing is a window appearing.
 
-Cursor-taking commands show the visible-agent overlay (tint + bezel + jellyfish); ⌥⎋
+Cursor-taking commands show the visible-agent overlay (tint + bezel + jellyfish); ⌃⌥⇧⎋
 halts the engine mid-action, and every verb is then refused until the human resumes from
 the Rocuronium menu bar. 'activity' returns the session's action log with verdicts.
 
@@ -395,17 +395,17 @@ default:
         print("more document remains — call again to keep searching")
     }
     // The whole point of the tool: say plainly whether the human's cursor was touched.
-    // Movement under a ghost rung is the user's own hand — warning about it would train
+    // Movement under a ghost tentacle is the user's own hand — warning about it would train
     // people to ignore the one warning that matters.
     if reply["cursorMovedByUs"] as? Bool == true { print("⚠︎ the cursor was taken") }
     else if reply["cursorMovedByUser"] as? Bool == true { print("(cursor moved — yours, not ours)") }
     if reply["focusTakenByUs"] as? Bool == true { print("⚠︎ focus was taken — the target app came forward") }
     else if reply["frontmostChanged"] as? Bool == true { print("(frontmost changed — not to our target, so not ours)") }
     if let attempts = reply["attempts"] as? [[String: Any]] {
-        for attempt in attempts { print("  · \(attempt["rung"] ?? "?"): \(attempt["outcome"] ?? "")") }
+        for attempt in attempts { print("  · \(attempt["tentacle"] ?? "?"): \(attempt["outcome"] ?? "")") }
     }
     // The referral is the actionable part of a failure on web content: it names the channel
-    // that can reach what the ghost rungs cannot.
+    // that can reach what the ghost tentacles cannot.
     if let referral = reply["referral"] as? [String: Any] {
         print("→ \(referral["reason"] ?? "unreachable")")
         print("→ use \(referral["channel"] ?? "?"): \(referral["advice"] ?? "")")

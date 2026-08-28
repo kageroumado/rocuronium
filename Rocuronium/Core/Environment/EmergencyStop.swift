@@ -1,10 +1,10 @@
 import Foundation
 import Synchronization
 
-/// The ⌥⎋ halt: one flag every long-running path checks, set by the human, cleared by the
+/// The ⌃⌥⇧⎋ halt: one flag every long-running path checks, set by the human, cleared by the
 /// human.
 ///
-/// The flag lives in Core so that walks, poll loops, and the hardware rung can consult it
+/// The flag lives in Core so that walks, poll loops, and the hardware tentacle can consult it
 /// without any UI import, and it is process-global on purpose: an emergency stop that only
 /// halts *future* requests is not an emergency stop. The fastest path from keypress to
 /// stillness is `HardwareInput`'s per-sample check — about one 8 ms sample.
@@ -20,7 +20,7 @@ nonisolated enum EmergencyStop {
     static var isHalted: Bool { halted.load(ordering: .relaxed) }
 
     /// What every refused verb replies while halted.
-    static let refusalMessage = "halted by the human (⌥⎋) — resume from the Rocuronium menu bar"
+    static let refusalMessage = "halted by the human (⌃⌥⇧⎋) — resume from the Rocuronium menu bar"
 
     static var reason: String? {
         detail.withLock { $0 }

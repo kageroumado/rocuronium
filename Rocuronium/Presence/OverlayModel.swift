@@ -51,7 +51,7 @@ final class OverlayModel {
     /// the jellyfish's perch, kept current as the human drags the bezel around.
     var bezelFrame: CGRect?
 
-    /// Show the overlay for every acting verb, not only cursor-taking ones. The ghost rungs
+    /// Show the overlay for every acting verb, not only cursor-taking ones. The ghost tentacles
     /// are invisible by design, so this is opt-in — but "I want to watch it work" is a
     /// legitimate ask, and it persists across launches.
     var showForAllActions: Bool {

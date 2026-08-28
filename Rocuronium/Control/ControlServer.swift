@@ -260,7 +260,7 @@ final class ControlServer {
         // request would otherwise deadlock every future client.
         if semaphore.wait(timeout: .now() + Constants.replyTimeout) == .timedOut {
             // Cancel, do not merely abandon. An abandoned request keeps running after the
-            // caller has been told it failed — and with the hardware rung that means the real
+            // caller has been told it failed — and with the hardware tentacle that means the real
             // cursor moving and keys landing for an action the agent believes never happened,
             // possibly interleaved with the retry it sends next.
             work.cancel()

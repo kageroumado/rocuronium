@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// The one rung that takes the real cursor and the real keyboard.
+/// The one tentacle that takes the real cursor and the real keyboard.
 ///
 /// Events go to `SessionContext.eventTap`, so they behave exactly like a human's input: the
 /// pointer moves, the click activates whatever window is under it, keystrokes land in the
@@ -46,7 +46,7 @@ nonisolated enum HardwareInput {
 
     /// Who owns the frontmost ordinary window at `point`.
     ///
-    /// This check exists because the hardware rung differs from every other rung in a way
+    /// This check exists because the hardware tentacle differs from every other tentacle in a way
     /// that is easy to miss: `postToPid` delivers to a *process* regardless of stacking, but
     /// a real HID click goes to whatever window is **topmost at that coordinate**. Measured
     /// on this Mac: fifteen windows overlapped a single test point. Clicking an occluded
@@ -71,7 +71,7 @@ nonisolated enum HardwareInput {
     /// Moves the pointer to `point`, clicks, and puts the pointer back where it was.
     ///
     /// The restore is courtesy, not concealment: `Evidence.cursorMovedByUs` reports true for
-    /// every hardware-rung action regardless, because the takeover happened even when undone.
+    /// every hardware-tentacle action regardless, because the takeover happened even when undone.
     static func click(at point: CGPoint) async {
         // Hardware events reset HIDIdleTime like any human input; record them so presence
         // detection is not fooled by our own hands.
@@ -124,7 +124,7 @@ nonisolated enum HardwareInput {
 
     /// Walks the real cursor along a planned path, optionally with a button held.
     ///
-    /// Everything here is a hardware-rung operation by measurement, not by choice: per-pid
+    /// Everything here is a hardware-tentacle operation by measurement, not by choice: per-pid
     /// posted motion is dropped wholesale by the window server (cursor-paths experiment,
     /// 2026-08-20 — tracking areas, `.onHover`, WebKit hover, content drags and title-bar
     /// drags all stayed silent), so hover and drag exist only with the real pointer.
@@ -290,7 +290,7 @@ nonisolated enum HardwareInput {
                 InputAttribution.shared.noteSyntheticInput()
                 if let button { post(button.up, at: previous) }
                 let abort = if EmergencyStop.isHalted {
-                    "halted by the human (⌥⎋) mid-path"
+                    "halted by the human (⌃⌥⇧⎋) mid-path"
                 } else if cancelled.isCancelled {
                     "the request was cancelled mid-path"
                 } else {
@@ -384,7 +384,7 @@ nonisolated enum HardwareInput {
     /// string, not the keycode.
     /// Whether the console is still ours to type into.
     ///
-    /// Checked between characters, not only before the first: this rung types at ~12 ms a
+    /// Checked between characters, not only before the first: this tentacle types at ~12 ms a
     /// character, so a 5,000-character payload holds the physical keyboard for a minute. Two
     /// things can revoke permission mid-run, and both must be observed here because
     /// `try? await Task.sleep` swallows cancellation silently:
@@ -395,7 +395,7 @@ nonisolated enum HardwareInput {
     /// - The socket times out and cancels the request. The caller has by then been told the
     ///   action failed; continuing to drive the physical keyboard afterwards is the one thing
     ///   a tool built on "the evidence matches reality" must never do.
-    /// - The human presses ⌥⎋. That is the fastest stop path in the system — the next sample
+    /// - The human presses ⌃⌥⇧⎋. That is the fastest stop path in the system — the next sample
     ///   or character observes the flag, a held button is released, and the hands are theirs.
     ///
     /// The lock clause applies to the console only. An off-console session reports itself

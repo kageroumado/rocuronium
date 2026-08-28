@@ -33,7 +33,7 @@ nonisolated enum EventPoster {
     ///
     /// The payload matters: **Chromium reads the unicode string, not the keycode.** Events
     /// carrying only a virtual keycode are silently ignored by Electron apps, which is why
-    /// `sendKey` cannot be used for editing operations there — see `GhostLadder`.
+    /// `sendKey` cannot be used for editing operations there — see `GhostReach`.
     static func type(_ text: String, pid: pid_t) async {
         // Our own events reset HIDIdleTime; record them so presence is not fooled by us.
         InputAttribution.shared.noteSyntheticInput()

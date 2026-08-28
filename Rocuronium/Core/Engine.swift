@@ -4,7 +4,7 @@ import ApplicationServices
 /// Everything that touches accessibility, on its own executor.
 ///
 /// **Why this type exists.** `CommandRouter` is `@MainActor`, and under SE-0461 a `nonisolated
-/// async` function runs on its *caller's* executor — so the whole ladder, including synchronous
+/// async` function runs on its *caller's* executor — so the whole reach, including synchronous
 /// AX reads that can each block for the full two-second messaging timeout and a tree walk
 /// measured at 1.2 s, was executing on the main thread. One unresponsive target app could hang
 /// the menu bar UI. Marking the engine types `nonisolated` did not move them; only giving the
@@ -108,7 +108,7 @@ actor Engine {
         case menuPathNotFound(component: String, available: [String])
         case menuPathIsSubmenu(path: String, items: [String])
         case pathRefused(String)
-        /// A rung-4 refusal because another app's window covers the action point. Carries a
+        /// A sting refusal because another app's window covers the action point. Carries a
         /// machine-readable `suggestion` (typically a `park` invocation) that the router
         /// surfaces alongside the error — a suggestion, never an action taken unilaterally:
         /// the occluded-target case often wants the occluder handled instead, and only the
@@ -377,7 +377,7 @@ actor Engine {
     /// claims, and a launch reply must mean the second one.
     func waitUntilDrivable(pid: pid_t, timeout: Duration) async -> Readiness {
         // A launch with the display asleep would never look ready: the tree stays degenerate
-        // no matter how finished the app is. Wake first, same as the ladder's rung 0.
+        // no matter how finished the app is. Wake first, same as the reach's tentacle 0.
         await DisplayWake.ensureAwake()
         let clock = ContinuousClock()
         let start = clock.now
@@ -470,7 +470,7 @@ actor Engine {
     /// native AppKit even in Electron — so `AXPress` on the matching item runs the same
     /// action the keystroke would, on every toolkit, without any CGEvent or focus change.
     /// No `allowHardwareInput`: a menu item is actuated by `AXPress` or not at all, so there is
-    /// no rung below to permit. Accepting the flag would imply an escalation that cannot exist.
+    /// no tentacle below to permit. Accepting the flag would imply an escalation that cannot exist.
     enum ShortcutMode: Sendable {
         /// Resolve and report what *would* be pressed, without pressing. Makes the verb
         /// auditable before the fact rather than after — the reply otherwise names the menu
@@ -577,10 +577,10 @@ actor Engine {
         let windowsBefore = onScreenWindowCount(pid)
 
         // Accessibility only: `AXPress` is the sole meaningful way to actuate a menu item, and
-        // the rungs below would aim real clicks at a closed menu's meaningless geometry.
+        // the tentacles below would aim real clicks at a closed menu's meaningless geometry.
         // `allowHardwareInput` is deliberately not forwarded for the same reason.
-        let ladder = GhostLadder(accessibilityOnly: true)
-        var evidence = await ladder.perform(.press, on: match.element, pid: pid)
+        let reach = GhostReach(accessibilityOnly: true)
+        var evidence = await reach.perform(.press, on: match.element, pid: pid)
         cache.invalidate(pid: pid)
 
         // Two confirmation channels, strongest first: a changed selection is semantic
@@ -646,7 +646,7 @@ actor Engine {
 
     /// Presses a status item by `AXPress`, opening its menu or popover without the cursor.
     ///
-    /// The press is performed directly rather than through the ladder: an item whose press
+    /// The press is performed directly rather than through the reach: an item whose press
     /// opens an NSMenu can block the AX call in menu tracking until the messaging timeout,
     /// so the return code routinely reads as failure for a press that fully worked. The
     /// read-back that decides is the window count — a menu or popover appearing is a window
@@ -687,7 +687,7 @@ actor Engine {
         cache.invalidate(pid: pid)
 
         var attempts: [Evidence.Attempt] = [.init(
-            rung: .accessibility,
+            tentacle: .accessibility,
             outcome: code == .success
                 ? "press accepted"
                 : "press returned \(code.rawValue) — for a status item this can mean the AX call "
@@ -701,7 +701,7 @@ actor Engine {
                 verdict = .confirmed
                 readback = "the target's on-screen window count changed \(windowsBefore) → \(now)"
                 attempts.append(.init(
-                    rung: .accessibility,
+                    tentacle: .accessibility,
                     outcome: "window count \(windowsBefore) → \(now) — its menu or popover is open",
                 ))
                 break
@@ -717,7 +717,7 @@ actor Engine {
         let evidence = Evidence(
             action: "statusItem(press)",
             target: "AXMenuBarItem '\(itemName)'",
-            rung: .accessibility,
+            tentacle: .accessibility,
             verdict: verdict,
             readback: readback,
             pixelDelta: nil,
@@ -787,7 +787,7 @@ actor Engine {
         try? await Task.sleep(for: .milliseconds(300))
         cache.invalidate(pid: pid)
 
-        let rung: Evidence.Rung = delivery == .session ? .hardwareInput : .postedEvent
+        let tentacle: Evidence.Tentacle = delivery == .session ? .hardwareInput : .postedEvent
         let focusAfter = ElementQuery.focused(pid: pid)?.signature
         let focusChanged = focusAfter != focusBefore
         let outcome = switch (delivery, focusChanged) {
@@ -796,7 +796,7 @@ actor Engine {
         case (.session, true): "key pressed on the console pipeline; the focused element changed"
         case (.session, false): "key pressed on the console pipeline (reaches key-equivalent dispatch in the frontmost app)"
         }
-        let attempts: [Evidence.Attempt] = [.init(rung: rung, outcome: outcome)]
+        let attempts: [Evidence.Attempt] = [.init(tentacle: tentacle, outcome: outcome)]
 
         let cursorAfter = EventPoster.cursorLocation
         let frontAfter = await MainActor.run { EventPoster.frontmostBundleID }
@@ -806,7 +806,7 @@ actor Engine {
         var evidence = Evidence(
             action: "key(\(chord.name))",
             target: target,
-            rung: rung,
+            tentacle: tentacle,
             verdict: focusChanged ? .confirmed : .unverifiable,
             readback: nil,
             pixelDelta: nil,
@@ -842,7 +842,7 @@ actor Engine {
         return evidence
     }
 
-    /// Scrolls a scroll area — the way to reach off-screen content. Ladder-shaped like
+    /// Scrolls a scroll area — the way to reach off-screen content. Reach-shaped like
     /// everything else: `toFraction` writes the vertical scroll bar's value and reads it
     /// back; a pixel delta posts wheel events to the process and lets the bar (or pixels)
     /// testify. The bar read-back is the strongest evidence available, because a posted
@@ -891,7 +891,7 @@ actor Engine {
         if let toFraction {
             // Absolute positioning is a scroll-bar write or nothing: there is no way to
             // compute the wheel pixels that land at "0.5 of the document" without trusting
-            // exactly the numbers this rung refuses to trust.
+            // exactly the numbers this tentacle refuses to trust.
             guard let bar, let before = barBefore else {
                 throw EngineError.notFound(
                     "a vertical scroll bar on \(target) — absolute positioning needs one; use dy to scroll relatively",
@@ -904,7 +904,7 @@ actor Engine {
             let moved = after.map { abs($0 - before) > 0.001 } ?? false
             let landed = after.map { abs($0 - toFraction) <= 0.02 } ?? false
             attempts.append(.init(
-                rung: .accessibility,
+                tentacle: .accessibility,
                 outcome: code == .success
                     ? (moved ? "value write confirmed by read-back" : "reported success, scroll bar did not move")
                     : "value write failed (\(code.rawValue))",
@@ -915,13 +915,13 @@ actor Engine {
                     + (landed ? "" : " (requested \(String(format: "%.3f", toFraction)))")
             }
             return (await finishScroll(
-                action: "scroll(to: \(toFraction))", target: target, rung: .accessibility,
+                action: "scroll(to: \(toFraction))", target: target, tentacle: .accessibility,
                 verdict: verdict, readback: readback, attempts: attempts,
                 cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
             ), before, after)
         }
 
-        // Rung 1 for a labeled target: ask the app to bring it into view. Measured to be
+        // Tentacle 1 for a labeled target: ask the app to bring it into view. Measured to be
         // the only scroll mechanism that works without the cursor — posted wheel events
         // (pixel *and* line units, location set) were ignored by AppKit and Chromium alike,
         // presumably because wheel routing belongs to the window server. The frame moving
@@ -939,9 +939,9 @@ actor Engine {
             cache.invalidate(pid: pid)
             if code == .success {
                 if let before, let after, before != after {
-                    attempts.append(.init(rung: .accessibility, outcome: "AXScrollToVisible confirmed — the element moved on screen"))
+                    attempts.append(.init(tentacle: .accessibility, outcome: "AXScrollToVisible confirmed — the element moved on screen"))
                     return (await finishScroll(
-                        action: "scroll(toVisible: '\(label)')", target: target, rung: .accessibility,
+                        action: "scroll(toVisible: '\(label)')", target: target, tentacle: .accessibility,
                         verdict: .confirmed,
                         readback: "element frame (\(Int(before.origin.x)),\(Int(before.origin.y))) → (\(Int(after.origin.x)),\(Int(after.origin.y)))",
                         attempts: attempts,
@@ -950,16 +950,16 @@ actor Engine {
                 }
                 if let after, let frame = try? windowFrame(pid: pid),
                    CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height).contains(after) {
-                    attempts.append(.init(rung: .accessibility, outcome: "AXScrollToVisible accepted; the element is fully inside the window"))
+                    attempts.append(.init(tentacle: .accessibility, outcome: "AXScrollToVisible accepted; the element is fully inside the window"))
                     return (await finishScroll(
-                        action: "scroll(toVisible: '\(label)')", target: target, rung: .accessibility,
+                        action: "scroll(toVisible: '\(label)')", target: target, tentacle: .accessibility,
                         verdict: .confirmed, readback: "already visible", attempts: attempts,
                         cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
                     ), barBefore, bar?.numberValue)
                 }
             }
             attempts.append(.init(
-                rung: .accessibility,
+                tentacle: .accessibility,
                 outcome: code == .success
                     ? "AXScrollToVisible reported success but the element did not move and is not verifiably visible"
                     : "AXScrollToVisible failed (\(code.rawValue))"
@@ -984,7 +984,7 @@ actor Engine {
             verdict = moved ? .confirmed : .noEffect
             readback = "scrollbar \(String(format: "%.3f", barBefore)) → \(String(format: "%.3f", barAfter))"
             attempts.append(.init(
-                rung: .postedEvent,
+                tentacle: .postedEvent,
                 outcome: moved
                     ? "scroll bar moved — posted wheel events were honored"
                     : "posted wheel events; the scroll bar did not move",
@@ -993,13 +993,13 @@ actor Engine {
             // No bar to read: already at a boundary, or the app hides its bars from AX.
             verdict = .unverifiable
             attempts.append(.init(
-                rung: .postedEvent,
+                tentacle: .postedEvent,
                 outcome: "posted wheel events; no scroll bar exposes a position to read back",
             ))
         }
 
         var evidence = await finishScroll(
-            action: "scroll(dx: \(deltaX), dy: \(deltaY))", target: target, rung: .postedEvent,
+            action: "scroll(dx: \(deltaX), dy: \(deltaY))", target: target, tentacle: .postedEvent,
             verdict: verdict, readback: readback, attempts: attempts,
             cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
         )
@@ -1082,7 +1082,7 @@ actor Engine {
                       near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
                   )
             else {
-                attempts.append(.init(rung: .accessibility, outcome: "could not capture the window to OCR"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "could not capture the window to OCR"))
                 break
             }
             let sightings = TextSighting.sight(in: capture.image)
@@ -1094,14 +1094,14 @@ actor Engine {
             if let hit = TextSighting.find(needle, in: inArea) {
                 let rect = TextSighting.screenRect(of: hit, in: capture.windowFrame)
                 attempts.append(.init(
-                    rung: bar != nil ? .accessibility : .postedEvent,
+                    tentacle: bar != nil ? .accessibility : .postedEvent,
                     outcome: "OCR sighted '\(hit.text.prefix(60))' after \(steps) step(s)",
                 ))
                 cache.invalidate(pid: pid)
                 return ScrollSearchResult(
                     evidence: await finishScroll(
                         action: "scroll(untilText: '\(needle)')", target: target,
-                        rung: bar != nil ? .accessibility : .postedEvent,
+                        tentacle: bar != nil ? .accessibility : .postedEvent,
                         verdict: .confirmed,
                         readback: "sighted at (\(Int(rect.midX)), \(Int(rect.midY))) — line: '\(hit.text.prefix(80))'",
                         attempts: attempts,
@@ -1140,7 +1140,7 @@ actor Engine {
                     at: CGPoint(x: areaFrame.midX, y: areaFrame.midY), pid: pid,
                 )
             } else {
-                attempts.append(.init(rung: .postedEvent, outcome: "no scroll bar and no frame to aim wheels at"))
+                attempts.append(.init(tentacle: .postedEvent, outcome: "no scroll bar and no frame to aim wheels at"))
                 break
             }
             steps += 1
@@ -1152,7 +1152,7 @@ actor Engine {
         let exhausted = steps >= maxSteps && !reachedEnd
         let barIgnored = bar == nil && stalledFrames >= 2
         attempts.append(.init(
-            rung: bar != nil ? .accessibility : .postedEvent,
+            tentacle: bar != nil ? .accessibility : .postedEvent,
             outcome: reachedEnd
                 ? "scanned to the \(direction > 0 ? "end" : "top") without sighting '\(needle)'"
                 : exhausted
@@ -1163,7 +1163,7 @@ actor Engine {
         // attaches the web-content referral to that verdict on its own.
         let evidence = await finishScroll(
             action: "scroll(untilText: '\(needle)')", target: target,
-            rung: bar != nil ? .accessibility : .postedEvent,
+            tentacle: bar != nil ? .accessibility : .postedEvent,
             verdict: barIgnored ? .noEffect : .unverifiable,
             readback: barAfter.map { after in
                 barBefore.map { "scrollbar \(String(format: "%.3f", $0)) → \(String(format: "%.3f", after))" }
@@ -1195,7 +1195,7 @@ actor Engine {
     }
 
     private func finishScroll(
-        action: String, target: String, rung: Evidence.Rung, verdict: Evidence.Verdict,
+        action: String, target: String, tentacle: Evidence.Tentacle, verdict: Evidence.Verdict,
         readback: String?, attempts: [Evidence.Attempt],
         cursorBefore: CGPoint, frontBefore: String, area: AXElement, pid: pid_t
     ) async -> Evidence {
@@ -1217,7 +1217,7 @@ actor Engine {
         return Evidence(
             action: action,
             target: target,
-            rung: rung,
+            tentacle: tentacle,
             verdict: verdict,
             readback: readback,
             pixelDelta: nil,
@@ -1321,7 +1321,7 @@ actor Engine {
     func act(
         pid: pid_t,
         locator: Locator,
-        action: GhostLadder.Action,
+        action: GhostReach.Action,
         allowHardwareInput: Bool
     ) async throws -> Evidence {
         var element = try resolve(locator, pid: pid)
@@ -1329,14 +1329,14 @@ actor Engine {
         if wantsPress, case .point = locator {
             element = ascendToPressable(element)
         }
-        // How the ladder recovers when the handle dies mid-action (Electron rebuilds elements
+        // How the reach recovers when the handle dies mid-action (Electron rebuilds elements
         // on focus): re-run the *original* locator and accept the answer only when its role
         // matches what we were acting on. An equivalent element is a guess — Codex's own
         // implementation concedes uniqueness cannot be guaranteed — so the guess is taken
         // only for a provably dead handle, never to paper over a surprising read.
         // Captured while the element is provably alive. Role alone is far too weak here: for
         // the `.focused` locator the refetch query *is* `ElementQuery.focused`, the same query
-        // rung 2 uses to detect text landing in the wrong field — so a role-only guard would
+        // tentacle 2 uses to detect text landing in the wrong field — so a role-only guard would
         // make that check compare the focused element against itself and confirm text that
         // landed somewhere else entirely. The full signature (role, label, origin, size) is
         // what distinguishes two same-role fields in one app, and a rebuilt-in-place element
@@ -1362,7 +1362,7 @@ actor Engine {
             }
         }
         // Window-level visual evidence for click-shaped actions, exactly as the menu press
-        // takes it. The ladder diffs the *element's* rectangle, and a button's own pixels
+        // takes it. The reach diffs the *element's* rectangle, and a button's own pixels
         // return to rest immediately while the consequence lands elsewhere in the window —
         // measured on Calculator: pressing '1' changed the display, the button's rect read
         // quiet, and the verdict came back a false noEffect. Same two-capture stillness
@@ -1383,8 +1383,8 @@ actor Engine {
         // read-back below compares against the world as it was, not as the press left it.
         let windowsBefore = wantsPress ? onScreenWindowCount(pid) : nil
 
-        let ladder = GhostLadder(allowHardwareInput: allowHardwareInput)
-        var evidence = await ladder.perform(action, on: element, pid: pid, refetch: refetch)
+        let reach = GhostReach(allowHardwareInput: allowHardwareInput)
+        var evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
         // The interface just changed; anything cached about this process is now suspect.
         cache.invalidate(pid: pid)
 
@@ -1434,7 +1434,7 @@ actor Engine {
 
     /// Moves the real cursor along a path (`button: nil`) or drags along it (button held).
     ///
-    /// Hardware-rung by measurement, not by policy: the cursor-paths experiment (2026-08-20)
+    /// Hardware-tentacle by measurement, not by policy: the cursor-paths experiment (2026-08-20)
     /// showed per-pid posted motion is dropped wholesale — tracking areas, `.onHover`,
     /// WebKit hover, content drags and title-bar drags all stayed silent, background and
     /// frontmost alike. Hover and drag exist only with the real pointer; the presence gate
@@ -1461,7 +1461,7 @@ actor Engine {
         var points = waypoints
         // Destination by label: resolved here so the caller can say "hover the Store tab"
         // instead of shipping coordinates. Zero-area frames are refused for the same reason
-        // the ladder refuses them — a closed menu item reports (0, bottom-corner) 0×0.
+        // the reach refuses them — a closed menu item reports (0, bottom-corner) 0×0.
         if let label {
             guard let pid else {
                 throw EngineError.pathRefused("A labeled destination needs --app to search in.")
@@ -1489,8 +1489,8 @@ actor Engine {
         }
 
         // The point that acts is the one that must not be occluded: a drag's button lands at
-        // the start, a hover's meaning lives at the end. Same rule as the ladder's hardware
-        // rung — real input goes to whatever window is topmost, and driving somebody else's
+        // the start, a hover's meaning lives at the end. Same rule as the reach's hardware
+        // tentacle — real input goes to whatever window is topmost, and driving somebody else's
         // window with the user's cursor is the thing this tool promises not to do. The
         // measured ambush: Refrax's PIP panel silently ate a hover aimed under it.
         let actionPoint = button != nil ? plan.start : plan.end
@@ -1514,7 +1514,7 @@ actor Engine {
         let windowsBefore = pid.map(onScreenWindowCount)
         // The charge-up ring at the point that acts (drag: the button-down point; hover: the
         // destination). When the overlay is visible this waits out the wind-up — the window
-        // in which ⌥⎋ lands before any motion starts; the per-sample halt check inside the
+        // in which ⌃⌥⇧⎋ lands before any motion starts; the per-sample halt check inside the
         // trace covers everything after.
         await PresenceRelay.telegraph(actionPoint)
         let outcome = await HardwareInput.trace(plan, button: button, restoreCursor: restoreCursor)

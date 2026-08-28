@@ -6,8 +6,8 @@ import Foundation
 /// *computed* from observation rather than inferred from a return code — because return codes
 /// lie: `AXSetValue` reports `.success` on WebKit content while changing nothing at all.
 nonisolated struct Evidence: Codable, Sendable {
-    /// Which rung of the ghost ladder actually delivered the action.
-    enum Rung: String, Codable, Sendable {
+    /// Which tentacle of the ghost reach actually delivered the action.
+    enum Tentacle: String, Codable, Sendable {
         case displayWake
         case accessibility
         case postedEvent
@@ -26,7 +26,7 @@ nonisolated struct Evidence: Codable, Sendable {
 
     let action: String
     let target: String
-    let rung: Rung
+    let tentacle: Tentacle
     let verdict: Verdict
 
     /// Value read back from the target after acting, when it exposes one.
@@ -44,31 +44,31 @@ nonisolated struct Evidence: Codable, Sendable {
     /// activating a target from the user (or an unrelated launch) switching apps.
     let frontmostBecameTarget: Bool
 
-    /// Rungs that were tried and fell through, with why. Makes a fallback to hardware input
+    /// Tentacles that were tried and fell through, with why. Makes a fallback to hardware input
     /// visible instead of silent.
     let attempts: [Attempt]
 
-    /// Where to go when no rung can reach the target. Rung 3 is a signpost, not an adapter:
+    /// Where to go when no tentacle can reach the target. Tentacle 3 is a signpost, not an adapter:
     /// web page content needs the browser's own protocol, and the calling agent — which has
     /// the task context and the launch flags — is the one who can use it. Set only when the
-    /// ladder was exhausted on a target it recognizes as unreachable.
+    /// reach was exhausted on a target it recognizes as unreachable.
     let referral: Referral?
 
-    /// A machine-readable next move for refusals that have one — the rung-4 occlusion
+    /// A machine-readable next move for refusals that have one — the sting occlusion
     /// refusal suggests parking the target, say. A suggestion only: the caller has the task
     /// context, and acting on it unilaterally would move a visible window as a side effect
     /// of a failed click.
     var suggestion: String? = nil
 
     struct Attempt: Codable, Sendable {
-        let rung: Rung
+        let tentacle: Tentacle
         let outcome: String
     }
 
     struct Referral: Codable, Sendable {
         /// The protocol that can reach this target: "refrax-ctl", "cdp", "safari-js", …
         let channel: String
-        /// Why the ghost rungs cannot.
+        /// Why the ghost tentacles cannot.
         let reason: String
         /// The concrete next move, written for the agent on the other end of the socket.
         let advice: String
@@ -80,18 +80,18 @@ nonisolated struct Evidence: Codable, Sendable {
     ///
     /// The raw measurement cannot tell the difference: a human moving the mouse while an action
     /// runs registers identically to us stealing it. But only `hardwareInput` is capable of
-    /// moving the pointer — every other rung delivers events to a process without touching the
-    /// system cursor — so movement under any other rung was the user's own hand. Reporting it
+    /// moving the pointer — every other tentacle delivers events to a process without touching the
+    /// system cursor — so movement under any other tentacle was the user's own hand. Reporting it
     /// as ours trains people to ignore the warning, which is worse than not having one.
     ///
-    /// Conversely, the hardware rung **always** took the cursor, even when the before/after
-    /// measurement reads zero: the rung moves the pointer to aim, clicks, and restores it as
+    /// Conversely, the hardware tentacle **always** took the cursor, even when the before/after
+    /// measurement reads zero: the tentacle moves the pointer to aim, clicks, and restores it as
     /// a courtesy. The restore must never conceal the takeover.
-    var cursorMovedByUs: Bool { rung == .hardwareInput }
+    var cursorMovedByUs: Bool { tentacle == .hardwareInput }
 
     /// Movement that happened during the action but cannot have been ours. Evidence a human is
     /// actively at the machine, not a warning.
-    var cursorMovedByUser: Bool { cursorMoved && rung != .hardwareInput }
+    var cursorMovedByUser: Bool { cursorMoved && tentacle != .hardwareInput }
 
     /// Focus we took. Unlike the cursor, an action genuinely can raise its target — so the
     /// test is whether the *target* came forward, not merely that something did.
@@ -104,7 +104,7 @@ nonisolated struct Evidence: Codable, Sendable {
     /// animation somewhere in the same rectangle.
     func addingVisualEvidence(delta: Double?) -> Evidence {
         guard verdict != .confirmed, let delta else { return self }
-        // `.noEffect` participates too, and it must: the ladder's fall-through paths assert
+        // `.noEffect` participates too, and it must: the reach's fall-through paths assert
         // no-effect while holding a capture, which is exactly where the pixels are the only
         // signal left. The previous guard admitted only `.unverifiable`, so those call sites
         // captured a baseline, diffed it, and discarded the answer — the fix recorded as
@@ -120,7 +120,7 @@ nonisolated struct Evidence: Codable, Sendable {
             visual
         }
         return Evidence(
-            action: action, target: target, rung: rung,
+            action: action, target: target, tentacle: tentacle,
             verdict: resolved,
             readback: readback, pixelDelta: delta,
             focusBefore: focusBefore, focusAfter: focusAfter,
@@ -143,7 +143,7 @@ nonisolated struct Evidence: Codable, Sendable {
         guard verdict == .unverifiable, let before, let after,
               !after.isEmpty, after != before else { return self }
         return Evidence(
-            action: action, target: target, rung: rung,
+            action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: after, pixelDelta: pixelDelta,
             focusBefore: focusBefore, focusAfter: focusAfter,
@@ -159,7 +159,7 @@ nonisolated struct Evidence: Codable, Sendable {
     /// "error" on a press that worked invites the one retry a just-quit app must not get.
     func confirmedByProcessExit() -> Evidence {
         Evidence(
-            action: action, target: target, rung: rung,
+            action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: "the target process exited after the press",
             pixelDelta: pixelDelta,
@@ -167,7 +167,7 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts + [.init(
-                rung: rung,
+                tentacle: tentacle,
                 outcome: "the target process exited — an action that closes its app cannot read back; the exit is the evidence",
             )],
             referral: referral,
@@ -184,7 +184,7 @@ nonisolated struct Evidence: Codable, Sendable {
     /// and window-server-truthful; it overturns both weaker verdicts.
     func confirmedByWindowCountChange(before: Int, after: Int) -> Evidence {
         Evidence(
-            action: action, target: target, rung: rung,
+            action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: "the target's on-screen window count changed \(before) → \(after)",
             pixelDelta: pixelDelta,
@@ -192,7 +192,7 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts + [.init(
-                rung: rung,
+                tentacle: tentacle,
                 outcome: "window count \(before) → \(after) — the consequence landed at the window level, where element evidence cannot see",
             )],
             referral: referral,
@@ -224,7 +224,7 @@ nonisolated struct Evidence: Codable, Sendable {
         case .noEffect: verdict
         }
         return Evidence(
-            action: action, target: target, rung: rung,
+            action: action, target: target, tentacle: tentacle,
             verdict: resolved,
             readback: readback, pixelDelta: delta,
             focusBefore: focusBefore, focusAfter: focusAfter,
@@ -241,7 +241,7 @@ nonisolated struct Evidence: Codable, Sendable {
         case .noEffect: "NO EFFECT"
         case .unverifiable: "unverified"
         }
-        return "\(action) → \(target) [\(rung.rawValue)] \(marker)"
+        return "\(action) → \(target) [\(tentacle.rawValue)] \(marker)"
     }
 }
 

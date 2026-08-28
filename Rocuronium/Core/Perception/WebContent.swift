@@ -1,14 +1,14 @@
 import AppKit
 import ApplicationServices
 
-/// Recognizes the one surface the ghost ladder cannot reach — web page content — and names
+/// Recognizes the one surface the ghost reach cannot reach — web page content — and names
 /// the channel that can.
 ///
 /// Measured in `Experiments/ghost-input/RESULTS.md`: WebKit web content refuses accessibility
 /// writes *and* posted keys, and returns `.success` from the write while changing nothing.
 /// Chromium honors posted unicode keys once focus is right, so Electron composers usually
-/// succeed on rung 2 and never reach this code. When a web-content target does exhaust the
-/// rungs, no OS-level input path exists at all — so rung 3 is a **referral, not an adapter**:
+/// succeed on tentacle 2 and never reach this code. When a web-content target does exhaust the
+/// tentacles, no OS-level input path exists at all — so tentacle 3 is a **referral, not an adapter**:
 /// structured evidence naming the browser's own protocol, for the calling agent to compose.
 /// An adapter here would couple this app to external binaries and to launch flags (CDP's
 /// debug port) that only the caller can supply by relaunching the browser.
@@ -21,7 +21,7 @@ nonisolated enum WebContent {
 
     /// Whether the element sits inside web page content, decided by `AXWebArea` ancestry
     /// rather than by what app it belongs to — a browser's address bar is native, and a
-    /// referral there would point away from rungs that actually work.
+    /// referral there would point away from tentacles that actually work.
     static func isWebContent(_ element: AXElement) -> Bool {
         var current: AXElement? = element
         for _ in 0 ..< Constants.maximumAncestorDepth {
@@ -94,7 +94,7 @@ nonisolated enum WebContent {
         }
     }
 
-    /// The referral itself, or nil when the target is not web content and the ladder's
+    /// The referral itself, or nil when the target is not web content and the reach's
     /// failure needs a different explanation.
     static func referral(for element: AXElement, pid: pid_t) -> Evidence.Referral? {
         guard isWebContent(element) else { return nil }

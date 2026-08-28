@@ -56,7 +56,7 @@ Rocuronium/
   App/          RocuroniumApp, MenuBarIcon, PopoverPages, Theme        ← Dantrolene pattern
   Core/
     Perception/ AXElement, ElementQuery, ScreenCapture, Snapshot
-    Actuation/  GhostLadder, AXWriter, EventPoster, HIDPoster
+    Actuation/  GhostReach, AXWriter, EventPoster, HIDPoster
     Evidence/   Evidence, Verifier, ScreenDiff
     Environment/DisplayWake, AdrafinilBridge, DantroleneBridge, TrustCheck
     Targets/    AppTarget, ChromiumSupport, WebKitSupport
@@ -89,8 +89,8 @@ any truncation must be reported in the result, never silent.
 focused-element query are O(1) and should be tried before any walk. The full walk is the
 fallback, not the default.
 
-**Walks are cached between attempts** (`TreeCache`), because the ladder may consult the tree
-several times while working through its rungs and 1.2 s each time is the difference between
+**Walks are cached between attempts** (`TreeCache`), because the reach may consult the tree
+several times while working through its tentacles and 1.2 s each time is the difference between
 immediate and broken. The hard part is knowing when the cache became a lie, and a timer alone
 does not know. Each entry carries a **fingerprint** — focused-element signature, window count,
 front window title, and display-awake state — all O(1) reads, re-taken on every hit; if the
@@ -99,12 +99,12 @@ the walk (a walk takes a second, and the UI can move during it), and any display
 transition flushes every process at once, since that changes the shape of every tree
 simultaneously.
 
-## 4. Actuation — the ghost ladder
+## 4. Actuation — the ghost reach
 
-Rungs are attempted in order; each one is verified before falling through. Rungs 0–3 never
+Tentacles are attempted in order; each one is verified before falling through. Tentacles 0–3 never
 move the cursor or change the frontmost app (measured, every call).
 
-| rung | mechanism | verified working on |
+| tentacle | mechanism | verified working on |
 |---|---|---|
 | 0 | **ensure display awake** | precondition — skip and everything below silently fails |
 | 1 | `AXSetValue` / `AXUIElementPerformAction`, read back | AppKit, Electron |
@@ -116,9 +116,9 @@ Two measured constraints are baked in:
 
 - **Electron ignores keycode-only events.** Backspace and Cmd+A posted to Discord did nothing
   while unicode text worked, because Chromium reads the unicode payload. Editing operations
-  (clear, select-all) are therefore rung-1 operations, never rung-2.
+  (clear, select-all) are therefore tentacle-1 operations, never tentacle-2.
 - **`AXSetValue` returns `.success` on WebKit while changing nothing.** The return code is not
-  evidence. Rung 1 is only "successful" after a read-back confirms it.
+  evidence. Tentacle 1 is only "successful" after a read-back confirms it.
 
 ## 5. Evidence — the feature, not the logging
 
@@ -168,7 +168,7 @@ dependable frontmost, best-effort in the background, and the verdict says which 
 Verification is selection read-back first, then a window-true pixel diff that may only
 confirm, never refute — copy changes no pixels and must not read as failure.
 
-**Rung 3 is therefore a referral, not an adapter** (decided 2026-08-02). When the ladder is
+**Tentacle 3 is therefore a referral, not an adapter** (decided 2026-08-02). When the reach is
 exhausted on a target inside an `AXWebArea`, `WebContent` identifies the engine — Refrax and
 Safari by bundle id, Chromium by id prefix, Electron structurally by its embedded framework —
 and the evidence carries a structured `referral` naming the channel that can reach it and the
@@ -177,7 +177,7 @@ the launch flags, an adapter here would couple this app to external binaries, an
 automatic fall-through an adapter promises is hollow when CDP needs a flag only a relaunch
 can provide. Native controls in browsers (the address bar) never trigger a referral — the
 test is `AXWebArea` ancestry, not app identity — and Electron composers that succeed on
-rung 2 never reach it.
+tentacle 2 never reach it.
 
 ## 7. Local models — storage and role
 
@@ -219,7 +219,7 @@ breaks the app.
   perceiving/acting command, renewed while commands keep arriving, released after ~4 quiet
   minutes. Adrafinil's daemon owns the policy that outranks it (pause, idle release, thermal
   cutouts). Without the CLI the same lifecycle runs on a process-local IOPM assertion —
-  enhancement, never dependency. Rung 0's per-action wake stays: it is what wakes an
+  enhancement, never dependency. Tentacle 0's per-action wake stays: it is what wakes an
   already-dark panel. Measured 2026-08-22: `IOPMAssertionDeclareUserActivity` does **not**
   reset `HIDIdleTime`, so neither wake nor hold corrupts presence readings.
 - **dantrolene** — owns lock policy; rocuronium defers rather than duplicating. Lock alone is
@@ -239,7 +239,7 @@ cannot be determined, the cautious reading is that someone is here.
 
 This is *propagated to the agent rather than acted on unilaterally*. Every status response
 carries the reading plus a machine-readable `mayTakeCursor` (true only when `away`) and a
-sentence of advice. The engine still refuses rung 4 unless the caller opts in — presence
+sentence of advice. The engine still refuses the sting unless the caller opts in — presence
 informs the decision, it does not silently make it. The agent is the one with the task context;
 it should know that a human just touched the keyboard.
 
@@ -287,7 +287,7 @@ the keyboard is a visible event, so that step is presence-gated behind `allowDis
 mirroring `allowHardwareInput`. The ledger of parked windows also defines **strays** —
 windows on the virtual display nobody parked (a saved frame restored there at launch, a
 second window of a parked app): `windows` and `display status` name them, release warns and
-sweeps them, and the menu bar badges while any exist. The rung-4 occlusion refusal keeps
+sweeps them, and the menu bar badges while any exist. The sting occlusion refusal keeps
 *suggesting* park (a machine-readable `suggestion` field) and never auto-parks — moving a
 visible window off-screen as a side effect of a failed click is the agent's call, not ours.
 `screenshot` is the default vision backend made concrete — capture and hand the pixels to the
@@ -303,35 +303,35 @@ The one direction invisibility must reverse: when the agent takes the cursor, th
 deserves to see it happen and to be able to stop it. `Presence/` is that module — a
 borderless overlay window (whisper tint, centered narration bezel, the jellyfish escort,
 charge-ring/ripple effects), an `ActivityLog` ring buffer served by the `activity` verb,
-and the ⌥⎋ emergency stop.
+and the ⌃⌥⇧⎋ emergency stop.
 
 Two boundaries hold it together. Core never imports Presence: the engine telegraphs
 hardware actions through `PresenceRelay`'s static hooks (installed once at launch), and
 the halt is `EmergencyStop` — a Core-side atomic checked by every walk, poll loop, and
 per-sample in `HardwareInput`, so the fastest stop path is one ~8 ms trace sample and a
-mid-payload `type` stops between characters. And resume is asymmetric by design: ⌥⎋ can
+mid-payload `type` stops between characters. And resume is asymmetric by design: ⌃⌥⇧⎋ can
 be pressed by anyone, but the flag is cleared only by the menu bar popover's button —
 no socket verb can un-halt the engine, so an agent cannot talk its way past a human who
 took the machine back. The overlay shows for hardware-input opt-ins and the cursor-path
-verbs always, for everything else behind a user toggle; ghost rungs stay invisible by
-design, because rungs 0–3 take nothing from the human that needs announcing.
+verbs always, for everything else behind a user toggle; ghost tentacles stay invisible by
+design, because tentacles 0–3 take nothing from the human that needs announcing.
 
-## 9a. Rung 4 — hardware input
+## 9a. The sting — hardware input
 
-The cursor-stealing rung is implemented: `CGEvent`s on `.cghidEventTap`, behaving exactly like
+The cursor-stealing tentacle is implemented: `CGEvent`s on `.cghidEventTap`, behaving exactly like
 human input. It is reachable only when the caller passes `allowHardwareInput`, and it refuses
 outright in two cases — when the screen is locked (the console belongs to the password field
 then) and when another app's window covers the aim point.
 
-That second guard is the non-obvious one, and it exists because rung 4 breaks an assumption
-every other rung shares: `postToPid` reaches a *process* through any occlusion, but a real
+That second guard is the non-obvious one, and it exists because the sting breaks an assumption
+every other tentacle shares: `postToPid` reaches a *process* through any occlusion, but a real
 click goes to whatever window is topmost at the coordinate. Measured: fifteen windows
 overlapped one point on the main display. So an occluded target is refused with the occluder
 named, and parking the target on the virtual display is the reliable way to satisfy the check
-— which is what ties this rung to the isolation machinery instead of leaving it a hazard.
+— which is what ties this tentacle to the isolation machinery instead of leaving it a hazard.
 
 The pointer is moved to aim and restored afterwards, but `cursorMovedByUs` derives from the
-rung rather than from the before/after measurement the restore would zero out: the restore is
+tentacle rather than from the before/after measurement the restore would zero out: the restore is
 a courtesy and must never conceal the takeover.
 
 ## 10a. The MCP surface

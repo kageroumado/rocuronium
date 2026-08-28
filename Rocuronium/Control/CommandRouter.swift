@@ -28,7 +28,7 @@ final class CommandRouter {
     private let virtualDisplay: VirtualDisplayBridge
     /// Keeps the display awake for the whole agent session, not just per action.
     private let adrafinil = AdrafinilBridge()
-    /// The visible-agent chrome: tint, bezel, jellyfish, ⌥⎋. Shown per the policy in
+    /// The visible-agent chrome: tint, bezel, jellyfish, ⌃⌥⇧⎋. Shown per the policy in
     /// `execute` — cursor-taking commands always, everything else behind the toggle.
     let overlay = PresenceOverlayController()
     /// What the agent did, one line per acting command; the popover, the bezel, and the
@@ -43,7 +43,7 @@ final class CommandRouter {
         PresenceOverlayController.installRelayHooks()
         overlay.onEmergencyStop = { [activityLog] in
             activityLog.append(
-                action: "halt", target: "⌥⎋",
+                action: "halt", target: "⌃⌥⇧⎋",
                 verdict: "halted",
                 summary: "Emergency stop — agent verbs refused until resumed from the menu bar",
             )
@@ -84,7 +84,7 @@ final class CommandRouter {
         }
     }
 
-    /// Clears the ⌥⎋ halt. Reachable only from the menu bar popover — human-only by
+    /// Clears the ⌃⌥⇧⎋ halt. Reachable only from the menu bar popover — human-only by
     /// design; no socket verb calls this, so an agent can never un-halt itself.
     func resumeFromHalt() {
         EmergencyStop.resume()
@@ -108,7 +108,7 @@ final class CommandRouter {
         var text: String?
         var x: Double?
         var y: Double?
-        /// Opt-in to the cursor-stealing rung. Absent means no.
+        /// Opt-in to the cursor-stealing tentacle. Absent means no.
         var allowHardwareInput: Bool?
         /// Opt-in for `park` to attach a virtual display while a human is at the keyboard —
         /// attach is a system-visible event, so it is presence-gated like hardware input.
@@ -241,7 +241,7 @@ final class CommandRouter {
     // MARK: - Commands
 
     /// The verbs that do something to the machine — the set the activity log records, the
-    /// overlay narrates, and the ⌥⎋ halt refuses.
+    /// overlay narrates, and the ⌃⌥⇧⎋ halt refuses.
     private static let actingVerbs: Set<String> = [
         "type", "click", "scroll", "shortcut", "menu", "key",
         "move", "drag", "launch", "activate", "park", "statusitem",
@@ -260,7 +260,7 @@ final class CommandRouter {
     }
 
     private func execute(_ request: Request) async throws -> [String: Any] {
-        // The ⌥⎋ halt refuses everything that perceives or acts. `status`, `diag`, and
+        // The ⌃⌥⇧⎋ halt refuses everything that perceives or acts. `status`, `diag`, and
         // `activity` still answer — an agent must be able to learn *why* its verbs stopped
         // working — and no socket verb can clear the flag: resume is the popover button.
         if EmergencyStop.isHalted, !["status", "diag", "activity"].contains(request.command) {
@@ -281,7 +281,7 @@ final class CommandRouter {
         }
         // The overlay policy: cursor-taking work is always shown — hardware-input opt-ins
         // and the path verbs, which take the real cursor by construction — and everything
-        // else only when the "show for all actions" toggle is on. Ghost rungs are invisible
+        // else only when the "show for all actions" toggle is on. Ghost tentacles are invisible
         // by design; the toggle is for watching, not for safety.
         if Self.actingVerbs.contains(request.command),
            request.allowHardwareInput == true
@@ -360,7 +360,7 @@ final class CommandRouter {
             "halted": EmergencyStop.isHalted,
             "summary": entries.isEmpty
                 ? "no recorded actions this session"
-                : "\(entries.count) recent action(s)" + (EmergencyStop.isHalted ? " · HALTED (⌥⎋)" : ""),
+                : "\(entries.count) recent action(s)" + (EmergencyStop.isHalted ? " · HALTED (⌃⌥⇧⎋)" : ""),
         ]
     }
 
@@ -586,7 +586,7 @@ final class CommandRouter {
         ]
     }
 
-    private func act(_ request: Request, action: GhostLadder.Action) async throws -> [String: Any] {
+    private func act(_ request: Request, action: GhostReach.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
         // A coordinate is answered by a hit-test and a label by a search; neither falls back to
         // the other, so the caller always knows which mechanism replied.
@@ -782,7 +782,7 @@ final class CommandRouter {
     }
 
     /// `move` (hover, glide) and `drag` (button held along the path) — the cursor-path
-    /// verbs. Hardware-rung by measurement: per-pid posted motion is dropped wholesale by
+    /// verbs. Hardware-tentacle by measurement: per-pid posted motion is dropped wholesale by
     /// the window server (cursor-paths experiment, 2026-08-20), so these take the real
     /// cursor, and they are presence-gated exactly like `activate`.
     private func trace(_ request: Request, dragging: Bool) async throws -> [String: Any] {
@@ -910,7 +910,7 @@ final class CommandRouter {
         var reply: [String: Any] = [
             "ok": outcome.abortReason == nil && landed,
             "verdict": verdict,
-            "rung": "hardwareInput",
+            "tentacle": "hardwareInput",
             "summary": summary,
             "cursorMoved": true,
             "cursorMovedByUs": true,
@@ -1070,7 +1070,7 @@ final class CommandRouter {
 
     /// Brings an app to the foreground — deliberately, as a named verb, because sometimes
     /// that is the honest option (background AppKit menus never validate). Taking focus is
-    /// the one thing the ghost rungs promise never to do, so doing it on purpose is
+    /// the one thing the ghost tentacles promise never to do, so doing it on purpose is
     /// presence-gated exactly like hardware input.
     private func activate(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
@@ -1128,7 +1128,7 @@ final class CommandRouter {
         var reply: [String: Any] = [
             "ok": evidence.succeeded,
             "verdict": evidence.verdict.rawValue,
-            "rung": evidence.rung.rawValue,
+            "tentacle": evidence.tentacle.rawValue,
             "summary": evidence.summary,
             "readback": evidence.readback ?? "",
             "cursorMoved": evidence.cursorMoved,
@@ -1136,7 +1136,7 @@ final class CommandRouter {
             "cursorMovedByUser": evidence.cursorMovedByUser,
             "frontmostChanged": evidence.frontmostChanged,
             "focusTakenByUs": evidence.focusTakenByUs,
-            "attempts": evidence.attempts.map { ["rung": $0.rung.rawValue, "outcome": $0.outcome] },
+            "attempts": evidence.attempts.map { ["tentacle": $0.tentacle.rawValue, "outcome": $0.outcome] },
             "presence": presenceBlock(),
         ]
         // The measurement behind a visual verdict. Exposing it is what makes a wrong

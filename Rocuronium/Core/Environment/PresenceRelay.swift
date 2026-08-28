@@ -8,13 +8,13 @@ import Foundation
 /// engine calls through them blindly. The defaults are no-ops, which is also the behavior
 /// when the overlay is not part of the session — never nil-checks in the actuation path.
 nonisolated enum PresenceRelay {
-    /// Called with the aim point right before a hardware-rung click or trace begins.
+    /// Called with the aim point right before a hardware-tentacle click or trace begins.
     ///
     /// When the overlay is visible this draws the charge-up ring and *waits out its wind-up*
-    /// (~600 ms) — the deliberate window in which ⌥⎋ can land before the click does. When the
+    /// (~600 ms) — the deliberate window in which ⌃⌥⇧⎋ can land before the click does. When the
     /// overlay is hidden it returns immediately, so invisible sessions pay nothing.
     nonisolated(unsafe) static var telegraph: @Sendable (CGPoint) async -> Void = { _ in }
 
-    /// Called after a hardware-rung click lands; draws the ripple. Fire-and-forget.
+    /// Called after a hardware-tentacle click lands; draws the ripple. Fire-and-forget.
     nonisolated(unsafe) static var impact: @Sendable (CGPoint) -> Void = { _ in }
 }

@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import IOKit.pwr_mgt
 
-/// Rung 0 of the ghost ladder, and the precondition nobody documents.
+/// Tentacle 0 of the ghost reach, and the precondition nobody documents.
 ///
 /// **When the display sleeps, every app's accessibility tree collapses.** `AXWindows` and
 /// `AXChildren` start returning the application element itself, all window content disappears,

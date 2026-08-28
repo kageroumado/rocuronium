@@ -4,7 +4,7 @@ import os
 
 /// Session-level display wakefulness through Adrafinil's display-class holds.
 ///
-/// Rung 0 (`DisplayWake.ensureAwake`) wakes the panel per action; this type keeps it awake
+/// Tentacle 0 (`DisplayWake.ensureAwake`) wakes the panel per action; this type keeps it awake
 /// *between* actions, for the overnight case: an agent that reads, thinks for three minutes,
 /// and acts again would otherwise let the display sleep mid-think and pay a wake-and-settle
 /// on every step — with every accessibility tree collapsing and repopulating around it.
