@@ -22,7 +22,9 @@ tools. Add `--json` to any command for the full reply.
     apps · windows · find · read · wait            observe (read-only)
     launch · activate                              lifecycle
     type · click · scroll · shortcut · menu · key  act
+    move · drag                                    cursor paths (hardware)
     statusitem                                     menu bar status items
+    plan                                           multi-step sequences with guards
     activity                                       what happened this session
     display · park · screenshot                    isolation + pixels
 
@@ -84,6 +86,10 @@ What gates on it:
 - **Hardware input** (`allowHardwareInput`) — the advice tells you whether taking the
   cursor is acceptable; the engine additionally refuses it outright while the screen is
   locked or the aim point is covered by another app's window.
+- **`launch`** — refused while the frontmost app is fullscreen unless `confirm`: macOS
+  switches Spaces when a new window appears on another one, so launching an app while
+  someone is in a fullscreen game throws them out of it even though ghost tentacles never
+  touched the cursor.
 - Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor and
   never change the frontmost app, so they are fine while a human is typing.
 
@@ -97,9 +103,9 @@ evidence-verdict language with the session's elapsed time (drag it wherever it b
 you least — the position is remembered), and the jellyfish escorting the cursor while a
 command is in flight, then drifting home to perch beside the bezel. Before each hardware
 click a sigil charges at the aim point for ~600 ms — that wind-up is a deliberate
-interrupt window, not decoration. The overlay lingers ~15 s after the last command, then
-fades. A "show overlay for every action" toggle in the menu bar popover extends it to
-ghost-tentacle commands too.
+interrupt window, not decoration. The overlay lingers ~3 s after a cursor-taking action
+(the user saw what happened), ~15 s after ghost-tentacle commands, then fades. A "show
+overlay for every action" toggle in the menu bar popover extends it to ghost commands too.
 
 **The cursor stays negotiable.** During a `move`/`drag`, a brushed mouse is absorbed —
 the glide bends elastically and eases back on path, still landing on the destination —
@@ -107,8 +113,8 @@ while sustained deliberate motion (about a quarter second of it) makes the gestu
 the button is released, the reply says "yielded to the hand on the mouse", and the cursor
 is yours. ⌃⌥⇧⎋ remains the hard stop.
 
-**⌃⌥⇧⎋ is the emergency stop.** While the overlay is visible, Option+Escape halts the
-engine mid-action: a cursor trace aborts within one sample (a held drag button is
+**⌃⌥⇧⎋ is the emergency stop.** While the overlay is visible, Ctrl+Option+Shift+Escape
+halts the engine mid-action: a cursor trace aborts within one sample (a held drag button is
 released where it stopped), typing stops mid-character, walks bail out. After the halt,
 every acting and perceiving verb is refused with "halted by the human (⌃⌥⇧⎋) — resume from
 the Rocuronium menu bar"; `status` and `activity` still answer and report
@@ -261,7 +267,10 @@ variant and there will not be one: per-pid posted motion is dropped wholesale by
 window server (measured 2026-08-20 — tracking areas, SwiftUI `onHover`, WebKit hover,
 content drags and title-bar drags all stayed silent, background and frontmost alike).
 Because these verbs always take the physical cursor, they are presence-gated like
-`activate`: refused while a human is present unless `--confirm`.
+`activate`: refused while a human is present unless `--confirm`. When `--app` is given
+and the target is not frontmost, `drag` activates it and posts a click at the start
+point to absorb the activating click — the entire activate → focus → drag sequence is
+atomic inside the daemon, not three round-trips.
 
 A bare start→end `move` follows a naturally bowed arc — a randomized few-percent
 perpendicular bow, because human motion is never a ruler line; `drag` paths stay exact
@@ -281,6 +290,46 @@ hover lands on whatever window is **topmost** at the point (occlusion refused wh
 `--app` is given — park or activate first); WebKit/WKWebView pages ignore all motion
 while their app is inactive (`activate` before web hover); a drag aborted by a mid-path
 lock or cancel releases its button where it stopped, never leaving it held.
+
+## Sequence plans
+
+`plan` executes a list of steps as one daemon-side operation — no MCP round-trips
+between steps, so the world cannot change between them. Each step is an existing verb
+with its arguments, plus an optional postcondition guard and a failure policy.
+
+    { "command": "plan", "profile": "ghost", "steps": [
+      { "command": "click", "app": "TextEdit", "label": "Save",
+        "expect": { "type": "window-vanishes", "title": "Save" },
+        "onFail": "abort" },
+      { "command": "type", "app": "TextEdit", "text": "done",
+        "expect": { "type": "readback-contains", "text": "done" } }
+    ]}
+
+**Guards** (the `expect` field) — evaluated after each step:
+
+| type | checks |
+|---|---|
+| `verdict` | the step's own evidence verdict matches `verdict` |
+| `readback-contains` | the step's readback contains `text` |
+| `window-appears` | a window matching `title` exists (AX query) |
+| `window-vanishes` | a window matching `title` is gone |
+| `text-visible` | an element matching `label` is in the AX tree |
+| `text-vanishes` | an element matching `label` is gone |
+
+A step without `expect` always passes; its evidence is still in the transcript.
+
+**Failure policies** (the `onFail` field, default `abort`):
+
+- `abort` — stop, return the transcript up to the failure.
+- `continue` — note the failure, proceed to the next step.
+- `pause-for-human` — halt via ⌃⌥⇧⎋ and wait for resume from the popover.
+- `{"fallback": {step}}` — try an alternative step (one level deep).
+
+**Profiles**: `ghost` (default) forces `allowHardwareInput: false` per step, no overlay,
+no pacing. `visible` shows bezel narration per step with 500 ms pacing between steps.
+
+The reply is one transcript: per-step verdicts, guard results, and any fallback outcomes.
+⌃⌥⇧⎋ aborts mid-plan. CLI: `rocuronium plan --file steps.json` or pipe JSON to stdin.
 
 ## Status items and menu buttons
 
