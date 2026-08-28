@@ -381,19 +381,6 @@ final class CommandRouter {
         let time = 0.35
 
         let view = Canvas { context, size in
-            var ctx = context
-            ctx.fill(
-                Path(CGRect(origin: .zero, size: size)),
-                with: .linearGradient(
-                    Gradient(stops: [
-                        .init(color: Color(red: 0.12, green: 0.08, blue: 0.28), location: 0),
-                        .init(color: Color(red: 0.06, green: 0.04, blue: 0.16), location: 0.6),
-                        .init(color: Color(red: 0.02, green: 0.02, blue: 0.08), location: 1),
-                    ]),
-                    startPoint: CGPoint(x: size.width / 2, y: 0),
-                    endPoint: CGPoint(x: size.width / 2, y: size.height),
-                ),
-            )
             let jellySize = min(size.width, size.height) * 0.65
             let rect = CGRect(
                 x: (size.width - jellySize) / 2,
@@ -401,7 +388,7 @@ final class CommandRouter {
                 width: jellySize,
                 height: jellySize * 1.3,
             )
-            JellyfishArt.draw(in: ctx, rect: rect, time: time, phase: .idle, style: style)
+            JellyfishArt.draw(in: context, rect: rect, time: time, phase: .idle, style: style)
         }
         .frame(width: w, height: h)
 
