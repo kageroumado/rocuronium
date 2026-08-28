@@ -11,13 +11,22 @@ import ScreenCaptureKit
 /// here is explicit, and the scale factor comes from the display being captured rather than
 /// being assumed to be 2.
 nonisolated enum ScreenCapture {
+    private enum Constants {
+        /// Long enough for a loaded window server to answer, short enough that a missing grant
+        /// reads as a refusal rather than a wedge.
+        static let enumerationTimeout: Duration = .seconds(3)
+    }
+
     enum CaptureError: LocalizedError {
         case noDisplayContains(CGRect)
         case noWindowForApp(pid_t)
         case permissionDenied
+        case enumerationTimedOut
 
         var errorDescription: String? {
             switch self {
+            case .enumerationTimedOut:
+                "Screen capture did not answer. ScreenCaptureKit blocks instead of failing when Screen Recording is not granted — check Privacy & Security ▸ Screen & System Audio Recording."
             case let .noDisplayContains(rect):
                 "No display contains \(rect) — the window may be offscreen or on another Space."
             case let .noWindowForApp(pid):
@@ -35,9 +44,7 @@ nonisolated enum ScreenCapture {
     static func image(of rect: CGRect) async throws -> CGImage? {
         guard rect.width >= 1, rect.height >= 1 else { return nil }
 
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true,
-        )
+        let content = try await shareableContent()
         // No fallback to displays.first: a window on another Space, or a stale offscreen AX
         // frame, would otherwise be captured from display 0 at negative coordinates and return
         // unrelated pixels — which then feed the verdict as if they meant something.
@@ -81,9 +88,7 @@ nonisolated enum ScreenCapture {
     }
 
     static func windowImage(ownedBy pid: pid_t, near rect: CGRect) async throws -> WindowCapture {
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true,
-        )
+        let content = try await shareableContent()
         let candidates = content.windows.filter { $0.owningApplication?.processID == pid }
         // Best overlap with the AX frame wins; a window list and an AX tree can disagree by a
         // few points, so exact equality would be wrong. No overlap at all falls back to the
@@ -121,6 +126,28 @@ nonisolated enum ScreenCapture {
             return 1
         }
         return CGFloat(mode.pixelWidth) / display.frame.width
+    }
+
+    /// Enumerates capturable content, but refuses to wait forever for it.
+    ///
+    /// `SCShareableContent` does not fail when Screen Recording is missing or has been
+    /// invalidated — it simply never returns. Every verb that verifies visually then hangs until
+    /// the socket times out, and the daemon reads as wedged while `status` and `apps` keep
+    /// answering, which sends the reader looking in entirely the wrong place. Measured after a
+    /// reinstall replaced the bundle. A bounded wait turns that into a sentence naming the grant.
+    private static func shareableContent() async throws -> SCShareableContent {
+        try await withThrowingTaskGroup(of: SCShareableContent.self) { group in
+            group.addTask {
+                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            }
+            group.addTask {
+                try await Task.sleep(for: Constants.enumerationTimeout)
+                throw CaptureError.enumerationTimedOut
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw CaptureError.enumerationTimedOut }
+            return first
+        }
     }
 
     /// Whether visual verification is available at all. Screen Recording is a separate grant
