@@ -19,6 +19,20 @@ import Foundation
 /// moment the user wants the agent to stop, not their apps to die.
 @MainActor
 final class HotkeyMonitor {
+    struct Chord {
+        let keyCode: UInt32
+        let carbonModifiers: UInt32
+        let displayKeys: [String]
+
+        var displayString: String { displayKeys.joined() }
+    }
+
+    static let chord = Chord(
+        keyCode: UInt32(kVK_Escape),
+        carbonModifiers: UInt32(controlKey | optionKey | shiftKey),
+        displayKeys: ["⌃", "⌥", "⇧", "esc"],
+    )
+
     var onHalt: (@MainActor () -> Void)?
 
     private var hotKey: EventHotKeyRef?
@@ -41,9 +55,10 @@ final class HotkeyMonitor {
             return noErr
         }, 1, &eventType, selfPointer, &handler)
 
+        let chord = Self.chord
         let id = EventHotKeyID(signature: OSType(0x524F_4355), id: 1)  // 'ROCU'
         RegisterEventHotKey(
-            UInt32(kVK_Escape), UInt32(controlKey | optionKey | shiftKey), id,
+            chord.keyCode, chord.carbonModifiers, id,
             GetEventDispatcherTarget(), 0, &hotKey,
         )
     }

@@ -28,6 +28,8 @@ final class PresenceOverlayController {
         static let fadeOut: TimeInterval = 0.8
         /// How long the session chrome outlives the last command before fading.
         static let linger: TimeInterval = 15
+        /// After a cursor-taking action the user saw what happened — fade sooner.
+        static let shortLinger: TimeInterval = 3
         /// The charge-up ring's wind-up — the visible interrupt window before each click.
         static let charge: TimeInterval = 0.6
     }
@@ -59,7 +61,8 @@ final class PresenceOverlayController {
         model.phase = error?.localizedCaseInsensitiveContains("confirm") == true ? .needsHuman : .idle
         model.narration = Self.narration(for: reply)
         model.lastEngagement = Date()
-        restartLinger()
+        let cursorTaking = reply["cursorMovedByUs"] as? Bool == true
+        restartLinger(seconds: cursorTaking ? Constants.shortLinger : Constants.linger)
     }
 
     /// One line of evidence-verdict language for the bezel.
@@ -175,10 +178,10 @@ final class PresenceOverlayController {
         }
     }
 
-    private func restartLinger() {
+    private func restartLinger(seconds: TimeInterval = Constants.linger) {
         lingerTask?.cancel()
         lingerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Constants.linger))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             self?.fadeOutAndHide()
         }

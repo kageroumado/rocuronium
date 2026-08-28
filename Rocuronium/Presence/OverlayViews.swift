@@ -495,10 +495,9 @@ struct BezelView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize()
-                KeyChip("⌥")
-                // "esc", not the ⎋ glyph: the broken-circle-arrow symbol is the official
-                // Escape sign, and nobody recognizes it (measured on the first user).
-                KeyChip("esc")
+                ForEach(HotkeyMonitor.chord.displayKeys, id: \.self) { key in
+                    KeyChip(key)
+                }
             }
             .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 16))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -548,7 +547,8 @@ private struct KeyChip: View {
         Text(symbol)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.secondary)
-            .frame(minWidth: 21, minHeight: 21)
+            .frame(minWidth: 21, minHeight: 21, alignment: .center)
+            .padding(.horizontal, symbol.count > 1 ? 3 : 0)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.06)),

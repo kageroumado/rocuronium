@@ -100,7 +100,7 @@ struct MenuPopover: View {
             (Theme.blocked, "Accessibility is required",
              "Add Rocuronium in System Settings, then relaunch — nothing works without it.", false)
         case .halted:
-            (Theme.halted, "Halted by you (⌃⌥⇧⎋)",
+            (Theme.halted, "Halted by you (\(HotkeyMonitor.chord.displayString))",
              "Every agent verb is refused until you resume. Only this popover can.", false)
         case .driving:
             (Theme.agent, "An agent has hands", drivingSubtitle, false)
