@@ -130,6 +130,33 @@ if command == "display" || command == "demo", let action = arguments.first, !act
     payload["action"] = action
     arguments.removeFirst()
 }
+// `plan` reads its step list from --file <path> or stdin.
+if command == "plan" {
+    let jsonData: Data
+    if let filePath = value(for: "file") {
+        guard let data = FileManager.default.contents(atPath: filePath) else {
+            FileHandle.standardError.write(Data("rocuronium: cannot read '\(filePath)'\n".utf8))
+            exit(2)
+        }
+        jsonData = data
+    } else if isatty(STDIN_FILENO) == 0 {
+        jsonData = FileHandle.standardInput.readDataToEndOfFile()
+    } else {
+        FileHandle.standardError.write(Data("rocuronium plan: pipe JSON to stdin or pass --file <path>\n".utf8))
+        exit(2)
+    }
+    do {
+        guard let planJSON = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            FileHandle.standardError.write(Data("rocuronium plan: expected a JSON object with 'steps'\n".utf8))
+            exit(2)
+        }
+        if let steps = planJSON["steps"] { payload["steps"] = steps }
+        if let profile = planJSON["profile"] { payload["profile"] = profile }
+    } catch {
+        FileHandle.standardError.write(Data("rocuronium plan: invalid JSON — \(error.localizedDescription)\n".utf8))
+        exit(2)
+    }
+}
 for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
@@ -358,6 +385,25 @@ case "screenshot":
         if let note = reply["diffNote"] as? String { print("→ \(note)") }
     }
     if let token = reply["token"] as? String { print("token \(token)") }
+
+case "plan":
+    for step in reply["transcript"] as? [[String: Any]] ?? [] {
+        let mark: String
+        if step["guardPassed"] as? Bool == false {
+            mark = " ✗ \(step["guardReason"] as? String ?? "guard failed")"
+                + (step["policy"].map { " [\($0)]" } ?? "")
+        } else if step["guardPassed"] as? Bool == true {
+            mark = " ✓ \(step["guardReason"] as? String ?? "")"
+        } else {
+            mark = ""
+        }
+        let verdict = (step["verdict"] as? String).map { "  [\($0)]" } ?? ""
+        print("  \(step["step"] ?? "?"). \(step["intent"] ?? "?")\(verdict)\(mark)")
+        if let fallback = step["fallback"] as? [String: Any] {
+            print("     fallback: \(fallback["summary"] as? String ?? fallback["error"] as? String ?? "?")")
+        }
+    }
+    print(reply["summary"] as? String ?? "done")
 
 case "activity":
     for entry in reply["entries"] as? [[String: Any]] ?? [] {

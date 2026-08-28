@@ -312,6 +312,29 @@ enum MCPServer {
             ], required: ["app"],
         ),
         tool(
+            "plan",
+            """
+            Execute a sequence of commands with postcondition guards and failure policies. \
+            Each step is an existing verb (click, type, scroll, etc.) with an optional \
+            'expect' guard (verdict, readback-contains, window-appears, window-vanishes, \
+            text-visible, text-vanishes) and 'onFail' policy (abort, continue, \
+            pause-for-human, or {\"fallback\": {step}}). Profile 'ghost' (default) stays \
+            invisible; 'visible' shows bezel narration per step with human pacing. The \
+            reply is one transcript with per-step verdicts. ���⌥⇧⎋ aborts mid-plan.
+            """,
+            properties: [
+                "profile": [
+                    "type": "string", "enum": ["ghost", "visible"],
+                    "description": "ghost (invisible, default) or visible (bezel narration per step)",
+                ],
+                "steps": [
+                    "type": "array",
+                    "description": "Array of command steps. Each step has 'command' plus the same fields as that command's tool, plus optional 'expect' (guard) and 'onFail' (policy).",
+                    "items": ["type": "object"],
+                ],
+            ], required: ["steps"],
+        ),
+        tool(
             "activity",
             """
             The session's recent agent actions with their evidence verdicts (last 200, \

@@ -84,10 +84,14 @@ final class CommandRouter {
         }
     }
 
+    /// The running plan executor, if any. Kept so `resumeFromHalt` can wake a paused plan.
+    private var planExecutor: PlanExecutor?
+
     /// Clears the ⌃⌥⇧⎋ halt. Reachable only from the menu bar popover — human-only by
     /// design; no socket verb calls this, so an agent can never un-halt itself.
     func resumeFromHalt() {
         EmergencyStop.resume()
+        planExecutor?.resume()
         activityLog.append(
             action: "resume", target: "menu bar",
             verdict: "resumed",
@@ -165,6 +169,11 @@ final class CommandRouter {
         /// For `read`/`screenshot`: an observation token from a prior reply of the same
         /// verb; the reply becomes the delta against that observation.
         var since: String?
+
+        /// For `plan`: the step list.
+        var steps: [SequencePlan.Step]?
+        /// For `plan`: ghost (default) or visible.
+        var profile: String?
     }
 
     /// Bounds every number that arrives over the socket, before it reaches arithmetic that
@@ -289,6 +298,15 @@ final class CommandRouter {
            || overlay.model.showForAllActions {
             overlay.begin(action: "\(request.command) \(Self.target(of: request))…")
         }
+        if request.command == "plan" {
+            return try await plan(request)
+        }
+        return try await dispatch(request)
+    }
+
+    /// The raw command switch — no overlay, no activity tracking, no halt check.
+    /// Called directly by both `execute()` (with its wrappers) and the plan executor.
+    func dispatch(_ request: Request) async throws -> [String: Any] {
         return switch request.command {
         case "status": status()
         case "diag": await diagnose()
@@ -316,6 +334,12 @@ final class CommandRouter {
         case "demo": demo(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
+    }
+
+    /// Resolves an app name or pid from a request. Exposed for the plan executor's guard
+    /// evaluation, which needs the pid to check windows and AX tree state.
+    func resolvePid(_ request: Request) -> pid_t? {
+        try? resolve(request)
     }
 
     /// Opens (reset), re-shows, or hides the demo stage. The reply carries the window's
@@ -866,6 +890,30 @@ final class CommandRouter {
         }
         let pid: pid_t? = request.app != nil ? try resolve(request) : nil
 
+        // drag/move already take the cursor — ensuring the target is frontmost and its
+        // window is key is part of the same contract, not a separate escalation. Without
+        // this the first mouseDown is swallowed as an "activating click" and the drag
+        // draws on nothing.
+        if let pid {
+            let targetBundle = await MainActor.run {
+                NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            }
+            let frontBundle = await MainActor.run { EventPoster.frontmostBundleID }
+            if frontBundle != targetBundle {
+                await MainActor.run {
+                    NSRunningApplication(processIdentifier: pid)?.activate()
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+                // The first click after activation is swallowed as an activating click
+                // by AppKit/WebKit — post one to absorb it so the drag's own mouseDown
+                // reaches the content. Only needed when we just activated.
+                if dragging, let startPoint = waypoints.first {
+                    await EventPoster.click(at: startPoint, pid: pid)
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+            }
+        }
+
         isDriving = true
         defer { isDriving = false }
         let result = try await engine.trace(
@@ -1045,6 +1093,21 @@ final class CommandRouter {
                 "presence": presenceBlock(),
             ]
         }
+        // `activates = false` keeps the launch itself ghost-safe, but it cannot keep the app's
+        // first window off the human's Space — and when the frontmost app is fullscreen, that
+        // window arriving is what switches Spaces and throws them out of it. Refuse rather than
+        // do it silently; `park` puts the new window on the virtual display instead.
+        let presence = UserPresence.read()
+        if Foreground.frontmostIsFullscreen, presence.state != .away, request.confirm != true {
+            return [
+                "ok": false,
+                "error": "'\(Foreground.frontmostName)' is fullscreen — a launching app's first "
+                    + "window would switch Spaces and pull the human out of it. Park the target on "
+                    + "the virtual display, or pass confirm:true if that is genuinely intended.",
+                "presence": presenceBlock(),
+            ]
+        }
+
         let configuration = NSWorkspace.OpenConfiguration()
         // Ghost discipline: launching must not steal focus any more than typing does.
         configuration.activates = false
@@ -1174,8 +1237,7 @@ final class CommandRouter {
             var reply: [String: Any] = [
                 "ok": true,
                 "lease": lease.id.uuidString,
-                "summary": "virtual display leased (\(lease.reason))"
-                    + (virtualDisplay.isAdopted ? " — adopted the user's Test Display screen" : ""),
+                "summary": "virtual display leased (\(lease.reason))",
             ]
             if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
             return reply
@@ -1208,8 +1270,6 @@ final class CommandRouter {
             var reply: [String: Any] = [
                 "ok": true,
                 "attached": virtualDisplay.isAttached,
-                "ownedByUs": virtualDisplay.ownsDisplay,
-                "adopted": virtualDisplay.isAdopted,
                 "leases": virtualDisplay.leases.values.map { lease -> [String: Any] in
                     [
                         "id": lease.id.uuidString,
@@ -1223,10 +1283,9 @@ final class CommandRouter {
                 },
                 "strays": strays.map { ["pid": $0.pid, "app": $0.app, "title": $0.title] },
                 "summary": virtualDisplay.isAttached
-                    ? (virtualDisplay.isAdopted ? "attached (user's Test Display)" : "attached (ours)")
-                        + " · \(virtualDisplay.leases.count) lease(s) · \(virtualDisplay.ledger.entries.count) parked"
+                    ? "attached · \(virtualDisplay.leases.count) lease(s) · \(virtualDisplay.ledger.entries.count) parked"
                         + (strays.isEmpty ? "" : " · \(strays.count) STRAY window(s) nobody parked")
-                    : "no virtual display attached",
+                    : "no virtual display",
             ]
             if let bounds = virtualDisplay.virtualScreenBounds { reply["screen"] = block(for: bounds) }
             return reply
@@ -1234,6 +1293,41 @@ final class CommandRouter {
         default:
             return ["ok": false, "error": "unknown display action '\(request.action ?? "")' — use acquire, release, or status"]
         }
+    }
+
+    // MARK: - Sequence plans
+
+    private func plan(_ request: Request) async throws -> [String: Any] {
+        guard let steps = request.steps, !steps.isEmpty else {
+            return ["ok": false, "error": "'plan' requires 'steps' — a JSON array of command steps"]
+        }
+        let profile: SequencePlan.Profile
+        if let raw = request.profile {
+            guard let parsed = SequencePlan.Profile(rawValue: raw) else {
+                return ["ok": false, "error": "unknown profile '\(raw)' — use ghost or visible"]
+            }
+            profile = parsed
+        } else {
+            profile = .ghost
+        }
+        let plan = SequencePlan(profile: profile, steps: steps)
+        let executor = PlanExecutor(
+            dispatch: { [weak self] req in
+                guard let self else { return ["ok": false, "error": "router deallocated"] }
+                if EmergencyStop.isHalted {
+                    return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true]
+                }
+                self.adrafinil.noteActivity()
+                return try await self.dispatch(req)
+            },
+            resolvePid: { [weak self] req in self?.resolvePid(req) },
+            engine: engine,
+            overlay: profile == .visible ? overlay : nil,
+            activityLog: activityLog,
+        )
+        planExecutor = executor
+        defer { planExecutor = nil }
+        return await executor.execute(plan)
     }
 
     /// Moves an app's primary window — onto the virtual display by default, or to an explicit
