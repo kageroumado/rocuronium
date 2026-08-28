@@ -117,9 +117,25 @@ nonisolated struct GhostReach {
             action, element, pid, &attempts,
             cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
         ) {
-            return await evidence.addingVisualEvidence(
+            let seen = await evidence.addingVisualEvidence(
                 delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
             )
+            // A posted click that moved neither focus nor pixels has demonstrably not landed,
+            // which is precisely the precondition the sting exists for. Without this the sting
+            // was unreachable for clicks: the posted branch returns evidence whenever the element
+            // has a frame, so `allowHardwareInput` was accepted and then never acted on.
+            // Measured case: SwiftUI `.onTapGesture` targets inside a ScrollView expose a frame,
+            // accept the posted event, and do nothing with it.
+            //
+            // Text is excluded on purpose. A retried click is at worst a second click, but a
+            // retried write lands the payload twice, and `contains` would then confirm the
+            // doubled text — the posted branch already declines to retry text for that reason.
+            let isText: Bool = if case .setText = action { true } else { false }
+            guard allowHardwareInput, !isText, seen.verdict == .noEffect else { return seen }
+            attempts.append(.init(
+                tentacle: .postedEvent,
+                outcome: "posted, but neither focus nor pixels moved — escalating to the sting",
+            ))
         }
 
         // Tentacle 3 — a referral, not an adapter. Web page content is the one surface OS input
@@ -349,8 +365,8 @@ nonisolated struct GhostReach {
             guard landed else {
                 // Falling through would type the same text again on top of a write that may
                 // have actually landed — doubling it. Read-back can differ from what we wrote
-                // for innocent reasons: AppKit's smart quotes turn "don't" into "don’t", and
-                // `"don’t".contains("don't")` is false. Only continue if the field is provably
+                // for innocent reasons: AppKit’s smart quotes turn "don’t" into "don’t", and
+                // `"don’t".contains("don’t")` is false. Only continue if the field is provably
                 // untouched; otherwise report what is actually there.
                 if readback != before {
                     attempts.append(.init(
@@ -366,6 +382,20 @@ nonisolated struct GhostReach {
                 attempts.append(.init(tentacle: .accessibility, outcome: "reported success, read-back unchanged"))
                 return nil
             }
+
+            // SwiftUI’s `.searchable` binds through its own observation channel,
+            // not NSTextField.delegate — AX setValue writes the backing store and
+            // the readback confirms, but the binding never fires and the search
+            // stays unfiltered. Undo the write so keystrokes don’t double it.
+            if element.role == "AXSearchField" || element.subrole == "AXSearchField" {
+                _ = element.setValue(before ?? "")
+                attempts.append(.init(
+                    tentacle: .accessibility,
+                    outcome: "read-back confirms, but search field bindings ignore AX setValue — undone, falling through to keystrokes",
+                ))
+                return nil
+            }
+
             attempts.append(.init(tentacle: .accessibility, outcome: "confirmed by read-back"))
             return await finish(
                 action, element, .accessibility, .confirmed, readback, nil,
