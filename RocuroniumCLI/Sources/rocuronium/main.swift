@@ -257,6 +257,9 @@ guard let reply = send(payload) else {
     FileHandle.standardError.write(Data("""
     rocuronium: could not reach Rocuronium.app.
     Is it running? The control socket is at \(socketPath)
+    If the app IS running, a debug build may have bound this path and then quit, leaving a
+    dead socket file — the running daemon rebinds within ~10s, so retry; or restart the
+    release daemon with Scripts/install-launchagent.sh.
 
     """.utf8))
     exit(1)

@@ -41,6 +41,7 @@ final class ControlServer {
 
     private var listeningDescriptor: Int32 = -1
     private var acceptThread: Thread?
+    private var watchdog: Task<Void, Never>?
     private let router: CommandRouter
 
     init(router: CommandRouter) {
@@ -55,7 +56,14 @@ final class ControlServer {
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true,
         )
+        try startListener()
+        startWatchdog()
+    }
 
+    /// Binds and listens, replacing any current listener. Factored out of `start()` so the
+    /// watchdog can re-run exactly this when the socket file is pulled out from under us.
+    private func startListener() throws {
+        let path = Self.socketPath
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ControlError.socketFailed(errno) }
 
@@ -111,12 +119,57 @@ final class ControlServer {
     }
 
     func stop() {
+        watchdog?.cancel()
+        watchdog = nil
         if listeningDescriptor >= 0 {
             close(listeningDescriptor)
             listeningDescriptor = -1
         }
         unlink(Self.socketPath)
         acceptThread = nil
+    }
+
+    // MARK: - Self-healing
+
+    /// The socket file can be pulled out from under a running daemon: a debug build doing its
+    /// own unlink-then-bind replaces the inode at our path, orphaning our listening
+    /// descriptor. Nothing points clients at us any more — every `connect` reaches the debug
+    /// build, and when it quits, the file it left behind refuses every connection instantly
+    /// (trial log 2026-09-03). So we watch: if the path's inode no longer matches the socket
+    /// we are listening on, we reclaim the path by binding fresh.
+    private func startWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard let self else { return }
+                await self.rebindIfReplaced()
+            }
+        }
+    }
+
+    private func rebindIfReplaced() {
+        guard listeningDescriptor >= 0 else { return }
+        var onDisk = Darwin.stat()
+        var onSocket = Darwin.stat()
+        guard fstat(listeningDescriptor, &onSocket) == 0 else { return }
+        // `withCString` disambiguates the `stat` *function* from the `stat` *type`.
+        let pathExists = Self.socketPath.withCString { stat($0, &onDisk) == 0 }
+        // Our listener still owns the path when the path exists and its inode is ours. Anything
+        // else — the file gone, or a different inode now sitting there — means our descriptor is
+        // orphaned and clients are reaching someone else (or a corpse).
+        let stillOurs = pathExists && onDisk.st_ino == onSocket.st_ino && onDisk.st_dev == onSocket.st_dev
+        guard !stillOurs else { return }
+
+        Self.log.notice("Control socket file at \(Self.socketPath, privacy: .public) was replaced or removed — rebinding")
+        close(listeningDescriptor)
+        listeningDescriptor = -1
+        acceptThread = nil
+        do {
+            try startListener()
+        } catch {
+            Self.log.error("Failed to rebind control socket: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - Accept loop
