@@ -92,7 +92,7 @@ enum MCPServer {
         ),
         tool(
             "apps",
-            "List running apps (the set a human would see in the Dock): name, bundle id, pid, frontmost, hidden. Read-only.",
+            "List running apps (the set a human would see in the Dock): name, bundle id, pid, frontmost, hidden, launchedAt (ISO 8601) and bundlePath. The last two distinguish two running instances of one bundle id — pick the pid by start time or path, never blindly. Read-only.",
             properties: [:], required: [],
         ),
         tool(

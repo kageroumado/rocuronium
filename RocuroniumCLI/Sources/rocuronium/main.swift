@@ -344,6 +344,9 @@ case "apps":
         let marks = [
             app["frontmost"] as? Bool == true ? "  (frontmost)" : "",
             app["hidden"] as? Bool == true ? "  (hidden)" : "",
+            // The last 8 chars of the ISO timestamp are HH:MM:SS — enough to tell two
+            // instances of one bundle apart.
+            (app["launchedAt"] as? String).map { "  (since \($0.suffix(9).prefix(8)))" } ?? "",
         ].joined()
         print("\(app["name"] ?? "?")  ·  \(app["bundleID"] ?? "?")  ·  pid \(app["pid"] ?? "?")\(marks)")
     }

@@ -764,13 +764,20 @@ final class CommandRouter {
         let rows = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .map { application -> [String: Any] in
-                [
+                var row: [String: Any] = [
                     "name": application.localizedName ?? "?",
                     "bundleID": application.bundleIdentifier ?? "?",
                     "pid": application.processIdentifier,
                     "frontmost": application.isActive,
                     "hidden": application.isHidden,
                 ]
+                // Start time and bundle path distinguish two instances of one bundle id — the
+                // pid alone was a coin flip that killed the wrong app once.
+                if let started = application.launchDate {
+                    row["launchedAt"] = ISO8601DateFormatter().string(from: started)
+                }
+                if let path = application.bundleURL?.path { row["bundlePath"] = path }
+                return row
             }
             .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
         return [
@@ -2089,11 +2096,23 @@ final class CommandRouter {
         let matches = exactBundle.isEmpty ? (exactName.isEmpty ? looseName : exactName) : exactBundle
         guard let match = matches.first else { throw RouterError.appNotRunning(name) }
         guard matches.count == 1 else {
-            throw RouterError.ambiguousApp(name, matches.map {
-                "'\($0.localizedName ?? "?")' (bundle \($0.bundleIdentifier ?? "?"), pid \($0.processIdentifier))"
-            })
+            throw RouterError.ambiguousApp(name, matches.map(Self.instanceDescription))
         }
         return match.processIdentifier
+    }
+
+    /// One running instance, spelled out enough to pick the right one: pid, bundle id, when
+    /// it launched, and where it lives on disk. Picking the wrong pid from a bare list killed
+    /// a live app once (trial log 2026-08-31); the start time and path are what disambiguate
+    /// two instances of the same bundle.
+    private static func instanceDescription(_ app: NSRunningApplication) -> String {
+        var parts = ["'\(app.localizedName ?? "?")' (bundle \(app.bundleIdentifier ?? "?"), pid \(app.processIdentifier)"]
+        if let started = app.launchDate {
+            parts[0] += ", started \(ISO8601DateFormatter().string(from: started))"
+        }
+        parts[0] += ")"
+        if let path = app.bundleURL?.path { parts.append("at \(path)") }
+        return parts.joined(separator: " ")
     }
 
 

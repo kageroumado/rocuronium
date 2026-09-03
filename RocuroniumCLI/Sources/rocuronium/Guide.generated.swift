@@ -179,7 +179,9 @@ Recording prompt; after a decline it returns instantly forever until
 `tccutil reset ScreenCapture glass.kagerou.rocuronium`.
 
 **`apps`** — the running apps a human would see in the Dock: `name`, `bundleID`, `pid`,
-`frontmost`, `hidden`.
+`frontmost`, `hidden`, `launchedAt`, and `bundlePath`. The last two tell two instances of
+one bundle id apart: pick the pid by start time or path rather than guessing, since
+guessing killed the wrong app once. The same detail is in the ambiguous-app refusal.
 
 **`windows --app X`** — `title`, `frame`, `minimized`, `main`, `display`,
 `onVirtualDisplay`, `stray` (on the virtual display, parked by nobody), and
