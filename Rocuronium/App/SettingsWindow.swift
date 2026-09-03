@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSToolbarDelegate {
     private var window: NSWindow?
 
     func show() {
@@ -12,16 +12,47 @@ final class SettingsWindowController {
             return
         }
 
-        let view = SettingsView()
-        let hosting = NSHostingController(rootView: view)
+        let hosting = NSHostingController(rootView: SettingsView())
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Rocuronium Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 520, height: 460))
+        window.title = "Settings"
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        let toolbar = NSToolbar(identifier: "RocuroniumSettings")
+        toolbar.delegate = self
+        window.toolbar = toolbar
+        window.setContentSize(NSSize(width: 620, height: 460))
+        window.minSize = NSSize(width: 520, height: 380)
+        window.isMovableByWindowBackground = true
+        window.isRestorable = false
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         self.window = window
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.window = nil }
+        }
+    }
+
+    // MARK: - NSToolbarDelegate
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbarDefaultItemIdentifiers(_: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.sidebarTrackingSeparator]
+    }
+
+    func toolbar(
+        _: NSToolbar,
+        itemForItemIdentifier _: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar _: Bool
+    ) -> NSToolbarItem? {
+        nil
     }
 }
 

@@ -16,9 +16,11 @@ struct RocuroniumApp: App {
             Image(nsImage: MenuBarGlyph.glyph(driving: engine.isDriving, badged: engine.strayCount > 0))
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView()
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { engine.showSettings() }
+                    .keyboardShortcut(",")
+            }
         }
     }
 }
