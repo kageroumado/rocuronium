@@ -101,18 +101,25 @@ enum MCPServer {
         tool(
             "wait",
             """
-            Block until an element appears (or with `gone`, disappears), polling accessibility. \
-            `timeout` caps at 25 seconds because the control socket cancels requests at 30 — a \
-            timed-out reply sets callAgain:true and is not an error to retry differently; just \
-            call again to keep waiting. `ok` mirrors whether the condition was met.
+            Block until a condition holds, polling accessibility. Give `label` (with optional \
+            `gone`) to watch one element appear or disappear, or `expect` — the same guard \
+            object a plan step uses — for the richer grammar: {type:'window-appears'|\
+            'window-vanishes', title}, {type:'text-visible'|'text-vanishes', label}, \
+            {type:'quiet', ms} (the window's tree holds still for ms — how "finished loading" \
+            is detected), or {type:'token-changed', token} (anything differs from a prior \
+            whole-window read token — "wait until something changes"). `timeout` caps at 25 \
+            seconds because the control socket cancels requests at 30 — a timed-out reply sets \
+            callAgain:true and is not an error to retry differently; just call again to keep \
+            waiting. `ok` mirrors whether the condition was met.
             """,
             properties: [
                 "app": ["type": "string"],
-                "label": ["type": "string", "description": "Substring of the element's label to watch for"],
+                "label": ["type": "string", "description": "Substring of the element's label to watch for (the sugar form)"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "gone": ["type": "boolean", "description": "Wait for the element to disappear instead"],
+                "expect": ["type": "object", "description": "A guard object to poll until it passes; supersedes label/gone"],
                 "timeout": ["type": "number", "description": "Seconds to block, 1–25 (default 10)"],
-            ], required: ["app", "label"],
+            ], required: ["app"],
         ),
         tool(
             "launch",
@@ -372,7 +379,7 @@ enum MCPServer {
             Execute a sequence of commands with postcondition guards and failure policies. \
             Each step is an existing verb (click, type, scroll, etc.) with an optional \
             'expect' guard (verdict, readback-contains, window-appears, window-vanishes, \
-            text-visible, text-vanishes) and 'onFail' policy (abort, continue, \
+            text-visible, text-vanishes, quiet, token-changed) and 'onFail' policy (abort, continue, \
             pause-for-human, or {\"fallback\": {step}}). Profile 'ghost' (default) stays \
             invisible; 'visible' shows bezel narration per step with human pacing. The \
             reply is one transcript with per-step verdicts. ���⌥⇧⎋ aborts mid-plan.

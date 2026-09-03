@@ -24,7 +24,8 @@ Observe
   windows    --app <a>                     titles and frames
   find       --app <a> [--label <t>] [--role <r>] [--ocr]   up to 20 elements with frames
   read       --app <a> [--label <t>] [--role <r>] [--since <token>] [--ocr]   text, or the delta
-  wait       --app <a> --label <t> [--role <r>] [--gone] [--timeout <s, max 25>]
+  wait       --app <a> (--label <t> [--role <r>] [--gone] | --for '<guard json>')
+                        [--timeout <s, max 25>]
   screenshot [--app <a> | --x --y --w --h] [--path <f.png>] [--since <token>]
   activity                                 the last 50 acting commands with verdicts
 
@@ -154,6 +155,16 @@ for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", 
 }
 // Kebab-case on the command line, camelCase on the wire.
 if let found = value(for: "until-text") { payload["untilText"] = found }
+// `wait --for` carries a JSON guard object, forwarded as `expect` — the same grammar a
+// plan step's `expect` uses.
+if let guardJSON = value(for: "for") {
+    guard let object = try? JSONSerialization.jsonObject(with: Data(guardJSON.utf8)) as? [String: Any] else {
+        FileHandle.standardError.write(Data(
+            "rocuronium wait: --for expects a JSON guard object, e.g. --for '{\"type\":\"quiet\",\"ms\":800}'\n".utf8))
+        exit(2)
+    }
+    payload["expect"] = object
+}
 // The path verbs speak in points: --from/--to are "x,y" strings there, while scroll's
 // --to is the numeric 0…1 fraction the loop below parses.
 let pathVerb = command == "move" || command == "drag"

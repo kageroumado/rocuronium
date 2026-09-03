@@ -398,6 +398,66 @@ actor Engine {
         }
     }
 
+    struct GuardWaitOutcome: Sendable {
+        let satisfied: Bool
+        let elapsedSeconds: Double
+        let polls: Int
+        /// The last guard evaluation's reason — what was true when the wait ended, satisfied
+        /// or timed out.
+        let reason: String
+    }
+
+    /// Polls a `PlanGuard` until it passes or the timeout runs out — the general form of
+    /// `waitFor`, so `wait` speaks the same postcondition grammar `plan` does. The guard is
+    /// evaluated against an empty step reply, so the step-relative guards (verdict,
+    /// readback-contains) have nothing to match and only the state guards are meaningful here.
+    func waitForGuard(pid: pid_t?, guard predicate: PlanGuard, timeout: Duration) async throws -> GuardWaitOutcome {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let clock = ContinuousClock()
+        let start = clock.now
+        var polls = 0
+        var reason = ""
+        while true {
+            polls += 1
+            let result = await predicate.evaluate(reply: [:], pid: pid, engine: self)
+            reason = result.reason
+            let elapsed = seconds(start.duration(to: clock.now))
+            if result.passed {
+                return GuardWaitOutcome(satisfied: true, elapsedSeconds: elapsed, polls: polls, reason: reason)
+            }
+            if elapsed >= seconds(timeout) || Task.isCancelled || EmergencyStop.isHalted {
+                return GuardWaitOutcome(satisfied: false, elapsedSeconds: elapsed, polls: polls, reason: reason)
+            }
+            try? await Task.sleep(for: Constants.waitPollInterval)
+        }
+    }
+
+    /// Whether the primary window's tree holds still across `interval`: two walks that agree.
+    /// The `quiet` guard's mechanism — a view that is still mutating has not finished loading.
+    func treeIsQuiet(pid: pid_t, over interval: Duration) async -> Bool {
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else { return false }
+        let first = TextDump.dump(root: window)
+        guard !first.truncated else { return false }
+        try? await Task.sleep(for: interval)
+        guard let again = primaryWindow(of: AXElement(pid: pid)) else { return false }
+        let second = TextDump.dump(root: again)
+        guard !second.truncated else { return false }
+        return TreeDelta.compute(from: first.nodes, to: second.nodes).isEmpty
+    }
+
+    /// Whether the primary window's tree now differs from the walk `token` recorded — the
+    /// `token-changed` guard's mechanism. Nil when the token is unknown, evicted, belongs to
+    /// another process, or was not a whole-window read (a labelled-subtree token cannot be
+    /// honestly diffed against the whole window).
+    func treeChangedSinceToken(_ token: String, pid: pid_t) -> Bool? {
+        guard let snapshot = observations.snapshot(for: token), snapshot.pid == pid,
+              snapshot.scopeKey == "@window|*", !snapshot.truncated else { return nil }
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else { return nil }
+        let now = TextDump.dump(root: window)
+        guard !now.truncated else { return nil }
+        return !TreeDelta.compute(from: snapshot.nodes, to: now.nodes).isEmpty
+    }
+
     struct Readiness: Sendable {
         let ready: Bool
         let windows: Int

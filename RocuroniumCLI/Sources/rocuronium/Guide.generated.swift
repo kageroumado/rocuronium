@@ -230,12 +230,18 @@ window or scope, a truncated walk, wholesale change) **degrades to the full repl
     1 change(s) in window 'Rocuronium Demo Stage' since ax95119-3d1a92d3
     token ax95119-e5f74fff
 
-**`wait --app X --label Y [--role R] [--gone] [--timeout S]`** — polls for an element by
-label (`--gone`: for its disappearance). Default 10 s, at most 25 because the socket
-cancels requests at 30: a timed-out reply says `callAgain: true`, so loop rather than
-asking for a longer block. `ok` mirrors `satisfied`. The right primitive after `launch`,
-after a click that opens a dialog, before reading a slow view. It watches labels and
-values only; for windows and verdicts, `plan` guards (§8) have the richer grammar.
+**`wait --app X (--label Y [--role R] [--gone] | --for '<guard json>') [--timeout S]`** —
+blocks until a condition holds. `--label` (with `--gone` for disappearance) is the sugar
+form; `--for` takes the same guard object a `plan` step's `expect` uses (§8), which adds
+`window-appears`/`window-vanishes` (by title), `text-visible`/`text-vanishes`, and two
+guards written for waiting: `{"type":"quiet","ms":800}` blocks until the window's tree
+holds still for that long — how "the view finished loading" is actually detected, since
+there is no done event — and `{"type":"token-changed","token":"ax…"}` blocks until the
+tree differs from a prior whole-window `read` token ("wait until anything changes").
+Default 10 s, at most 25 because the socket cancels requests at 30: a timed-out reply says
+`callAgain: true`, so loop rather than asking for a longer block. `ok` mirrors
+`satisfied`. The right primitive after `launch`, after a click that opens a dialog, before
+reading a slow view.
 
 **`screenshot [--app X | --x --y --w --h] [--path F] [--since T]`** — hands the pixels to
 you; your model does the looking. `--app` captures the app's primary window through a
@@ -441,6 +447,8 @@ arguments plus an optional `expect` guard and an `onFail` policy.
 | `readback-contains` | the step's read-back contains `text` |
 | `window-appears` / `window-vanishes` | a window matching `title` exists / is gone |
 | `text-visible` / `text-vanishes` | an element matching `label` is in / gone from the tree |
+| `quiet` | the window's tree holds still for `ms` (default 600) — the view settled |
+| `token-changed` | the window's tree differs from the walk observation `token` recorded |
 
 `onFail`: `abort` (default; returns the transcript so far), `continue`, `pause-for-human`
 (halts as if ⌃⌥⇧⎋ were pressed and waits for the popover's resume), or

@@ -178,6 +178,9 @@ final class CommandRouter {
         /// empty tree, in addition to) walking accessibility — the way to read an app whose
         /// AX tree is empty or lying. Needs Screen Recording.
         var ocr: Bool?
+        /// For `wait`: a `PlanGuard` to poll until it passes — the same postcondition grammar
+        /// `plan` steps use. Supersedes the `--label`/`--gone` sugar when present.
+        var expect: PlanGuard?
 
         /// For `plan`: the step list.
         var steps: [SequencePlan.Step]?
@@ -1194,10 +1197,11 @@ final class CommandRouter {
     /// socket cancels requests at 30 s; rather than racing that timeout and losing, the verb
     /// stays under it and tells the caller to loop.
     private func wait(_ request: Request) async throws -> [String: Any] {
-        guard let label = request.label else {
+        guard request.label != nil || request.expect != nil else {
             return [
                 "ok": false,
-                "error": "'wait' requires --label <text> to watch for",
+                "error": "'wait' requires --label <text> to watch for, or --for '<guard json>' "
+                    + "(window-appears/window-vanishes/text-visible/text-vanishes/quiet/token-changed)",
                 "presence": presenceBlock(),
             ]
         }
@@ -1210,6 +1214,26 @@ final class CommandRouter {
                 "presence": presenceBlock(),
             ]
         }
+        // The guard grammar, when given. `--app` is optional for it — only the state guards
+        // need a pid, and they report honestly when none resolved.
+        if let predicate = request.expect {
+            let pid = resolvePid(request)
+            let outcome = try await engine.waitForGuard(
+                pid: pid, guard: predicate, timeout: .seconds(seconds),
+            )
+            return [
+                "ok": outcome.satisfied,
+                "satisfied": outcome.satisfied,
+                "callAgain": !outcome.satisfied,
+                "elapsedSeconds": (outcome.elapsedSeconds * 10).rounded() / 10,
+                "polls": outcome.polls,
+                "summary": outcome.satisfied
+                    ? "\(outcome.reason) after \(String(format: "%.1f", outcome.elapsedSeconds))s"
+                    : "timed out after \(Int(seconds))s — \(outcome.reason); call again to keep waiting",
+                "presence": presenceBlock(),
+            ]
+        }
+        let label = request.label!
         let pid = try resolve(request)
         let gone = request.gone == true
         let outcome = try await engine.waitFor(

@@ -14,6 +14,12 @@ enum PlanGuard: Decodable, Sendable {
     case textVisible(label: String)
     /// An element with matching text must NOT be in the AX tree.
     case textVanishes(label: String)
+    /// The primary window's tree must hold still for this many milliseconds — how "the view
+    /// finished loading" is actually detected, since there is no "done" event to wait on.
+    case quiet(ms: Int)
+    /// The primary window's tree must differ from the walk this observation token recorded —
+    /// "wait until anything at all changes", the general form of text-visible.
+    case tokenChanged(token: String)
 
     struct Result: Sendable {
         let passed: Bool
@@ -21,8 +27,12 @@ enum PlanGuard: Decodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, verdict, text, title, label
+        case type, verdict, text, title, label, ms, token
     }
+
+    /// The default settle window for `quiet` — long enough that a mid-load pause between two
+    /// bursts of tree mutation does not read as "settled", short enough to be responsive.
+    private static let defaultQuietMilliseconds = 600
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -40,10 +50,14 @@ enum PlanGuard: Decodable, Sendable {
             self = .textVisible(label: try container.decode(String.self, forKey: .label))
         case "text-vanishes":
             self = .textVanishes(label: try container.decode(String.self, forKey: .label))
+        case "quiet":
+            self = .quiet(ms: try container.decodeIfPresent(Int.self, forKey: .ms) ?? Self.defaultQuietMilliseconds)
+        case "token-changed":
+            self = .tokenChanged(token: try container.decode(String.self, forKey: .token))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: container,
-                debugDescription: "unknown guard type '\(type)' — use verdict, readback-contains, window-appears, window-vanishes, text-visible, text-vanishes",
+                debugDescription: "unknown guard type '\(type)' — use verdict, readback-contains, window-appears, window-vanishes, text-visible, text-vanishes, quiet, token-changed",
             )
         }
     }
@@ -116,6 +130,32 @@ enum PlanGuard: Decodable, Sendable {
                 reason: found
                     ? "text '\(label)' still present"
                     : "text '\(label)' gone from the AX tree",
+            )
+
+        case let .quiet(ms):
+            guard let pid else {
+                return Result(passed: false, reason: "no pid resolved — cannot watch the tree")
+            }
+            let settled = await engine.treeIsQuiet(pid: pid, over: .milliseconds(ms))
+            return Result(
+                passed: settled,
+                reason: settled
+                    ? "the window's tree held still for \(ms)ms"
+                    : "the window's tree is still changing",
+            )
+
+        case let .tokenChanged(token):
+            guard let pid else {
+                return Result(passed: false, reason: "no pid resolved — cannot diff the tree")
+            }
+            guard let changed = engine.treeChangedSinceToken(token, pid: pid) else {
+                return Result(passed: false, reason: "token '\(token.prefix(24))' is unknown, evicted, or was not a whole-window read")
+            }
+            return Result(
+                passed: changed,
+                reason: changed
+                    ? "the window's tree changed since \(token.prefix(24))"
+                    : "the window's tree is unchanged since \(token.prefix(24))",
             )
         }
     }
