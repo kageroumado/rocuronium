@@ -446,6 +446,13 @@ enum MCPServer {
         ),
     ]
 
+    /// The verbs that accept `--window` to scope to one of an app's windows. Added to their
+    /// schemas centrally so the argument filter accepts it without repeating the property in
+    /// nine definitions.
+    private static let windowScopedTools: Set<String> = [
+        "find", "read", "click", "type", "wait", "screenshot", "move", "drag", "park",
+    ]
+
     private static func tool(
         _ name: String, _ description: String,
         properties: [String: Any], required: [String]
@@ -457,6 +464,12 @@ enum MCPServer {
             properties["pid"] = [
                 "type": "number",
                 "description": "Target this process id directly (overrides 'app') — for when two running instances share a name or bundle id",
+            ]
+        }
+        if windowScopedTools.contains(name), properties["window"] == nil {
+            properties["window"] = [
+                "type": "string",
+                "description": "Scope to the app window whose title contains this substring; ambiguity is refused with the titles listed",
             ]
         }
         return [

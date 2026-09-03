@@ -61,6 +61,8 @@ Meta
 
 Options
   --pid <n>                 target a process directly; overrides --app
+  --window <title substr>   scope to one window (find/read/click/type/wait/screenshot/
+                            move/drag/park); ambiguity is refused with the titles listed
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
   --observe                 on click/shortcut/menu, diff the window's AX tree across the
                             action and report what changed (walks a large tree it would skip)
@@ -150,7 +152,7 @@ if command == "plan" {
         exit(2)
     }
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.

@@ -181,6 +181,10 @@ final class CommandRouter {
         /// For `wait`: a `PlanGuard` to poll until it passes — the same postcondition grammar
         /// `plan` steps use. Supersedes the `--label`/`--gone` sugar when present.
         var expect: PlanGuard?
+        /// A window title substring, to scope a verb to one of an app's windows rather than
+        /// its primary window: `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`,
+        /// `drag`, `park`. Ambiguity is refused with the titles listed.
+        var window: String?
 
         /// For `plan`: the step list.
         var steps: [SequencePlan.Step]?
@@ -573,11 +577,11 @@ final class CommandRouter {
         // walk found nothing and Screen Recording can supply an answer — an AX-dead app then
         // reads instead of returning an empty list.
         if request.ocr == true {
-            return try await ocrFindReply(pid: pid, query: request.label)
+            return try await ocrFindReply(pid: pid, query: request.label, window: request.window)
         }
-        let outcome = try await engine.find(pid: pid, query: request.label, role: request.role)
+        let outcome = try await engine.find(pid: pid, query: request.label, role: request.role, windowTitle: request.window)
         if outcome.elements.isEmpty, ScreenCapture.isPermitted,
-           let fallback = try? await ocrFindReply(pid: pid, query: request.label) {
+           let fallback = try? await ocrFindReply(pid: pid, query: request.label, window: request.window) {
             return fallback
         }
         return [
@@ -594,8 +598,8 @@ final class CommandRouter {
     /// `find` over OCR rows: text lines with screen-point frames, each stamped
     /// `groundedBy: ocr` so the caller knows these came from pixels, not the tree. Filtered
     /// by the query substring when one is given, capped at 20 like the tree find.
-    private func ocrFindReply(pid: pid_t, query: String?) async throws -> [String: Any] {
-        var rows = try await engine.ocrRows(pid: pid)
+    private func ocrFindReply(pid: pid_t, query: String?, window: String? = nil) async throws -> [String: Any] {
+        var rows = try await engine.ocrRows(pid: pid, windowTitle: window)
         if let needle = query?.lowercased(), !needle.isEmpty {
             rows = rows.filter { $0.text.lowercased().contains(needle) }
         }
@@ -630,17 +634,18 @@ final class CommandRouter {
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         if request.ocr == true {
-            return try await ocrReadReply(pid: pid)
+            return try await ocrReadReply(pid: pid, window: request.window)
         }
         let outcome = try await engine.read(
             pid: pid, label: request.label, role: request.role, since: request.since,
+            windowTitle: request.window,
         )
         // An empty walk on an app that exposes no tree is exactly where OCR earns its place —
         // fall back rather than reply "nothing here" about a window full of text. Only for the
         // whole-window read, and never when a diff was requested (a `--since` diff of a full
         // window against nothing is not what OCR answers).
         if outcome.delta == nil, outcome.lines.isEmpty, request.label == nil, request.since == nil,
-           ScreenCapture.isPermitted, let fallback = try? await ocrReadReply(pid: pid) {
+           ScreenCapture.isPermitted, let fallback = try? await ocrReadReply(pid: pid, window: request.window) {
             return fallback
         }
         // A usable diff replaces the lines wholesale — sending both would defeat the verb.
@@ -689,11 +694,11 @@ final class CommandRouter {
     /// `read` over OCR rows: the window's on-screen text in reading order, each line stamped
     /// `groundedBy: ocr`. The answer for a window whose accessibility tree is empty or lying —
     /// no token or delta, because there is no tree walk to diff against.
-    private func ocrReadReply(pid: pid_t) async throws -> [String: Any] {
-        let rows = try await engine.ocrRows(pid: pid)
+    private func ocrReadReply(pid: pid_t, window: String? = nil) async throws -> [String: Any] {
+        let rows = try await engine.ocrRows(pid: pid, windowTitle: window)
         return [
             "ok": true,
-            "scope": "window (OCR)",
+            "scope": window.map { "window '\($0)' (OCR)" } ?? "window (OCR)",
             "groundedBy": "ocr",
             "lines": rows.map { row -> [String: Any] in
                 [
@@ -785,7 +790,7 @@ final class CommandRouter {
         let locator: Engine.Locator = if let x = request.x, let y = request.y {
             .point(x: x, y: y)
         } else if let label = request.label {
-            .named(label, role: request.role)
+            .named(label, role: request.role, window: request.window)
         } else {
             .focused
         }
@@ -1094,6 +1099,7 @@ final class CommandRouter {
             easing: easing,
             button: button,
             restoreCursor: request.restore == true,
+            windowTitle: request.window,
         )
 
         // The read-back is the system's own cursor position: the gesture is confirmed when
@@ -1238,6 +1244,7 @@ final class CommandRouter {
         let gone = request.gone == true
         let outcome = try await engine.waitFor(
             pid: pid, label: label, role: request.role, gone: gone, timeout: .seconds(seconds),
+            windowTitle: request.window,
         )
         return [
             // ok mirrors the condition so scripts can branch on the exit code directly.
@@ -1560,7 +1567,7 @@ final class CommandRouter {
             }
             isDriving = true
             defer { isDriving = false }
-            let move = try await engine.moveWindow(pid: pid, to: point)
+            let move = try await engine.moveWindow(pid: pid, windowTitle: request.window, to: point)
             var reply = parkReply(for: move)
             // Moving a parked window back off the virtual display is the un-park: it
             // decrements the auto-lease that parked it, which self-releases when drained.
@@ -1600,7 +1607,7 @@ final class CommandRouter {
 
         isDriving = true
         defer { isDriving = false }
-        let move = try await engine.moveWindow(pid: pid, to: destination)
+        let move = try await engine.moveWindow(pid: pid, windowTitle: request.window, to: destination)
         var reply = parkReply(for: move)
         if move.landed {
             virtualDisplay.recordPark(
@@ -1700,7 +1707,10 @@ final class CommandRouter {
         // someone else's pixels at exactly the right size — a correct-looking wrong answer.
         if request.app != nil {
             let pid = try resolve(request)
-            let frame = try await engine.windowFrame(pid: pid)
+            // A named window that cannot be resolved refuses here rather than widening to the
+            // primary window or the whole display — the measured hazard was a screenshot
+            // silently capturing a bystander's windows.
+            let frame = try await engine.windowFrame(pid: pid, title: request.window)
             let capture = try await ScreenCapture.windowImage(
                 ownedBy: pid,
                 near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),

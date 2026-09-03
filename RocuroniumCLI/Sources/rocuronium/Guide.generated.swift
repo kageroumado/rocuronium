@@ -146,6 +146,11 @@ always know which mechanism answered:
 - `--x <n> --y <n>` hit-tests the point. For a press, a hit on a plain group ascends to
   the enclosing pressable control (SwiftUI wraps buttons this way).
 - Neither given: the app's **focused element**. That is where `type` goes by default.
+- `--window <title substring>` scopes the verb to one of the app's windows instead of its
+  primary one — the answer to two "Untitled" windows, a sheet, or a second document. It
+  works on `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`, `drag`, and
+  `park`; ambiguity is refused with the matching titles listed, and a `screenshot` that
+  cannot be scoped to the named window refuses rather than widening to the display.
 
 **Ambiguity is refused, never guessed.** A label matching several elements returns the
 candidates with their roles; the next move is `--role`, a longer label, or coordinates.
@@ -157,8 +162,9 @@ sorted first is a coin flip on somebody's data.
 the screen corner, and matching one turned "wait for the page to load" into a hit on a
 History-menu entry. Menus belong to `menu` and `shortcut`, which resolve them properly.
 
-**No window locator yet.** Verbs act on the app's main window; `read --label` scopes to
-one element's subtree. `windows --app` lists titles and frames for aiming coordinates.
+**Window scope.** Without `--window` a verb acts on the app's primary window (and
+`read --label` on one element's subtree). `--window <title substring>` picks a different
+one; `windows --app` lists the titles to choose from.
 
 ## 4. Observing
 
