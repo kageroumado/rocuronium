@@ -19,16 +19,31 @@ enum MCPServer {
     private static let tools: [[String: Any]] = [
         tool(
             "status",
-            "Presence and capability report: whether a human is at the keyboard, whether the display can be seen, whether the cursor may be taken. Every action reply also carries this.",
+            """
+            Presence and capability report: whether a human is at the keyboard, whether the \
+            display can be seen, whether the cursor may be taken, whether the engine is \
+            halted (⌃⌥⇧⎋), and what holds the display awake. Every action reply also carries \
+            the presence block. Cheap and safe to poll.
+            """,
+            properties: [:], required: [],
+        ),
+        tool(
+            "diag",
+            "What each permission check actually returns (Accessibility, Screen Recording) and what a real 16×16 capture attempt does. Run before guessing at permission state.",
             properties: [:], required: [],
         ),
         tool(
             "find",
             """
-            List interactive elements of a running app via accessibility. Give `label` to \
-            search by visible text/placeholder (labels first; element *values* as the \
-            fallback, so text seen in `read` output is findable); give `role` alone to list \
-            all elements of a role; omit both to list editable fields.
+            List elements of a running app via accessibility: up to 20 rows of {role, \
+            label, value, depth, frame}, frames in screen points with a top-left origin. \
+            Give `label` to search by case-insensitive substring of the element's title, \
+            description, or placeholder (element *values* are the fallback tier, so text \
+            seen in `read` output is findable); give `role` alone to list every element of \
+            that role; omit both to list editable fields. An icon-only control with no \
+            title reports the label 'button' (its role description), so list those by role \
+            and aim by frame. `truncated:true` means the walk stopped, not that nothing \
+            else exists.
             """,
             properties: [
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
@@ -111,7 +126,16 @@ enum MCPServer {
         ),
         tool(
             "type",
-            "Type text into an app without taking the cursor or focus. Confirmed by read-back; control characters are refused unless `submit` is true, so a newline cannot send a message by accident. Pass empty text explicitly to clear a field.",
+            """
+            Put text into a field without taking the cursor or focus. Through accessibility \
+            this SETS the field's value to `text`, replacing what was there, confirmed by \
+            read-back; when that write is refused or ignored it falls through to keystrokes, \
+            which insert at the caret — the reply's `tentacle` says which happened. Targets \
+            the focused element unless `label` is given. Control characters are refused \
+            unless `submit` is true, so a newline cannot send a message by accident. Pass \
+            empty text explicitly to clear a field. Electron accepts unicode keystrokes and \
+            ignores keycodes.
+            """,
             properties: [
                 "app": ["type": "string"],
                 "text": ["type": "string"],
@@ -124,18 +148,25 @@ enum MCPServer {
         tool(
             "click",
             """
-            Click an element by label or screen point, ghost-first (no cursor movement). The \
-            reply's verdict says what observably happened; `cursorMovedByUs` reports any \
-            takeover. When a label matches several roles (button and menu item sharing a \
-            title), pass `role` to disambiguate. A point that lands on a plain group ascends \
-            to the enclosing pressable control (SwiftUI wraps buttons this way).
+            Click an element by label or screen point (points, top-left origin), ghost-first: \
+            an accessibility press, then a posted click only when the element exposes no press \
+            action, then hardware only with `allowHardwareInput`. The verdict says what \
+            observably happened; an accepted press that verifies `noEffect` does not escalate, \
+            because pixels miss small consequences (a counter changing elsewhere in the \
+            window measured as pixelDelta 0) — confirm with `read` + `since` instead of \
+            retrying. Window-count and whole-window pixel evidence are added automatically. \
+            When a label matches several roles, pass `role`. A point on a plain group ascends \
+            to the enclosing pressable control (SwiftUI wraps buttons this way). When the \
+            accessibility tree has no match, vision grounding (OCR, then a local VLM if \
+            installed) resolves the label to coordinates and the reply says `groundedBy`.
             """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string"],
                 "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
-                "x": ["type": "number"], "y": ["type": "number"],
-                "allowHardwareInput": ["type": "boolean"],
+                "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
+                "y": ["type": "number"],
+                "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
             ], required: ["app"],
         ),
         tool(
@@ -254,7 +285,9 @@ enum MCPServer {
             before/after is reported — a flyout appearing is a window appearing. Caveats \
             measured: hover lands on whatever window is TOPMOST at the point (occlusion is \
             refused when `app` is given); WebKit/WKWebView pages ignore motion while their \
-            app is not frontmost — `activate` first for web hover.
+            app is not frontmost — `activate` first for web hover. With `app` given and the \
+            target not frontmost, the verb activates it first (a focus change, reported). \
+            What the hover revealed is not read back: take a `read` token first and diff after.
             """,
             properties: [
                 "end": ["type": "string", "description": "Destination \"x,y\" in screen points (top-left origin)"],
@@ -337,7 +370,7 @@ enum MCPServer {
         tool(
             "activity",
             """
-            The session's recent agent actions with their evidence verdicts (last 200, \
+            The session's recent agent actions with their evidence verdicts (last 50, \
             newest last) — the same record the human sees in the menu bar. Read-only. Also \
             reports `halted`: true means the human pressed ⌃⌥⇧⎋ and every acting/perceiving \
             verb is refused until they resume from the Rocuronium menu bar — do not retry, \
@@ -364,7 +397,8 @@ enum MCPServer {
             """
             Capture pixels for the calling model to look at: an app's window \
             (occlusion-proof, works while parked), an explicit region, or the main display. \
-            Returns the PNG path. Every reply carries an observation `token`; pass it back \
+            Returns the PNG path, pixel width/height, and `rect` in screen points. Every \
+            reply carries an observation `token`; pass it back \
             as `since` on the next capture of the same target to get only the CHANGED \
             regions as small crops (count, screen rects, and paths) instead of the frame — \
             read a 300x200 popover crop, not the window. Large vertical translation is \

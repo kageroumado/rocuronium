@@ -84,12 +84,15 @@ All verbs are exposed as MCP tools with the same names and arguments.
 
 | | Verbs |
 |---|---|
-| **Observe** | `status` `read` `find` `apps` `windows` `wait` `screenshot` |
-| **Act** | `type` `click` `scroll` `shortcut` `menu` `key` `launch` `activate` |
+| **Observe** | `status` `diag` `apps` `windows` `find` `read` `wait` `screenshot` `activity` |
+| **Act** | `type` `click` `key` `shortcut` `menu` `scroll` `statusitem` `launch` `activate` |
 | **Cursor** | `move` `drag` (hardware — takes the real cursor, presence-gated) |
-| **Orchestrate** | `plan` (multi-step with guards) `statusitem` `activity` |
+| **Orchestrate** | `plan` (multi-step with guards) |
 | **Isolate** | `display` (virtual display lease) `park` (move window to it) |
-| **Meta** | `guide` `diag` `demo` (practice window) |
+| **Meta** | `guide` `demo` (practice window) `request-capture` `mcp` |
+
+One coordinate frame everywhere: points, origin at the top-left of the main display.
+`rocuronium --help` lists every flag; `rocuronium guide` is the full contract.
 
 ## Safety model
 
@@ -113,6 +116,7 @@ Resume is a button in the menu bar popover — no socket command can clear the h
 
 - `rocuronium guide` — the full operator manual (also at [`Docs/GUIDE.md`](Docs/GUIDE.md))
 - [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) — system design (11 sections, stable numbering)
+- [`Docs/INTERFACE-PLAN.md`](Docs/INTERFACE-PLAN.md) — what the agent-facing surface should become next
 
 ## License
 

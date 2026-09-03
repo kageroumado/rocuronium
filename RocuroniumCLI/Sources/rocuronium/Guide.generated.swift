@@ -3,390 +3,552 @@ enum Guide {
     static let text = ##"""
 # Operator manual
 
-The full reference for every verb, verdict, and edge case. This ships inside the
-binary (`rocuronium guide`), so an agent holding nothing but the CLI can learn the
-contract.
+The reference for an agent driving this Mac through rocuronium. It ships inside the CLI
+(`rocuronium guide`), so a session holding nothing but the binary can learn the contract.
+Kept in `Docs/GUIDE.md`; `Scripts/embed-guide.sh` bakes it into the CLI at release.
 
-## The shape of things
+Two words carry the whole design. **Ghost** delivery reaches a process through
+accessibility and per-process posted events: it never moves the cursor and never changes
+the frontmost app, so it is safe while a human is typing. **The sting** is real hardware
+input on the console: it takes the cursor, it is opt-in per call, and it is refused while
+someone is at the Mac. Everything below is a verb on one side of that line or the other,
+and every reply says which side it was delivered on and what observably happened.
 
-`Rocuronium.app` holds the Accessibility grant and does all the work; the `rocuronium`
-CLI (at `Rocuronium.app/Contents/Resources/rocuronium`) is a thin client that speaks
-JSON over an authenticated local socket. `rocuronium mcp` serves the same verbs as MCP
-tools. Add `--json` to any command for the full reply.
+## The loop
 
-    status · diag · guide                          what can I do right now
-    apps · windows · find · read · wait            observe (read-only)
-    launch · activate                              lifecycle
-    type · click · scroll · shortcut · menu · key  act
-    move · drag                                    cursor paths (hardware)
-    statusitem                                     menu bar status items
-    plan                                           multi-step sequences with guards
-    activity                                       what happened this session
-    display · park · screenshot                    isolation + pixels
+    status                                   can I see, is anyone here, am I halted
+    read --app X                             what is on screen, as text, with a token
+    find --app X --label Y [--role button]   which element, where
+    click / type / key / menu / scroll       act, ghost first
+        → verdict                            confirmed · noEffect · unverifiable
+    read --app X --since <token>             what changed, and only that
+    wait --app X --label Z                   block until the world catches up
 
-Targeting: `--app` takes a name or a bundle id. Two running apps with the same name (a
-debug and a release build, say) are refused with both candidates listed — pass the
-bundle id. Two instances of the same *bundle id* (`open -n`) have exactly one
-unambiguous address: `--pid`, which every app-taking verb accepts and which overrides
-`--app`. A label that matches elements of several roles is likewise refused; pass
-`--role` (e.g. `--role button`) to say which one you meant. Label matching tries labels
-first and element *values* as the fallback, so text you saw in `read` output is findable
-and scrollable-to even when it exists only as a value.
+One coordinate frame, one JSON shape, one ambiguity rule, and a verdict on every act.
+The sections follow the loop: contract, coordinates, targeting, observing, acting,
+vision, cursor paths, plans, then the rails (presence, refusals, isolation) and the
+environment facts that trip agents.
 
-## Evidence: the three verdicts
+## 1. The reply contract
 
-Every acting verb replies with a `verdict`. Trust it over the exit code, over the
-summary, over your expectations.
+Every command answers one JSON object (`--json` prints it; MCP returns it verbatim).
+`ok` is the exit code: `true` exits 0. Acting verbs carry these fields:
+
+| field | meaning |
+|---|---|
+| `verdict` | `confirmed` · `noEffect` · `unverifiable` — see below. Trust it over `ok`, over `summary`, over your expectations. |
+| `tentacle` | which delivery mechanism landed the action: `displayWake`, `accessibility`, `postedEvent`, `appAutomation`, `hardwareInput` |
+| `attempts[]` | each tentacle tried, with `outcome` — why it fell through or how it verified. Read this when the verdict surprises you. |
+| `readback` | the value read back after the act, when the target exposes one |
+| `pixelDelta` | fraction of pixels that changed in the watched rectangle, when captured |
+| `cursorMovedByUs` / `focusTakenByUs` | the two ghost promises, as measurements. `cursorMovedByUser` is a human hand on the mouse, not a warning. |
+| `presence` | `{state, mayTakeCursor, canSee, offConsole, advice}` — on every reply, so a human arriving mid-task is visible on the next answer |
+| `referral` | `{channel, reason, advice}` when no tentacle can reach the target and something else can (web content wants `refrax-ctl`, CDP, or Safari scripting). A referral means "compose that tool yourself". |
+| `suggestion` | a machine-readable next move on a refusal (the occlusion refusal suggests `park`) |
+| `groundedBy` | `detector` or `vlm` when the target's coordinates came from vision rather than the accessibility tree (§6) |
+
+**The tentacles**, in the order they are tried. Each is verified before the next is
+attempted; a return code alone never counts.
+
+| # | wire name | mechanism | cursor / focus | verified by |
+|---|---|---|---|---|
+| 0 | `displayWake` | wake a sleeping display first | — | display awake |
+| 1 | `accessibility` | `AXSetValue`, `AXPress`, `AXShowMenu` | never | read-back, window count, pixels |
+| 2 | `postedEvent` | `CGEvent.postToPid` with a unicode payload | never | read-back, focus delta, pixels |
+| 3 | `appAutomation` | a referral, never an adapter | never | names the channel |
+| 4 | `hardwareInput` | the sting: real events on the console | **takes both** | read-back, pixels, occlusion pre-check |
+
+**The three verdicts.**
 
 - **confirmed** — something observably changed: a read-back matched what was written, a
-  scroll bar moved, an element's frame moved, pixels changed in a window that was
-  provably still, the target's on-screen **window count** moved (the read-back for
-  presses whose consequence is a window or sheet appearing or vanishing — File ▸ New,
-  Cancel, Escape on a dialog, a close button — which element-rect and pixel evidence are
-  structurally blind to), or the target process exited after a quit-shaped press. Proceed.
-- **noEffect** — the call reported success and *nothing observably changed*. This is the
-  most important verdict in the system: it is how WebKit's lies, background AppKit
-  menus, and ignored wheel events surface. Do not retry the same call harder; change
-  mechanism (see the referral, activate the target, or park it).
+  scroll bar or element frame moved, pixels changed in a window that was provably still,
+  the target's on-screen window count moved (File ▸ New, Cancel, Escape on a dialog, a
+  close button), or the process exited after a quit-shaped press. Proceed.
+- **noEffect** — the call reported success and nothing observable changed. This is the
+  verdict the system exists for: WebKit's `AXSetValue` lies, background AppKit menus
+  never validate, wheel events are ignored. Do not retry the same call harder. Change
+  mechanism: read the referral, `activate` the target, `park` it, or verify through the
+  tree (below).
 - **unverifiable** — the target exposes nothing to read back and pixels could not
-  testify (no capture permission, or the window animates on its own). **Do not retry
-  blindly**: the action may well have landed, and a retry types it twice or presses it
-  twice. Verify through another channel first — `read` the state, take a `screenshot`.
+  testify. **Do not retry blindly**: the action may have landed, and a retry types it
+  twice. Verify through another channel first.
 
-Replies also carry `attempts` (each reach tentacle tried and why it fell through),
-`cursorMovedByUs` / `focusTakenByUs` (the promises, as measurements), and sometimes a
-`referral` — a structured pointer to the channel that *can* reach a target the ghost
-tentacles cannot (web page content wants `refrax-ctl`, CDP, or Safari's own scripting). A
-referral means "compose that tool yourself"; rocuronium deliberately does not shell out.
+**Pixels are blind to small consequences.** Measured on the demo stage: a ghost click on
+"Tap Target" reads `noEffect` with `pixelDelta: 0`, because the button's own pixels
+return to rest and the counter that changed is one glyph in a 560×720 window, under the
+noise floor. `read --since` saw it exactly: `value changed: 'clicks: 0' → 'clicks: 1'`.
+When a verdict on a press is anything but `confirmed`, the tree diff is the cheap,
+deterministic second opinion. Take a `read` token before acting when you will need it.
 
-## Presence: who else is at this Mac
+Two example replies, abbreviated:
 
-Every reply includes a `presence` block: `state` (`present` / `idle` / `away` /
-`unknown`), `canSee`, `mayTakeCursor`, and a sentence of advice. Unknown is treated as
-present, because that is the cautious reading.
+    click --app Rocuronium --label "Tap Target" --json
+    { "ok": false, "verdict": "noEffect", "tentacle": "accessibility",
+      "attempts": [ {"tentacle":"displayWake","outcome":"alreadyAwake"},
+                    {"tentacle":"accessibility","outcome":"press accepted"} ],
+      "pixelDelta": 0, "readback": "", "cursorMovedByUs": false, "focusTakenByUs": false,
+      "presence": {"state":"present","mayTakeCursor":false,"canSee":true,"offConsole":false,
+                   "advice":"A person is using this Mac right now. Stay on the ghost tentacles…"},
+      "summary": "click → AXButton 'Tap Target' [accessibility] NO EFFECT" }
 
-What gates on it:
+    type --app Rocuronium --label "Type Here" --text hello --json
+    { "ok": true, "verdict": "confirmed", "tentacle": "accessibility",
+      "attempts": [ …, {"tentacle":"accessibility","outcome":"confirmed by read-back"} ],
+      "readback": "hello", "summary": "setText(\"hello\") → AXTextField 'Type Here' [accessibility] ok" }
 
-- **`activate`** — refused unless `away` (or `confirm: true`): raising an app takes
-  focus out of a human's hands. Even when permitted, it can honestly fail: macOS
-  cooperative activation sometimes declines to promote an **accessory (menu-bar /
-  LSUIElement) app** while a regular app holds focus — the reply reads back the truth
-  ("did not land — X is still frontmost") rather than claiming success. `open` on an
-  accessory app never activates it either. When an un-activatable app must be frontmost
-  (WebKit content ignores cursor motion in inactive windows), retry after the focused
-  app is quit or deactivated, or drive the app through its own automation channel.
-- **`move` / `drag`** — same gate as `activate`: they always take the real cursor
-  (there is no ghost tentacle for motion — measured), so they are refused unless `away` or
-  confirmed, and refused outright while the screen is locked or the action point is
-  covered by another app's window.
-- **Hardware input** (`allowHardwareInput`) — the advice tells you whether taking the
-  cursor is acceptable; the engine additionally refuses it outright while the screen is
-  locked or the aim point is covered by another app's window.
-- **`launch`** — refused while the frontmost app is fullscreen unless `confirm`: macOS
-  switches Spaces when a new window appears on another one, so launching an app while
-  someone is in a fullscreen game throws them out of it even though ghost tentacles never
-  touched the cursor.
-- Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor and
-  never change the frontmost app, so they are fine while a human is typing.
+Errors are `{ "ok": false, "error": "<sentence>" }`, plus `presence` on most, `suggestion`
+when there is a next move, and `halted: true` after ⌃⌥⇧⎋. Refusals name the flag that
+would permit the act (§10).
 
-## The visible agent: overlay, ⌃⌥⇧⎋, and the activity log
+## 2. Coordinates
 
-Cursor-taking work is visible work. Whenever a command opts into hardware input, and for
-`move`/`drag` always (they take the real cursor by construction), the app shows the
-presence overlay: a whisper of a tint over the desktop (readable from across the room,
-never enough to hide anything), an opaque bezel that narrates each action in
-evidence-verdict language with the session's elapsed time (drag it wherever it bothers
-you least — the position is remembered), and the jellyfish escorting the cursor while a
-command is in flight, then drifting home to perch beside the bezel. Before each hardware
-click a sigil charges at the aim point for ~600 ms — that wind-up is a deliberate
-interrupt window, not decoration. The overlay lingers ~3 s after a cursor-taking action
-(the user saw what happened), ~15 s after ghost-tentacle commands, then fades. A "show
-overlay for every action" toggle in the menu bar popover extends it to ghost commands too.
+One frame everywhere: **points** in the global display space, origin at the **top-left of
+the main display**, x to the right, y downward. A display to the right of the main one
+starts at x = main width; a display above it has negative y. `find` and `windows` frames,
+`--x --y`, `--from --to --via`, `foundAt`, `screenshot`'s `rect` and `regions[].rect`, the
+demo stage at (720, 200): all the same frame. The only pixels are a PNG's `width` and
+`height`, which are 2× the point size on a Retina display. A rect block is always
+`{x, y, w, h}`.
 
-**The cursor stays negotiable.** During a `move`/`drag`, a brushed mouse is absorbed —
-the glide bends elastically and eases back on path, still landing on the destination —
-while sustained deliberate motion (about a quarter second of it) makes the gesture yield:
-the button is released, the reply says "yielded to the hand on the mouse", and the cursor
-is yours. ⌃⌥⇧⎋ remains the hard stop.
+## 3. Targeting
 
-**⌃⌥⇧⎋ is the emergency stop.** While the overlay is visible, Ctrl+Option+Shift+Escape
-halts the engine mid-action: a cursor trace aborts within one sample (a held drag button is
-released where it stopped), typing stops mid-character, walks bail out. After the halt,
-every acting and perceiving verb is refused with "halted by the human (⌃⌥⇧⎋) — resume from
-the Rocuronium menu bar"; `status` and `activity` still answer and report
-`halted: true`. **Resume is a button in the menu bar popover and nothing else** — no
-socket verb can clear the halt, so an agent cannot un-halt itself. If your verbs are
-suddenly refused with that message, stop and wait for the human; do not retry and do not
-look for a workaround.
+**Which app.** `--app` takes a localized name or a bundle id; bundle ids match exactly and
+win. Two running apps with the same name (a debug and a release build) are refused with
+both listed: pass the bundle id. Two instances of one bundle id (`open -n`) have exactly
+one address, `--pid`, which every app-taking verb accepts and which overrides `--app`.
 
-`activity` returns the session's recent actions (last 200) with their verdicts — the
-same record the human sees in the menu bar popover, so both sides of the session are
-reading one log.
+**Which element.** Three locators, and no verb falls back from one to another, so you
+always know which mechanism answered:
 
-## Display asleep is blindness; screen locked is not
+- `--label <text>` — case-insensitive substring match, in one walk of the app's windows.
+  An element's label is the first non-empty of title, description, placeholder, and role
+  description; its value is the fallback tier, tried only when no label matched, so text
+  you saw in `read` output is findable even when it exists only as a value. Because role
+  description is the last fallback, an **icon-only button reports the label `button`**;
+  `find --role button` lists them with frames, and `read` shows their symbol names when
+  the app exposes them as descriptions (Finder's sidebar icons read `home`, `clock`, `move`).
+- `--role <r>` narrows a label match when several roles share the text (a button and a
+  menu item both named "Restart"). `button` and `AXButton` both work.
+- `--x <n> --y <n>` hit-tests the point. For a press, a hit on a plain group ascends to
+  the enclosing pressable control (SwiftUI wraps buttons this way).
+- Neither given: the app's **focused element**. That is where `type` goes by default.
 
-When the display sleeps, **every app's accessibility tree collapses** — windows vanish,
-fields disappear, and a naive tool concludes "this app exposes nothing" and reports
-confident nonsense. Rocuronium refuses instead: perception verbs answer "I cannot see"
-and acting verbs wake the display first (tentacle 0).
+**Ambiguity is refused, never guessed.** A label matching several elements returns the
+candidates with their roles; the next move is `--role`, a longer label, or coordinates.
+Substring matching means `delete` can name three buttons, and acting on whichever
+sorted first is a coin flip on somebody's data.
 
-A locked screen with an awake display is harmless: full trees are readable and ghost
-input works. Only hardware input is refused there — synthetic keystrokes would land in
-the login window's password field.
+**Menu items never match label queries.** `find`, `click`, `type`, `scroll`, `wait`, and
+`read --label` skip the menu bar; a closed menu item's frame is a meaningless 0×0 rect at
+the screen corner, and matching one turned "wait for the page to load" into a hit on a
+History-menu entry. Menus belong to `menu` and `shortcut`, which resolve them properly.
 
-## The refusal catalog
+**No window locator yet.** Verbs act on the app's main window; `read --label` scopes to
+one element's subtree. `windows --app` lists titles and frames for aiming coordinates.
 
-Refusals are rails, not failures. Each one names a flag, and passing the flag is a
-deliberate, legitimate act when the situation genuinely calls for it:
+## 4. Observing
 
-- **`submit`** (`type`) — a newline or tab in a composer sends the message or moves
-  focus. Refused by default so text can never submit by accident; pass `submit: true`
-  when sending is the point. An absent `text` is likewise refused — pass `""` explicitly
-  to clear a field, because clearing is unrecoverable.
-- **`confirm`** (`shortcut`, `menu`) — every app's menu bar includes the Apple menu, so
-  `cmd+shift+q` resolves to "Log Out" from any target. Items that end the session are
-  refused only under **Apple ▸** (an app menu's "Restart to Update" restarts the app,
-  not the Mac); data-destroying items (trash, erase) are refused wherever they appear.
-  The consequence is named; `confirm: true` presses anyway. Use `resolveOnly: true` to
-  audit what a shortcut or path would press, before the fact.
-- **`confirm`** (`activate`) — see presence above.
-- **`allowHardwareInput`** (`type`, `click`) — permits the sting, the one mechanism that
-  moves the real cursor. Legitimate when nobody is present and the ghost tentacles have
-  demonstrably failed; the evidence will say `cursorMovedByUs: true` and the reply
-  refuses if another window covers the target (see the park pattern).
-- **lease** (`park`) — parking always happens under a lease, so the display cannot
-  vanish out from under the window and strand it where no one can see it. With no lease
-  in force, `park` takes an **auto-lease** (reason recorded from the command, id in the
-  reply, visible in `display status`) that releases itself when its last parked window
-  is returned or closes; teardown sweeps parked windows home first, always. Attaching
-  the display is visually silent on the real screen — measured with a present observer:
-  no flash, no window reflow — so parking needs no presence gate; the recorded reason,
-  `display status`, and the menu bar keep it traceable. `display status` also lists
-  **strays** — windows on the virtual display nobody parked (a saved frame restored
-  there, a second window of a parked app); release warns about them and sweeps them to
-  the main screen.
-- **`timeout` > 25** (`wait`) — the socket cancels requests at 30 s. A timed-out wait
-  replies `callAgain: true`; loop on it rather than asking for a longer block.
+**`status`** — `trusted` (Accessibility granted), `presence`, `idleSeconds`,
+`screenLocked`, `displayAsleep`, `canSee`, `mayTakeCursor`, `advice`, `halted`,
+`virtualDisplayActive`, `displayHold` (`adrafinil` · `internal` · `none`). Cheap, and it
+never pins the display awake, so a monitoring loop may poll it.
 
-## The park-then-hardware pattern
+**`diag`** — what each permission check actually returns and what a real 16×16 capture
+attempt does. Run it before guessing at TCC state. **`request-capture`** fires the Screen
+Recording prompt; after a decline it returns instantly forever until
+`tccutil reset ScreenCapture glass.kagerou.rocuronium`.
 
-The sting clicks whatever window is topmost at the coordinate — unlike ghost tentacles, which
-reach a process through any occlusion. So a hardware click on an occluded target is
-refused with the occluder named. The reliable sequence when hardware input is truly
-needed:
+**`apps`** — the running apps a human would see in the Dock: `name`, `bundleID`, `pid`,
+`frontmost`, `hidden`.
 
-    park --app X (auto-leases the display) → act with --allow-hardware-input
-    → park back (the reply carried the window's previous position; the auto-lease
-      releases itself and the display goes away)
+**`windows --app X`** — `title`, `frame`, `minimized`, `main`, `display`,
+`onVirtualDisplay`, `stray` (on the virtual display, parked by nobody), and
+`onAnyDisplay: false` for a window stranded where no display reaches.
 
-Windows on the virtual display occupy none of the pixels a human sees, which satisfies
-both the occlusion check and the politeness contract.
+**`find --app X [--label Y] [--role R]`** — up to **20** matches, each `{role, label,
+value, depth, frame}`, plus `elementsVisited` and `truncated`. With only `--role`, every
+element of that role; with neither, every editable field. The walk is bounded (60 000
+elements, 18 s wall clock) and truncation is reported: "nothing found" and "stopped
+looking" are different answers.
 
-## Reading and scrolling, honestly
+    find --app Finder --role button
+    AXButton  'button'  @(1448,474)  depth 7
+    AXButton  'button'  @(1448,698)  depth 7
+    …
+    5 shown · 994 elements visited
 
-`read` dumps an app's text through accessibility — orders of magnitude cheaper than a
-screenshot, and it works behind a locked screen. Bounded (elements, characters, and an
-18 s wall clock) with truncation always reported: "stopped looking" and "nothing there"
-are different answers. A web area that yields no text is reported as **hidden, not
-blank**, with a referral to the channel that can read the DOM.
+**`read --app X [--label Y] [--role R] [--since T]`** — the app's text through
+accessibility: static text, field values, button titles, checked states, indented by
+depth, with every interactive element's role shown so you know it can be acted on.
+Orders of magnitude cheaper than a screenshot, and it works behind a locked screen.
+Budgets: 20 000 elements, 30 000 characters, 4 000 per value, depth 40, 18 s; the reply
+carries `truncationReason` when one bit. A web area that yields no text is reported as
+**hidden, not blank**, with a referral to the channel that can read the DOM.
 
-**Pay for the change, not the frame.** Every `read` and `screenshot` reply carries an
-observation `token`; pass it back as `--since <token>` and the reply becomes the delta
-against that observation. For `read` that is a structural diff — elements appeared
-(grouped under their topmost appeared ancestor: "appeared: AXPopover 'Save options'
-containing [AXButton 'Cancel', AXButton 'Save']"), elements vanished, and values old →
-new — instead of the window's whole text. For `screenshot` it is changed-region crops:
-the count, each region's screen rect, and a small PNG per region, so the caller reads a
-300×200 popover crop instead of the frame; a large vertical translation is reported as
-"content scrolled ~N pt" with an edge-strip crop of just the newly revealed content.
-The daemon keeps a few recent observations per target (LRU-bounded); a token that
-cannot be diffed honestly — evicted, another process, a different window or scope, a
-resized capture, a truncated walk, or wholesale change — **degrades to the full reply
-with `diffNote` naming why**, never to a silently wrong diff.
+    read --app Rocuronium
+    Rocuronium Demo Stage  [AXWindow]
+        Demo Stage
+        Tap Target  [AXButton]
+        clicks: 0
+        Demo Switch: 0  [AXCheckBox]
+        Type Here  [AXTextField]
+        …
+    read window 'Rocuronium Demo Stage' · 985 chars · 151 elements
+    token ax95119-3d1a92d3
 
-`scroll` prefers `label`: the app is asked to bring that element into view
-(`AXScrollToVisible`), confirmed by the element's frame moving — measured working on
-Chromium web content, and attempted whether or not the element advertises the action.
-But for content genuinely **off-screen**, do not expect it: SwiftUI accepts the call and
-does nothing, and AppKit list rows refuse it (measured on both) — the deterministic
-off-screen paths are `--to` and `--until-text`. Posted wheel events are ignored by every
-toolkit, so a bare `--dy` will usually earn an honest `noEffect`. `--to 0..1` writes the
-scroll bar where one exists — found by attribute or, for the overlay scrollers modern
-AppKit hides from the attribute, by role walk. Safari's web content exposes a writable
-bar (measured: `--to` round-trips confirmed); Chromium and Electron never expose one.
+**Pay for the change, not the frame.** Pass the token back as `--since` and the reply is
+the structural delta: elements appeared (grouped under their topmost appeared ancestor,
+"appeared: AXPopover 'Save options' containing [AXButton 'Cancel', AXButton 'Save']"),
+elements vanished, and values old → new. The daemon keeps a few recent observations per
+target; a token that cannot be diffed honestly (evicted, another process, a different
+window or scope, a truncated walk, wholesale change) **degrades to the full reply with
+`diffNote` naming why**, never to a silently wrong diff.
 
-`scroll --until-text <string>` is the deterministic form for content the tree does not
-expose: each step captures the target's window (window-true, occlusion-proof), OCRs it
-locally, and stops the moment the string is legible — no over- or undershoot, because
-the loop terminates on sight rather than on a guessed distance. Needs Screen Recording.
-The stepper is the scroll bar where one exists (step sized from the bar's thumb with
-overlap, so a screenful can never skip past the target between frames); `--dy`'s sign
-sets the direction. The reply carries `foundAt` — the sighting's screen rectangle, ready
-for `click --x --y` at its center — and `callAgain: true` when the step budget ran out
-with document left. Two frames with identical legible text end the loop honestly: the
-end of the content, or a toolkit that ignores the mechanism (the referral says which
-channel can reach it).
+    read --app Rocuronium --since ax95119-3d1a92d3
+    value changed: AXStaticText: 'clicks: 0' → 'clicks: 1'
+    1 change(s) in window 'Rocuronium Demo Stage' since ax95119-3d1a92d3
+    token ax95119-e5f74fff
 
-`wait` polls for an element (`--gone` for disappearance) and is the right primitive
-after `launch`, after a click that opens a dialog, or before reading a slow view.
+**`wait --app X --label Y [--role R] [--gone] [--timeout S]`** — polls for an element by
+label (`--gone`: for its disappearance). Default 10 s, at most 25 because the socket
+cancels requests at 30: a timed-out reply says `callAgain: true`, so loop rather than
+asking for a longer block. `ok` mirrors `satisfied`. The right primitive after `launch`,
+after a click that opens a dialog, before reading a slow view. It watches labels and
+values only; for windows and verdicts, `plan` guards (§8) have the richer grammar.
 
-Label queries (`find`, `click`, `type`, `scroll`, `wait`, `read --label`) **never match
-menu items** — the menu bar is excluded from label walks. Menu items are the right match
-for nothing except `menu` and `shortcut`, which resolve them properly; a closed menu
-item's frame is a meaningless 0×0 rect at the screen corner, and matching one turned
-"wait for the page to load" into a false positive on a History-menu entry (measured).
+**`screenshot [--app X | --x --y --w --h] [--path F] [--since T]`** — hands the pixels to
+you; your model does the looking. `--app` captures the app's primary window through a
+window filter (occlusion-proof, works while parked), a region captures visible pixels,
+and with neither the main display is captured. Reply: `path`, `width`/`height` (pixels), `rect`
+(points), `token`, `window`. Captures land in the app's `captures` folder and are swept
+after 24 h; `--path` must end in `.png`, must not exist, and must be under Desktop,
+Downloads, Pictures, `/tmp`, or that folder. With `--since` the reply is changed-region
+crops (`regions[] = {rect, path}`, `changedFraction`), or "content scrolled ~N pt" with an
+edge-strip crop of what was revealed, or `changed: false`; a wholesale change returns
+the full frame with a `diffNote`. `--since` and `--path` are mutually exclusive. Needs
+Screen Recording; refused while the display sleeps, because that frame would be black.
 
-## Keys that are neither text nor shortcuts
+**`activity`** — the last 50 acting commands with verdicts, the same record the human
+sees in the menu bar popover, plus `halted`. How a session re-orients after a context
+reset: both sides of the table are reading one log.
 
-`key` posts a bare named key — escape, return, tab, space, delete, arrows, home/end,
-page up/down — with optional modifiers (`shift+tab`, `cmd+down`). It exists for the gap
-the other input verbs leave: committing a focused field wants a plain Return, which
-`type` (text only) and `shortcut` (menu items only) cannot send. Per-pid, no cursor, no
-focus change. Measured reach: keys land in the app's **focused text control** — `key
-return` in a focused address bar commits navigation — but sheet key-equivalents do
-**not** actuate on the per-pid channel (`key escape` will not cancel a save sheet, even
-frontmost; key-equivalent dispatch runs its own event handling). Two ways through:
-press the sheet's button by label (`click --label Cancel --role button` — the ghost
-answer, measured working), or `key --allow-hardware-input` — a **session-level**
-keystroke on the console pipeline, the channel human key-equivalents arrive on. The
-session form is gated like every hardware verb (refused while a human is present unless
-`confirm`, refused while locked) and additionally requires the target frontmost,
-because it lands in global focus.
-Electron/Chromium ignore posted keycodes entirely. An `unverifiable` verdict means
-exactly that, not "retry".
+## 5. Acting
 
-## Cursor paths: move and drag
+Every acting verb is ghost-first and replies with the §1 contract. `--allow-hardware-input`
+permits the sting as a last resort on `type`, `click`, and `key`; §10 says when that is
+legitimate.
+
+**`type --app X --text T [--label Y] [--submit]`** — through accessibility, `type` **sets
+the field's value to `T`**, replacing what was there, and confirms by read-back. When
+that write is refused or ignored, it falls through to keystrokes, which **insert at the
+caret** after a posted click on the field; `tentacle` in the reply says which happened,
+so read it before assuming either semantics. A value that changed but does not match
+(smart quotes) is reported `noEffect` and never retried, to avoid duplicating text.
+Search fields are special: the read-back confirms but SwiftUI's binding ignores the
+write, so it is undone and keystrokes are used. Rails: absent `--text` is refused (pass
+`""` explicitly to clear, because clearing is unrecoverable); a newline or tab is refused
+without `--submit`, because a newline in a composer sends. Electron accepts unicode
+keystrokes and ignores keycodes, so editing operations (clear, select-all) are
+accessibility writes there, never keystrokes.
+
+**`click --app X (--label Y [--role R] | --x N --y N)`** — accessibility press (or
+show-menu, for menu buttons and the remote controls System Settings panes host) →
+posted click → sting if permitted. An **accepted press ends the ladder** even when it
+verifies as `unverifiable` or `noEffect`; escalation to posted or hardware clicks
+happens only when the element exposes no press action. So a `noEffect` click does not
+mean "try harder", it means "look elsewhere for the consequence": `read --since`, the
+window list, a region screenshot. Window-count and whole-window pixel evidence are added
+automatically for the dialog-opening and button-elsewhere cases.
+
+**`key --app X --keys K [--allow-hardware-input] [--confirm]`** — a bare named key with
+optional modifiers: `escape`, `return`, `enter`, `tab`, `space`, `delete`,
+`forwarddelete`, `left/right/up/down`, `home`, `end`, `pageup`, `pagedown`;
+`shift+tab`, `cmd+down`. The gap between `type` (text only) and `shortcut` (menu items
+only). Per-pid, no cursor, no focus. Measured reach: lands in the app's focused text
+control (`return` in an address bar commits), but **sheet key-equivalents do not
+actuate on the per-pid channel**: `escape` will not cancel a save sheet. Two ways
+through: press the sheet's button by label (`click --label Cancel --role button`), or
+`key --allow-hardware-input`, a session-level keystroke on the console pipeline, gated
+like every hardware verb and additionally requiring the target frontmost because it
+lands in global focus. Electron and Chromium ignore posted keycodes entirely.
+
+**`shortcut --app X --keys cmd+a [--resolve-only] [--confirm]`** — resolves the **menu
+item** bound to those keys and presses it. No keystroke is sent, which is why it works
+on Chromium; it also means a shortcut with no menu item cannot be delivered this way
+(use `key`). The reply names `menuItem` ("Edit ▸ Select All"). Dependable on the
+frontmost app; in the background, AppKit apps never validate their menus, so the press
+returns success and does nothing, foretold by `menuItemReportedDisabled` in the reply.
+Verification is selection read-back, then a window-true pixel diff that may only
+confirm, never refute (copy changes no pixels).
+
+**`menu --app X --path "File > Export" [--resolve-only] [--confirm]`** — the same press
+by title path (`▸` works; case-insensitive; a trailing "…" is optional). Reaches every
+command with no shortcut. A path naming a submenu is refused with its items listed.
+
+Both share the hazard rail: every app's menu bar includes the Apple menu, so `cmd+shift+q`
+resolves to Log Out from any target. Session-ending items are refused only under
+**Apple ▸**; data-destroying items (trash, erase) wherever they appear. `--confirm`
+presses anyway; `--resolve-only` audits what would be pressed, before the fact.
+
+**`scroll --app X …`** — four forms, honest about what each mechanism can do:
+
+- `--label Y` asks the app to bring that element into view (`AXScrollToVisible`),
+  confirmed by the element's frame moving. Works on Chromium web content. For content
+  genuinely **off-screen** do not expect it: SwiftUI accepts and does nothing, AppKit
+  list rows refuse (measured on both).
+- `--to 0..1` writes the vertical scroll bar where one exists, found by attribute or, for
+  the overlay scrollers modern AppKit hides, by role walk. Safari's web content exposes
+  a writable bar; Chromium and Electron never do.
+- `--dy N [--dx N]` posts wheel events, which every toolkit measured ignores. A bare
+  `--dy` usually earns an honest `noEffect`; positive `dy` means "reveal content below".
+- `--until-text S [--dy ±1]` is the deterministic form for content the tree does not
+  expose: each step captures the target's window, OCRs it locally, and stops the moment
+  the string is legible. The stepper is the scroll bar, sized from its thumb with overlap
+  so a screenful can never skip the target; `--dy`'s sign is the direction. Twelve steps
+  per call, then `callAgain: true` with document left. The reply's `foundAt` rect is
+  ready for `click --x --y` at its center. Two identical frames end the loop honestly:
+  the end of the content, or a toolkit ignoring the mechanism (the referral says which
+  channel can reach it). Needs Screen Recording.
+
+**`statusitem --app X [--label Y] [--press]`** — lists an app's menu bar status items
+(`items[] = {role, label, frame}`), or presses one by `AXPress`, cursor-free. Status
+items live in a separate extras bar no window walk reaches, so this is the only ghost
+path to a MenuBarExtra. Evidence is the target's window count, because the press call
+itself can block in menu tracking and return an error for a press that fully worked.
+System Settings caveat: the opened menu belongs to the pane's appex, so the count can
+miss it and the verdict stays `unverifiable` for a menu that visibly opened; verify with
+a region screenshot. Such a menu is not dismissible by any ghost mechanism; choose an
+item, quit the host, or use a session-level Escape when the hardware gates are passed.
+
+**`launch --app X [--confirm]`** — starts an app without taking focus and returns once its
+accessibility tree answers: `ready: true` means "you can drive it now", not "the process
+started" (20 s budget; 5 s when it was already running, reported `alreadyRunning`).
+Takes a name, a bundle id, or a full path. Refused while the frontmost app is fullscreen
+unless `--confirm`: a new window arriving switches Spaces and throws the human out of
+their game. `park` the target instead.
+
+**`activate --app X [--confirm]`** — brings an app forward on purpose, the one thing
+ghost verbs promise never to do, so it is presence-gated like hardware input. Read-back
+says whether it landed: macOS sometimes declines to promote an accessory (menu-bar,
+LSUIElement) app while a regular app holds focus, and the reply says so rather than
+claiming success. Use it when background delivery is not dependable: AppKit menus,
+WebKit hover.
+
+## 6. When the tree is empty: vision
+
+About a sixth of popular macOS apps expose no usable accessibility tree. Rocuronium's
+answer has three tiers, tried only when the previous one fails.
+
+1. **Accessibility** — everything above. Free, exact, works behind a lock.
+2. **Detector + OCR** — when `click --label` or `type --label` finds nothing in the tree,
+   the engine captures the target's window and looks for the label as legible text; a
+   hit becomes coordinates, delivered through the normal tentacles by hit-test, and the
+   reply says `groundedBy: "detector"`. Needs Screen Recording. A YOLO detector for
+   icon-shaped controls is being trained; until it ships, this tier is OCR only.
+3. **Local VLM** — when OCR cannot match (icon-only targets, loose phrasing), a local
+   grounding model (Holo 3.1 4B via MLX) turns the instruction plus the window into a
+   point, `groundedBy: "vlm"`. Loaded on first use, evicted after five idle minutes.
+   The model is a download from the Settings window (⌘, in the popover), never bundled;
+   without it the tier is skipped.
+
+Vision-grounded coordinates are less certain than tree-resolved ones: the `groundedBy`
+field is your cue to verify with a `screenshot --since` or a `read --since`. When all
+three fail, the error names it: "'Send' (AX tree empty, vision grounding found nothing)".
+
+For your own eyes there is `screenshot` (§4), and for text the tree does not carry,
+`scroll --until-text` (§5). There is no verb yet that returns OCR'd text with rectangles
+directly; that is on the plan.
+
+## 7. Cursor paths: move and drag
 
 `move` glides the **real** cursor along a path and leaves it on the destination; `drag`
 does the same with a button held (down at `--from`, up at `--to`). There is no ghost
 variant and there will not be one: per-pid posted motion is dropped wholesale by the
-window server (measured 2026-08-20 — tracking areas, SwiftUI `onHover`, WebKit hover,
-content drags and title-bar drags all stayed silent, background and frontmost alike).
-Because these verbs always take the physical cursor, they are presence-gated like
-`activate`: refused while a human is present unless `--confirm`. When `--app` is given
-and the target is not frontmost, `drag` activates it and posts a click at the start
-point to absorb the activating click — the entire activate → focus → drag sequence is
-atomic inside the daemon, not three round-trips.
+window server (tracking areas, SwiftUI `onHover`, WebKit hover, content and title-bar
+drags all stayed silent, background and frontmost alike). So both take the physical
+cursor and are presence-gated like `activate`: refused while a human is present unless
+`--confirm`, refused while the screen is locked, refused when another app's window
+covers the action point and `--app` was given.
 
-A bare start→end `move` follows a naturally bowed arc — a randomized few-percent
-perpendicular bow, because human motion is never a ruler line; `drag` paths stay exact
-(their geometry is semantic — sliders, selections), and explicit waypoints are honored
-as given. The path can also be a smooth curve **through** `--via` waypoints — built for
-hover-intent chains: glide onto the nav item, pause, then curve down into the flyout
-without leaving the hover region. `--duration` (seconds) and `--easing` shape the timing;
-the default is a distance-based duration with ease-in-out, which is what human motion
-looks like to velocity-watching UI. The destination can be an element
-(`--app X --label Y`) instead of coordinates.
+    move  (--to x,y | --app X --label Y [--role R]) [--from x,y] [--via "x,y x,y…"]
+          [--duration s] [--easing linear|ease-in|ease-out|ease-in-out] [--restore] [--confirm]
+    drag  --from x,y --to x,y [--via …] [--button left|right] [--app X] [--duration s]
+          [--easing e] [--restore] [--confirm]
 
-Evidence: the cursor's actual end position is read back (`confirmed` means the pointer
-provably stands on the destination), and with `--app` the reply carries the target's
-window count before/after — a flyout or menu appearing is a window appearing, the
-consequence element-evidence is blind to. Measured caveats, all reported in replies:
-hover lands on whatever window is **topmost** at the point (occlusion refused when
-`--app` is given — park or activate first); WebKit/WKWebView pages ignore all motion
-while their app is inactive (`activate` before web hover); a drag aborted by a mid-path
-lock or cancel releases its button where it stopped, never leaving it held.
+**Hover is `move`.** The destination can be an element (`--app X --label Y`); the cursor
+stays there unless `--restore`, because a hover only means something while it lasts. A
+bare start→end `move` follows a slightly bowed arc, because human motion is never a
+ruler line; `drag` paths stay exact (sliders, selections), and `--via` waypoints are
+honored as given, so a nav-tab-then-flyout chain is one curve that never leaves the
+hover region. `--duration` is 0.05–10 s; the default is distance-based with ease-in-out,
+which is what velocity-watching UI expects.
 
-## Sequence plans
+**Evidence.** The cursor's actual end position is read back (`confirmed` means the
+pointer provably stands on `plannedEnd`), and with `--app` the target's window count
+before/after is reported: a flyout or tooltip window appearing is a window appearing,
+the consequence element evidence is blind to. What the hover *revealed* is not read for
+you; take a `read` token first and diff after, until that is automatic.
 
-`plan` executes a list of steps as one daemon-side operation — no MCP round-trips
-between steps, so the world cannot change between them. Each step is an existing verb
-with its arguments, plus an optional postcondition guard and a failure policy.
+**Measured caveats, all reported in replies.** Hover lands on whatever window is topmost
+at the point. WebKit/WKWebView pages ignore all motion while their app is inactive, so
+`activate` before web hover. With `--app` given and the target not frontmost, **both
+verbs activate it first** (a focus change, reported as such), and `drag` also posts a
+click at the start point to absorb the activating click, as one atomic sequence inside
+the daemon. A brushed mouse is absorbed (the glide bends and eases
+back on path); about a quarter second of deliberate motion makes the gesture yield: the
+button is released, the reply says "yielded to the hand on the mouse". A drag aborted
+mid-path releases its button where it stopped, never leaving it held.
 
-    { "command": "plan", "profile": "ghost", "steps": [
+## 8. Sequence plans
+
+`plan` executes a list of steps as one daemon-side operation, no round-trips between
+steps, so the world cannot change between them. Each step is an existing verb with its
+arguments plus an optional `expect` guard and an `onFail` policy.
+
+    rocuronium plan --file steps.json      (or pipe JSON to stdin)
+    { "profile": "ghost", "steps": [
       { "command": "click", "app": "TextEdit", "label": "Save",
-        "expect": { "type": "window-vanishes", "title": "Save" },
-        "onFail": "abort" },
+        "expect": { "type": "window-vanishes", "title": "Save" }, "onFail": "abort" },
       { "command": "type", "app": "TextEdit", "text": "done",
-        "expect": { "type": "readback-contains", "text": "done" } }
-    ]}
+        "expect": { "type": "readback-contains", "text": "done" } } ] }
 
-**Guards** (the `expect` field) — evaluated after each step:
-
-| type | checks |
+| guard `type` | passes when |
 |---|---|
-| `verdict` | the step's own evidence verdict matches `verdict` |
-| `readback-contains` | the step's readback contains `text` |
-| `window-appears` | a window matching `title` exists (AX query) |
-| `window-vanishes` | a window matching `title` is gone |
-| `text-visible` | an element matching `label` is in the AX tree |
-| `text-vanishes` | an element matching `label` is gone |
+| `verdict` | the step's verdict equals `verdict` |
+| `readback-contains` | the step's read-back contains `text` |
+| `window-appears` / `window-vanishes` | a window matching `title` exists / is gone |
+| `text-visible` / `text-vanishes` | an element matching `label` is in / gone from the tree |
 
-A step without `expect` always passes; its evidence is still in the transcript.
+`onFail`: `abort` (default; returns the transcript so far), `continue`, `pause-for-human`
+(halts as if ⌃⌥⇧⎋ were pressed and waits for the popover's resume), or
+`{"fallback": {step}}` (one alternative step, one level deep). Profiles: `ghost`
+(default) forces hardware input off per step, no overlay, no pacing; `visible` narrates
+each step in the bezel with 500 ms between steps. The reply is one transcript: per-step
+`verdict`, `guardPassed`, `guardReason`, `policy`, fallback outcome. ⌃⌥⇧⎋ aborts mid-plan.
+Steps cannot yet consume an earlier step's reply (a `foundAt` feeding a click).
 
-**Failure policies** (the `onFail` field, default `abort`):
+## 9. Presence: who else is at this Mac
 
-- `abort` — stop, return the transcript up to the failure.
-- `continue` — note the failure, proceed to the next step.
-- `pause-for-human` — halt via ⌃⌥⇧⎋ and wait for resume from the popover.
-- `{"fallback": {step}}` — try an alternative step (one level deep).
+Every reply carries `presence.state`: `present`, `idle`, `away`, or `unknown`, read from
+HID idle time, lock state, and display power. **Unknown is treated as present**, the
+cautious reading. `mayTakeCursor` is true only when `away`; `advice` is one sentence on
+what is acceptable right now. What gates on it:
 
-**Profiles**: `ghost` (default) forces `allowHardwareInput: false` per step, no overlay,
-no pacing. `visible` shows bezel narration per step with 500 ms pacing between steps.
+- `activate`, `move`, `drag`, `key --allow-hardware-input`: refused unless `away` or
+  `--confirm`, and refused outright while the screen is locked or the aim point is
+  covered by another app's window.
+- `launch`: refused while the frontmost app is fullscreen unless `--confirm`.
+- Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor
+  and never change the frontmost app, so they are fine while a human is typing.
 
-The reply is one transcript: per-step verdicts, guard results, and any fallback outcomes.
-⌃⌥⇧⎋ aborts mid-plan. CLI: `rocuronium plan --file steps.json` or pipe JSON to stdin.
+**The visible agent.** Cursor-taking work is visible work. Whenever a command opts into
+hardware input, and always for `move`/`drag`, the app shows the presence overlay: a
+whisper of tint over the desktop, an opaque bezel narrating each action in verdict
+language with elapsed time (draggable; the position is remembered), and the jellyfish
+escorting the cursor while a command is in flight. Before each hardware click a sigil
+charges at the aim point for about 600 ms; that wind-up is a deliberate interrupt window.
+The overlay lingers ~3 s after a cursor-taking action and ~15 s after ghost commands when
+the "show overlay for every action" toggle is on.
 
-## Status items and menu buttons
+**⌃⌥⇧⎋ is the emergency stop.** Ctrl+Option+Shift+Escape halts the engine mid-action: a
+cursor trace aborts within one ~8 ms sample (a held drag button is released where it
+stopped), typing stops between characters, walks bail out. Afterwards every acting and
+perceiving verb is refused with "halted by the human (⌃⌥⇧⎋) — resume from the Rocuronium
+menu bar"; `status` and `activity` still answer and report `halted: true`. **Resume is a
+button in the popover and nothing else.** No socket verb can clear the halt. If your
+verbs are suddenly refused with that message, stop and wait for the human; do not
+retry and do not look for a workaround.
 
-`statusitem --app X` lists an app's menu bar status items; `--press` opens one's menu or
-popover by `AXPress`, cursor-free. Status items live in a separate extras menu bar that
-no window walk or `find` reaches, so this verb is the only ghost path to a MenuBarExtra.
-With several items, `--label` picks one; pid-scoping keeps two instances of one bundle
-id distinguishable. Evidence is the target's window count — a popover opening is a
-window appearing — because the press call itself can block in menu tracking and return
-an error code for a press that fully worked.
+## 10. The refusal catalog
 
-Controls that expose only `AXShowMenu` (menu buttons, and the remote elements System
-Settings panes host inside opaque provider groups) are clicked like any button: the
-press tentacle performs the show-menu action when no press action exists, and the menu
-appearing is the window-count consequence to watch for. Two measured caveats on the
-System Settings case: the opened menu's window belongs to the pane's *appex*, not the
-app you targeted, so the window-count read-back can miss it and the verdict stays
-`unverifiable` for a menu that visibly opened — verify with a region `screenshot` when
-it matters. And once open, such a menu is not dismissible by any ghost mechanism
-(posted Escape to host and appex both no-op — menu tracking runs its own event loop;
-re-pressing does not toggle): choose an item, quit the host app to tear it down, or —
-when the hardware gates are passed and the host is frontmost — try a session-level
-Escape with `key --allow-hardware-input`, the channel a human's Escape arrives on.
+Refusals are rails, not failures. Each names the flag that permits the act; passing it is
+a deliberate, legitimate choice when the situation calls for it.
 
-## The demo stage
+| refusal | verb | flag | why it exists |
+|---|---|---|---|
+| control character in text | `type` | `--submit` | a newline in a composer sends the message |
+| absent text | `type` | pass `""` | clearing a field is unrecoverable |
+| session-ending or data-destroying menu item | `shortcut`, `menu` | `--confirm` | `cmd+shift+q` is Log Out from any app |
+| a human is present | `activate`, `move`, `drag`, hardware `key` | `--confirm` | focus and cursor belong to the human |
+| frontmost app is fullscreen | `launch` | `--confirm` | a new window switches Spaces |
+| target occluded at the aim point | sting, `move`, `drag` | park the target | a real click hits whatever is topmost |
+| screen locked | all hardware | none | keystrokes would land in the password field |
+| display asleep | all perception | none | every tree collapses; wake first |
+| `--timeout` over 25 | `wait` | loop on `callAgain` | the socket cancels at 30 s |
+| capture path exists, is not `.png`, or is outside the permitted folders | `screenshot` | choose another path | an unchecked path is an arbitrary file overwrite |
+| park destination on no display | `park` | pick a visible point | the window would be unreachable |
+| ambiguous app or element | any | `--pid`, bundle id, `--role` | a coin flip on somebody's windows |
 
-`demo` opens a deterministic practice window at (720, 200), 560×720 — fixed position,
-stable labels, every control instrumented with a counter, so any verb can be exercised
-and *verified* without borrowing your real windows. Drive it with `--app Rocuronium`: a
-click target ("Tap Target" → "clicks: N"), a text field ("Type Here" → echo), a switch, a
-slider, a hover pad whose tracking fires even in the background ("hovers: N"), a
-120-row scroll flume whose needle is "Row 87 · the needle", and a gallery of the
-jellyfish's states plus the charge sigil. `demo reset` (the default) zeroes the counters;
-`demo show` keeps state; `demo hide` closes it. Also openable from the menu bar popover.
+`--allow-hardware-input` on `type`, `click`, and `key` permits the sting: legitimate when
+nobody is present and the ghost tentacles have demonstrably failed. The reply will say
+`cursorMovedByUs: true`, and the engine still refuses if another window covers the target.
 
-## The display hold
+## 11. Isolation: the virtual display
 
-While an agent session is active (any perceiving or acting command), the app holds the
-display awake — through Adrafinil's display-class holds (`adrafinil acquire --display`)
-when its CLI is installed, or a process-local assertion otherwise — and releases after a
-few quiet minutes. `status` reports it as `displayHold: adrafinil | internal | none`.
-Adrafinil's own pause, idle-release, and thermal cutouts outrank the hold, and a hold
-deliberately stops at the lock screen: locked-but-awake is fully readable, and the lock
-itself is Dantrolene's decision, not ours. Measured 2026-08-22: the wake and the hold do
-**not** reset `HIDIdleTime`, so presence readings stay honest about whose activity is
-whose.
+The headless virtual display is the strongest isolation available: windows parked there
+occupy none of the pixels a human is looking at, which satisfies both the occlusion check
+and the politeness contract. It is modeled as a **lease**, never a mode.
 
-## Actions that close their own app
+- `display acquire [--reason R] [--minutes N]` returns a lease id (30 min by default, up
+  to 1440); `display release --lease ID` sweeps parked windows home and tears the display
+  down when the last holder leaves; `display status` lists leases, parked windows, and
+  **strays** (windows on the virtual display nobody parked: a saved frame restored there,
+  a second window of a parked app), which release warns about and sweeps to the main
+  screen.
+- `park --app X` moves the app's primary window there. With no lease in force it takes an
+  **auto-lease** (reason recorded from the command, id in the reply) that releases itself
+  when its last parked window is returned or closes. `park --app X --x N --y N` moves the
+  window to an explicit visible point, and the reply's `before` block is the undo:
+  parking back to it releases the auto-lease. Attaching the display is visually silent
+  on the real screen, so parking needs no presence gate.
+- Teardown always sweeps parked windows home first, and the daemon's startup sweeps any
+  window left on no display back to the main screen.
 
-A press that quits or restarts its app (Quit, an updater's "Restart to Update") can
-never verify through the app — every read-back channel needs a live process. The engine
-treats the target process *exiting* as the read-back: the verdict is `confirmed` with
-the exit named. An unverifiable press on an app that is still running really is
-unverified; do not retry a quit-shaped action without checking `apps` first.
+**The park-then-hardware pattern.** The sting clicks whatever window is topmost at the
+coordinate, so a hardware click on an occluded target is refused with the occluder
+named. The reliable sequence when hardware input is truly needed:
 
-## Background apps
+    park --app X  →  act with --allow-hardware-input  →  park --app X --x --y (the before block)
 
-Ghost delivery to background apps is dependable for AX writes and unicode text, and
-best-effort for menu presses: background AppKit apps never validate their menus, so a
-press can return success, do nothing, and be reported `unverifiable` with the item's
-disabled state noted. When the verdict matters and the target is AppKit-in-background,
-`activate` it first (gated, honest) — that is exactly what the verb exists for.
+## 12. Environment facts that trip agents
+
+**Display asleep is blindness; screen locked is not.** When the display sleeps, every
+app's accessibility tree collapses to the app element, and a naive tool concludes "this
+app exposes nothing". Rocuronium refuses instead: perception verbs answer "I cannot see"
+and acting verbs wake the display first. A locked screen with an awake display is
+harmless: full trees, ghost input works, only hardware input is refused.
+
+**The display hold.** While a session is active (any perceiving or acting command) the
+app keeps the display awake, through Adrafinil's display-class hold when its CLI is
+installed or a process-local assertion otherwise, releasing after a few quiet minutes;
+`status.displayHold` says which. The hold stops at the lock screen on purpose. Neither
+the wake nor the hold resets `HIDIdleTime`, so presence stays honest.
+
+**Actions that close their own app.** A press that quits or restarts its app can never
+verify through the app. The engine treats the process exiting as the read-back:
+`confirmed`, with the exit named. An `unverifiable` press on an app still running really
+is unverified; check `apps` before retrying anything quit-shaped.
+
+**Background apps.** Ghost delivery to background apps is dependable for accessibility
+writes and unicode text, best-effort for menu presses (AppKit never validates background
+menus; Electron keeps items enabled and the press usually works). When the verdict
+matters and the target is AppKit-in-background, `activate` it first.
+
+**The demo stage.** `demo` opens a deterministic practice window at (720, 200), 560×720,
+every control instrumented with a counter: "Tap Target" → "clicks: N", "Type Here" →
+"echo: …", a switch, a slider, a hover pad that counts even in the background, a
+120-row scroll list whose needle is "Row 87 · the needle". Drive it with
+`--app Rocuronium`. `demo reset` (default) zeroes the counters, `demo show` keeps state,
+`demo hide` closes it, `demo render --path f.png [--w --h] [--reason opaque]` draws the
+jellyfish for artwork.
+
+**"could not reach Rocuronium.app".** The CLI speaks to a unix socket at
+`~/Library/Application Support/glass.kagerou.rocuronium/control.sock`. If the app is
+running and the connect still fails instantly, a second instance (a debug build from
+Xcode) bound the same path and quit, leaving the release daemon listening on an unlinked
+inode. `Scripts/install-launchagent.sh` quits it and re-registers the LaunchAgent;
+`launchctl kickstart -k gui/$UID/glass.kagerou.rocuronium` restarts one launchd already
+manages. The socket serializes requests and cancels each at 30 s; a walk that outlives
+its caller is cancelled with it, so one slow target cannot poison the queue.
 """##
 }

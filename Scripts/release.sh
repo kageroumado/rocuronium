@@ -21,9 +21,12 @@ cd "$PROJECT_DIR"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
+# The fresh DerivedData below has no plugin trust record, so mlx-swift's CudaBuild plugin
+# fails validation without the skip flags; xcodebuild cannot prompt for trust.
 echo "==> Building the app (Release, Developer ID)"
 xcodebuild -project Rocuronium.xcodeproj -scheme Rocuronium -configuration Release \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
+    -skipPackagePluginValidation -skipMacroValidation \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY="$IDENTITY" \
     DEVELOPMENT_TEAM="$TEAM_ID" \

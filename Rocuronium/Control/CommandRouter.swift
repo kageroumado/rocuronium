@@ -1275,6 +1275,9 @@ final class CommandRouter {
         // threshold discoverable from outside instead of reading as a mystery no-effect.
         if let pixelDelta = evidence.pixelDelta { reply["pixelDelta"] = pixelDelta }
         if let suggestion = evidence.suggestion { reply["suggestion"] = suggestion }
+        // Coordinates that came from pixels rather than the tree are less certain; the
+        // caller's cue to verify with a diff before building on them.
+        if let groundedBy = evidence.groundedBy { reply["groundedBy"] = groundedBy }
         if let referral = evidence.referral {
             reply["referral"] = [
                 "channel": referral.channel,

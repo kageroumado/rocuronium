@@ -48,6 +48,12 @@ construction — the same trick Dantrolene uses for home/away.
 - **`AXUIElement` is not `Sendable`** (checked against the SDK, not assumed). Elements are
   created, used, and discarded inside the `Engine` actor and never cross its boundary; the
   module's default isolation is MainActor, engine types are explicitly `nonisolated`.
+- **A second instance steals the socket path.** Binding unlinks whatever file is at
+  `control.sock`, so a debug build run from Xcode takes the path from the release daemon,
+  and when it quits the daemon is left listening on an unlinked inode: the app runs, the
+  file exists, and every connect fails instantly. `Scripts/install-launchagent.sh` quits
+  the daemon and re-registers it. A daemon that notices its path was replaced and
+  re-binds is on the interface plan.
 
 ## 2. Module layout
 

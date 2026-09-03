@@ -17,90 +17,77 @@ let socketPath = FileManager.default
 let usage = """
 rocuronium — drive this Mac without taking the cursor
 
-  rocuronium status
-  rocuronium apps
-  rocuronium windows    --app <name>
-  rocuronium find       --app <name> [--label <text>] [--role <button|…>]
-  rocuronium read       --app <name> [--label <text>] [--role <r>] [--since <token>]
-  rocuronium wait       --app <name> --label <text> [--role <r>] [--gone] [--timeout <s, max 25>]
-  rocuronium type       --app <name> --text <text> [--label <text>] [--role <r>]
-  rocuronium click      --app <name> [--label <text>] [--role <r>] [--x <n> --y <n>]
-  rocuronium scroll     --app <name> --label <text> --dy <px>   (bring element into view)
-  rocuronium scroll     --app <name> (--dy <px> [--dx <px>] | --to <0..1>)
-  rocuronium scroll     --app <name> --until-text <string> [--dy <±px: direction>]
-  rocuronium statusitem --app <name> [--label <text>] [--press]
-  rocuronium shortcut   --app <name> --keys <cmd+a> [--resolve-only] [--confirm]
-  rocuronium menu       --app <name> --path "File > Export" [--resolve-only] [--confirm]
-  rocuronium key        --app <name> --keys <escape|shift+tab|cmd+down|…>
-  rocuronium move       (--to <x,y> | --app <name> --label <text> [--role <r>])
-                        [--from <x,y>] [--via "<x,y> <x,y>…"] [--duration <s>]
-                        [--easing <linear|ease-in|ease-out|ease-in-out>] [--restore] [--confirm]
-  rocuronium drag       --from <x,y> --to <x,y> [--via …] [--button <left|right>]
-                        [--app <name>] [--duration <s>] [--easing <e>] [--restore] [--confirm]
-  rocuronium launch     --app <name>
-  rocuronium activate   --app <name> [--confirm]
-  rocuronium activity   (recent agent actions with their evidence verdicts)
-  rocuronium demo       [show|reset|hide]  (deterministic practice window, --app Rocuronium)
-  rocuronium display    <acquire|release|status> [--reason <text>] [--minutes <n>] [--lease <id>]
-  rocuronium park       --app <name> [--x <n> --y <n>]
-  rocuronium screenshot [--app <name>] [--x <n> --y <n> --w <n> --h <n>] [--path <file>]
-                        [--since <token>]
-  rocuronium mcp        (serve these commands as MCP tools over stdio)
-  rocuronium guide      (print the operator's manual — evidence, presence, refusals)
+Observe
+  status                                   presence, permissions, halted, display hold
+  diag                                     what each permission check really returns
+  apps                                     running apps: name, bundle id, pid, frontmost
+  windows    --app <a>                     titles and frames
+  find       --app <a> [--label <t>] [--role <r>]           up to 20 elements with frames
+  read       --app <a> [--label <t>] [--role <r>] [--since <token>]   text, or the delta
+  wait       --app <a> --label <t> [--role <r>] [--gone] [--timeout <s, max 25>]
+  screenshot [--app <a> | --x --y --w --h] [--path <f.png>] [--since <token>]
+  activity                                 the last 50 acting commands with verdicts
 
-Options:
-  --allow-hardware-input   permit the hardware tentacle: real-cursor actions, session-level keys (default: no)
-  --pid <n>                target a process directly (when two instances share a bundle id)
-  --json                   print the raw reply
+Act — ghost first; every reply carries verdict, tentacle, attempts
+  type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
+  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>)
+  key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
+  shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm]    presses the menu item
+  menu       --app <a> --path "File > Export" [--resolve-only] [--confirm]
+  scroll     --app <a> (--label <t> | --to <0..1> | --dy <px> [--dx <px>]
+                        | --until-text <s> [--dy <±1>])
+  statusitem --app <a> [--label <t>] [--press]
+  launch     --app <name|bundle id|path> [--confirm]
+  activate   --app <a> [--confirm]
+  plan       --file <steps.json>           (or JSON on stdin)
 
-'read' dumps an app's text via accessibility — no pixels, works behind a locked screen.
-Every 'read' and 'screenshot' reply carries an observation token; pass it back as
---since to get only what changed — appeared/vanished/value-changed elements for 'read',
-changed-region crops (or "content scrolled ~N") for 'screenshot'. A token that cannot be
-diffed honestly (evicted, other window, resized) degrades to a full reply with a note.
-'key' posts a bare named key (escape, return, tab, arrows, home/end, page up/down) with
-optional modifiers — for what 'type' (text) and 'shortcut' (menu items) cannot send;
-AppKit honors it, Electron ignores posted keycodes. '--role' narrows a label match when
-two roles share the text (a button and a menu item both named "Restart", say).
-'wait' blocks until the element appears (--gone: disappears); a timed-out reply says to
-call again, because the socket cancels requests at 30 s. 'launch' starts an app without
-taking focus and returns once it can be driven; 'activate' takes focus on purpose and is
-refused while a human is present unless --confirm. 'display' leases the headless virtual
-screen; 'park' moves an app's window onto it (or to an explicit point — the reply carries
-the previous position, which is how you put it back). Parking with no lease takes an
-auto-lease (reason recorded from the command, id in the reply) that releases itself when
-its last parked window is returned or closes; attaching the display is visually silent on
-the real screen (measured), so no extra flag is needed. 'display status'
-also lists strays — windows on the virtual display nobody parked. 'screenshot' hands the
-pixels to you, the caller: your model does the looking.
+Cursor paths — take the real cursor; refused while a human is present unless --confirm
+  move       (--to <x,y> | --app <a> --label <t> [--role <r>]) [--from <x,y>]
+             [--via "<x,y> <x,y>…"] [--duration <s>]
+             [--easing <linear|ease-in|ease-out|ease-in-out>] [--restore] [--confirm]
+  drag       --from <x,y> --to <x,y> [--via …] [--button <left|right>] [--app <a>]
+             [--duration <s>] [--easing <e>] [--restore] [--confirm]
 
-'scroll --until-text' captures the window each step, OCRs it locally, and stops the moment
-the string is legible — deterministic where a pixel delta overshoots; the reply carries the
-sighting's screen rectangle, ready for a coordinate click. 'statusitem' lists an app's menu
-bar status items (a separate bar no window walk reaches) and --press opens one's menu or
-popover, cursor-free.
+Isolation
+  display    <acquire|release|status> [--reason <t>] [--minutes <n>] [--lease <id>]
+  park       --app <a> [--x <n> --y <n>]   onto the virtual display, or back to a point
 
-'move' glides the REAL cursor along a path (straight line, or a curve through --via
-waypoints) and leaves it on the destination — the way to drive hover menus, tooltips, and
-hover-intent flows; 'drag' does the same with a button held. Both take the physical
-cursor, so both are refused while a human is present unless --confirm, and both leave the
-pointer where the path ends unless --restore. With --app they refuse when another app's
-window covers the action point, and they report the target's window count before/after —
-a flyout appearing is a window appearing.
+Meta
+  demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
+  request-capture                          fire the Screen Recording prompt
+  mcp                                      serve these verbs as MCP tools over stdio
+  guide                                    the operator manual — the full contract
 
-Cursor-taking commands show the visible-agent overlay (tint + bezel + jellyfish); ⌃⌥⇧⎋
-halts the engine mid-action, and every verb is then refused until the human resumes from
-the Rocuronium menu bar. 'activity' returns the session's action log with verdicts.
+Options
+  --pid <n>                 target a process directly; overrides --app
+  --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
+  --json                    print the raw reply
 
-Every reply reports whether a human is present; hardware input stays off unless asked for.
+Eight things to know before the guide:
+  1. Trust `verdict`, never the exit code. confirmed · noEffect (success was reported and
+     nothing changed: change mechanism, do not retry harder) · unverifiable (it may have
+     landed: verify before retrying).
+  2. Coordinates are points, origin at the top-left of the main display, everywhere.
+  3. `--label` is a case-insensitive substring of title, description, placeholder, then
+     value. Ambiguity is refused; narrow with --role. Icon-only buttons read as 'button'.
+  4. `type` sets the field's value through accessibility; when that is refused it falls
+     through to keystrokes at the caret. The reply's tentacle says which happened.
+  5. `read` returns a token; `read --since <token>` returns only what changed. Pixels miss
+     small consequences; the tree diff does not.
+  6. `shortcut` presses the menu item bound to the keys; `key` sends a bare key. Electron
+     ignores posted keycodes; unicode text still lands.
+  7. Every reply reports presence. Cursor-taking verbs are refused while someone is here.
+  8. Display asleep blinds every app; a locked screen does not.
 """
 
 // MARK: - Argument parsing
 
 var arguments = Array(CommandLine.arguments.dropFirst())
-guard let command = arguments.first, !command.hasPrefix("-") else {
+// Asking for help is a success; only an unparseable invocation exits 2.
+let helpWords: Set<String> = ["--help", "-h", "help"]
+guard let command = arguments.first, !command.hasPrefix("-"), !helpWords.contains(command) else {
     print(usage)
-    exit(arguments.isEmpty ? 0 : 2)
+    exit(arguments.isEmpty || helpWords.contains(arguments[0]) ? 0 : 2)
 }
 arguments.removeFirst()
 
@@ -110,7 +97,7 @@ func value(for flag: String) -> String? {
     return arguments[index + 1]
 }
 
-// The operator's manual, embedded at build time from README.md. Needs no socket and no
+// The operator manual, embedded at build time from Docs/GUIDE.md. Needs no socket and no
 // running app: an agent holding nothing but this binary can learn the contract.
 if command == "guide" {
     print(Guide.text)
