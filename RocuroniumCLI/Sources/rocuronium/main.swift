@@ -44,10 +44,11 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
 
 Cursor paths — take the real cursor; refused while a human is present unless --confirm
   move       (--to <x,y> | --app <a> --label <t> [--role <r>]) [--from <x,y>]
-             [--via "<x,y> <x,y>…"] [--duration <s>]
+             [--via "<x,y> <x,y>…"] [--duration <s>] [--dwell <ms>]
              [--easing <linear|ease-in|ease-out|ease-in-out>] [--restore] [--confirm]
+             (with --app, reports what the hover revealed in the tree)
   drag       --from <x,y> --to <x,y> [--via …] [--button <left|right>] [--app <a>]
-             [--duration <s>] [--easing <e>] [--restore] [--confirm]
+             [--duration <s>] [--dwell <ms>] [--easing <e>] [--restore] [--confirm]
 
 Isolation
   display    <acquire|release|status> [--reason <t>] [--minutes <n>] [--lease <id>]
@@ -174,7 +175,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that

@@ -316,18 +316,23 @@ enum MCPServer {
             refused when `app` is given); WebKit/WKWebView pages ignore motion while their \
             app is not frontmost — `activate` first for web hover. With `app` given and the \
             target not frontmost, the verb activates it first (a focus change, reported). \
-            What the hover revealed is not read back: take a `read` token first and diff after.
+            What the hover revealed IS read back with `app`: the window's tree is diffed \
+            across the gesture and reported as `treeChanges`/`treeDelta` (the tooltip or \
+            flyout that appeared). Use `dwell` to hold longer for a slow tooltip (AppKit \
+            shows them after ~1 s); leave `restore` off, since a restored cursor leaves \
+            before the read and the reveal collapses.
             """,
             properties: [
                 "end": ["type": "string", "description": "Destination \"x,y\" in screen points (top-left origin)"],
-                "app": ["type": "string", "description": "Target app — enables label aiming, occlusion refusal, window-count evidence"],
+                "app": ["type": "string", "description": "Target app — enables label aiming, occlusion refusal, window-count and tree-diff evidence"],
                 "label": ["type": "string", "description": "Aim at this element's center instead of end"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "start": ["type": "string", "description": "Path start \"x,y\"; current cursor position when omitted"],
                 "via": ["type": "string", "description": "Waypoints the curve passes through: \"x,y x,y …\""],
                 "duration": ["type": "number", "description": "Gesture seconds, 0.05–10; distance-based default"],
+                "dwell": ["type": "number", "description": "Milliseconds to hold at the destination before reading the reveal (for slow tooltips)"],
                 "easing": ["type": "string", "enum": ["linear", "ease-in", "ease-out", "ease-in-out"]],
-                "restore": ["type": "boolean", "description": "Put the cursor back afterwards (defeats hover — default off)"],
+                "restore": ["type": "boolean", "description": "Put the cursor back afterwards (defeats hover and its reveal — default off)"],
                 "confirm": ["type": "boolean", "description": "Take the cursor even though someone is at the Mac"],
             ], required: [],
         ),
@@ -350,6 +355,7 @@ enum MCPServer {
                 "via": ["type": "string", "description": "Waypoints the drag curves through: \"x,y x,y …\""],
                 "button": ["type": "string", "enum": ["left", "right"]],
                 "duration": ["type": "number", "description": "Gesture seconds, 0.05–10; distance-based default"],
+                "dwell": ["type": "number", "description": "Milliseconds to hold at the end before reading what changed"],
                 "easing": ["type": "string", "enum": ["linear", "ease-in", "ease-out", "ease-in-out"]],
                 "restore": ["type": "boolean", "description": "Put the cursor back after releasing"],
                 "confirm": ["type": "boolean", "description": "Take the cursor even though someone is at the Mac"],

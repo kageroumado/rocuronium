@@ -185,6 +185,9 @@ final class CommandRouter {
         /// its primary window: `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`,
         /// `drag`, `park`. Ambiguity is refused with the titles listed.
         var window: String?
+        /// For `move`/`drag`: milliseconds to hold at the destination before reading what the
+        /// gesture revealed — long enough for a tooltip (AppKit shows them after ~1 s).
+        var dwell: Double?
 
         /// For `plan`: the step list.
         var steps: [SequencePlan.Step]?
@@ -1100,6 +1103,8 @@ final class CommandRouter {
             button: button,
             restoreCursor: request.restore == true,
             windowTitle: request.window,
+            // Clamped: the socket cancels at 30 s, and a tooltip needs at most a second or two.
+            dwell: request.dwell.map { .milliseconds(min(max(Int($0), 0), 5000)) },
         )
 
         // The read-back is the system's own cursor position: the gesture is confirmed when
@@ -1129,6 +1134,9 @@ final class CommandRouter {
         if let before = result.windowsBefore, let after = result.windowsAfter, after != before {
             summary += " · target windows \(before) → \(after)"
         }
+        if let changes = result.treeChanges {
+            summary += " · revealed \(changes) tree change(s)"
+        }
 
         var reply: [String: Any] = [
             "ok": outcome.abortReason == nil && landed,
@@ -1150,6 +1158,9 @@ final class CommandRouter {
             reply["targetWindowsAfter"] = after
         }
         if let owner = result.endpointOwner { reply["windowUnderCursorOwnedBy"] = owner }
+        // What the hover revealed — the tooltip or flyout that the tree diff caught.
+        if let changes = result.treeChanges { reply["treeChanges"] = changes }
+        if let delta = result.treeDelta { reply["treeDelta"] = delta }
         if let pid, !dragging {
             let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
             if frontmost != pid {

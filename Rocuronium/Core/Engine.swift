@@ -1463,7 +1463,10 @@ actor Engine {
     /// when no diff will be honest — no window, a truncated walk (which would report unwalked
     /// elements as vanished), or a tree too large to walk twice without taxing every press
     /// (unless the caller opted in with `observe`).
-    private func treeEvidenceBaseline(pid: pid_t, observe: Bool, windowTitle: String? = nil) -> [TreeSnapshot.Node]? {
+    /// One walk of a window's tree — the primary window, or the one whose title contains
+    /// `windowTitle`. Nil when there is no such window or the walk was truncated (a partial
+    /// tree cannot be diffed honestly). The shared primitive under every tree-delta channel.
+    private func windowNodes(pid: pid_t, windowTitle: String?) -> [TreeSnapshot.Node]? {
         let window: AXElement?
         if let windowTitle {
             window = try? windowElement(pid: pid, titled: windowTitle)
@@ -1473,27 +1476,23 @@ actor Engine {
         guard let window else { return nil }
         let dump = TextDump.dump(root: window)
         guard !dump.truncated else { return nil }
-        guard observe || dump.nodes.count <= Constants.treeEvidenceMaxElements else { return nil }
         return dump.nodes
     }
 
-    /// The after half: re-walks the primary window and folds the structural diff into the
-    /// evidence. A missing or truncated after-walk leaves the evidence exactly as it was —
-    /// this channel only ever adds signal, never removes it.
+    private func treeEvidenceBaseline(pid: pid_t, observe: Bool, windowTitle: String? = nil) -> [TreeSnapshot.Node]? {
+        guard let nodes = windowNodes(pid: pid, windowTitle: windowTitle) else { return nil }
+        guard observe || nodes.count <= Constants.treeEvidenceMaxElements else { return nil }
+        return nodes
+    }
+
+    /// The after half: re-walks the window and folds the structural diff into the evidence. A
+    /// missing or truncated after-walk leaves the evidence exactly as it was — this channel
+    /// only ever adds signal, never removes it.
     private func foldingTreeEvidence(
         into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?, windowTitle: String? = nil
     ) -> Evidence {
-        guard let baseline else { return evidence }
-        let window: AXElement?
-        if let windowTitle {
-            window = try? windowElement(pid: pid, titled: windowTitle)
-        } else {
-            window = primaryWindow(of: AXElement(pid: pid))
-        }
-        guard let window else { return evidence }
-        let after = TextDump.dump(root: window)
-        guard !after.truncated else { return evidence }
-        return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after.nodes))
+        guard let baseline, let after = windowNodes(pid: pid, windowTitle: windowTitle) else { return evidence }
+        return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after))
     }
 
     func act(
@@ -1721,6 +1720,11 @@ actor Engine {
         let windowsAfter: Int?
         /// Who owns the topmost window at the action point, when it is not the target.
         let endpointOwner: String?
+        /// What the gesture revealed in the window's tree — the tooltip that appeared, the
+        /// controls that unhid. A hover that returns no text is half a verb; this is the
+        /// other half. Nil when no pid was given or the tree could not be diffed.
+        let treeChanges: Int?
+        let treeDelta: String?
     }
 
     /// Moves the real cursor along a path (`button: nil`) or drags along it (button held).
@@ -1740,6 +1744,7 @@ actor Engine {
         button: HardwareInput.MouseButton?,
         restoreCursor: Bool,
         windowTitle: String? = nil,
+        dwell: Duration? = nil,
     ) async throws -> TraceResult {
         // The tree is only consulted for a labeled endpoint, but an asleep display voids
         // the gesture's entire purpose too: nothing tracks a cursor nobody can see.
@@ -1804,16 +1809,32 @@ actor Engine {
         }
 
         let windowsBefore = pid.map(onScreenWindowCount)
+        // What the window's tree looked like before the gesture — so the reply can say what
+        // the hover revealed, not just that a window appeared. Taken before the motion, same
+        // reason the window count is.
+        let treeBefore = pid.flatMap { windowNodes(pid: $0, windowTitle: windowTitle) }
         // The charge-up ring at the point that acts (drag: the button-down point; hover: the
         // destination). When the overlay is visible this waits out the wind-up — the window
         // in which ⌃⌥⇧⎋ lands before any motion starts; the per-sample halt check inside the
         // trace covers everything after.
         await PresenceRelay.telegraph(actionPoint)
         let outcome = await HardwareInput.trace(plan, button: button, restoreCursor: restoreCursor)
-        // Give hover-intent timers and flyout animations a beat before counting windows —
-        // the Steam supernav opens ~120 ms after the pointer settles.
-        try? await Task.sleep(for: .milliseconds(400))
+        // Give hover-intent timers and flyout animations a beat before reading — the Steam
+        // supernav opens ~120 ms after the pointer settles, and AppKit tooltips take ~1 s, so
+        // `dwell` lets the caller hold longer for a tooltip. A restored cursor has already
+        // left by now, so the reveal it conjured is only readable when restore is off (the
+        // default — a hover means nothing once the cursor moves away).
+        try? await Task.sleep(for: dwell ?? .milliseconds(400))
         let windowsAfter = pid.map(onScreenWindowCount)
+        var treeChanges: Int?
+        var treeDeltaText: String?
+        if let pid, let treeBefore, let treeAfter = windowNodes(pid: pid, windowTitle: windowTitle) {
+            let delta = TreeDelta.compute(from: treeBefore, to: treeAfter)
+            if !delta.isEmpty {
+                treeChanges = delta.changeCount
+                treeDeltaText = TreeDelta.render(delta)
+            }
+        }
         if let pid { cache.invalidate(pid: pid) }
 
         let seconds = Double(plan.duration.components.seconds)
@@ -1827,6 +1848,8 @@ actor Engine {
             windowsBefore: windowsBefore,
             windowsAfter: windowsAfter,
             endpointOwner: endpointOwner,
+            treeChanges: treeChanges,
+            treeDelta: treeDeltaText,
         )
     }
 

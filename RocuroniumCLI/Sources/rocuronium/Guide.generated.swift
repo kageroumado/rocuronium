@@ -406,9 +406,10 @@ cursor and are presence-gated like `activate`: refused while a human is present 
 covers the action point and `--app` was given.
 
     move  (--to x,y | --app X --label Y [--role R]) [--from x,y] [--via "x,y x,y…"]
-          [--duration s] [--easing linear|ease-in|ease-out|ease-in-out] [--restore] [--confirm]
+          [--duration s] [--dwell ms] [--easing linear|ease-in|ease-out|ease-in-out]
+          [--restore] [--confirm]
     drag  --from x,y --to x,y [--via …] [--button left|right] [--app X] [--duration s]
-          [--easing e] [--restore] [--confirm]
+          [--dwell ms] [--easing e] [--restore] [--confirm]
 
 **Hover is `move`.** The destination can be an element (`--app X --label Y`); the cursor
 stays there unless `--restore`, because a hover only means something while it lasts. A
@@ -420,9 +421,14 @@ which is what velocity-watching UI expects.
 
 **Evidence.** The cursor's actual end position is read back (`confirmed` means the
 pointer provably stands on `plannedEnd`), and with `--app` the target's window count
-before/after is reported: a flyout or tooltip window appearing is a window appearing,
-the consequence element evidence is blind to. What the hover *revealed* is not read for
-you; take a `read` token first and diff after, until that is automatic.
+before/after is reported: a flyout or tooltip window appearing is a window appearing.
+And with `--app`, what the hover *revealed* is now read for you: the window's tree is
+diffed across the gesture and reported as `treeChanges`/`treeDelta` — the tooltip that
+appeared, the controls that unhid. `--dwell <ms>` holds at the destination before the
+read, for a tooltip that takes its time (AppKit shows them after ~1 s). Leave `--restore`
+off when you want the reveal: a restored cursor has already left by the time the tree is
+read, so the reveal collapses. Item 3's `help` field carries many tooltips without a
+hover at all — try `find` first.
 
 **Measured caveats, all reported in replies.** Hover lands on whatever window is topmost
 at the point. WebKit/WKWebView pages ignore all motion while their app is inactive, so
