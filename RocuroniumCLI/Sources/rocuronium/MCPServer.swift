@@ -35,7 +35,8 @@ enum MCPServer {
         tool(
             "find",
             """
-            List elements of a running app via accessibility: up to 20 rows of {role, \
+            List elements of a running app via accessibility: a page (20 by default, \
+            `limit`/`offset` to page, `all` for every element with a frame) of rows of {role, \
             label, roleDescription, help, identifier, subrole, value, depth, frame, near}, \
             frames in screen points with a top-left origin. `label` is the element's OWN name \
             (title/description/placeholder) and is empty when it has none — an icon-only \
@@ -55,6 +56,9 @@ enum MCPServer {
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
                 "label": ["type": "string", "description": "Substring of the element's label/placeholder"],
                 "role": ["type": "string", "description": "Element role filter, e.g. 'button' or 'AXButton'"],
+                "all": ["type": "boolean", "description": "List every element carrying a frame, not just editables ('show me everything'); role still narrows"],
+                "limit": ["type": "number", "description": "Page size (default 20); reply carries shown/total/offset"],
+                "offset": ["type": "number", "description": "Skip this many matches — page with limit"],
                 "ocr": ["type": "boolean", "description": "Read the window's pixels as text rows instead of the tree (needs Screen Recording)"],
             ], required: ["app"],
         ),

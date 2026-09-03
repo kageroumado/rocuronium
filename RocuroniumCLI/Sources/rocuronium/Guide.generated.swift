@@ -185,9 +185,13 @@ Recording prompt; after a decline it returns instantly forever until
 `onVirtualDisplay`, `stray` (on the virtual display, parked by nobody), and
 `onAnyDisplay: false` for a window stranded where no display reaches.
 
-**`find --app X [--label Y] [--role R] [--ocr]`** — up to **20** matches, each `{role,
-label, value, depth, frame}`, plus `elementsVisited` and `truncated`. With only `--role`,
-every element of that role; with neither, every editable field. The walk is bounded
+**`find --app X [--label Y] [--role R] [--all] [--limit N] [--offset N] [--ocr]`** — a
+page of matches (default **20**), each `{role, label, value, depth, frame}`, plus
+`shown`, `total`, `offset`, `elementsVisited`, and `truncated`. With only `--role`, every
+element of that role; with neither, every editable field; with `--all`, **every element
+that carries a frame** ("show me everything you can see"), which `--role` still narrows.
+`--limit`/`--offset` page the result, and the reply's `shown`/`total` make the cap
+explicit instead of silent. The walk is bounded
 (60 000 elements, 18 s wall clock) and truncation is reported: "nothing found" and
 "stopped looking" are different answers. When the walk finds nothing and Screen Recording
 is granted, `find` **falls back to OCR** automatically; `--ocr` forces it. OCR rows are

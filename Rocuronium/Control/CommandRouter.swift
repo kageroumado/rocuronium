@@ -184,6 +184,12 @@ final class CommandRouter {
         /// empty tree, in addition to) walking accessibility — the way to read an app whose
         /// AX tree is empty or lying. Needs Screen Recording.
         var ocr: Bool?
+        /// For `find`: list every element carrying a frame, not just editables — "show me
+        /// everything you can see". `--role` still narrows it.
+        var all: Bool?
+        /// For `find`: page the matches. `limit` defaults to 20; `offset` skips that many.
+        var limit: Double?
+        var offset: Double?
         /// For `wait`: a `PlanGuard` to poll until it passes — the same postcondition grammar
         /// `plan` steps use. Supersedes the `--label`/`--gone` sugar when present.
         var expect: PlanGuard?
@@ -607,8 +613,13 @@ final class CommandRouter {
         if request.ocr == true {
             return try await ocrFindReply(pid: pid, query: request.label, window: request.window)
         }
-        let outcome = try await engine.find(pid: pid, query: request.label, role: request.role, windowTitle: request.window)
-        if outcome.elements.isEmpty, ScreenCapture.isPermitted,
+        let outcome = try await engine.find(
+            pid: pid, query: request.label, role: request.role, windowTitle: request.window,
+            all: request.all == true,
+            limit: request.limit.map { max(Int($0), 0) } ?? 20,
+            offset: request.offset.map { max(Int($0), 0) } ?? 0,
+        )
+        if outcome.elements.isEmpty, request.all != true, ScreenCapture.isPermitted,
            let fallback = try? await ocrFindReply(pid: pid, query: request.label, window: request.window) {
             return fallback
         }
@@ -617,6 +628,10 @@ final class CommandRouter {
             "matches": outcome.elements.map(elementRow),
             "truncated": outcome.truncated,
             "elementsVisited": outcome.elementsVisited,
+            // The page and the whole, so the 20-row cap is never a silent surprise.
+            "shown": outcome.elements.count,
+            "total": outcome.total,
+            "offset": outcome.offset,
             "canSee": true,
             "cache": ["hits": outcome.cacheHits, "misses": outcome.cacheMisses],
             "presence": presenceBlock(),

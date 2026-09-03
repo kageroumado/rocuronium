@@ -94,6 +94,10 @@ actor Engine {
         let truncated: Bool
         let cacheHits: Int
         let cacheMisses: Int
+        /// Total matches before the `limit`/`offset` page was taken — so the cap is never a
+        /// silent surprise. `elements.count` is what this page shows.
+        let total: Int
+        let offset: Int
     }
 
     /// The evidence for a window move: where it was asked to go, where it was, and where it
@@ -186,7 +190,10 @@ actor Engine {
 
     // MARK: - Perception
 
-    func find(pid: pid_t, query: String?, role: String? = nil, windowTitle: String? = nil) throws -> FindOutcome {
+    func find(
+        pid: pid_t, query: String?, role: String? = nil, windowTitle: String? = nil,
+        all: Bool = false, limit: Int = 20, offset: Int = 0
+    ) throws -> FindOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         // A named window that does not exist is an error, not an empty result — resolve it
         // first so the caller hears "no such window", never a silent whole-app search.
@@ -196,8 +203,16 @@ actor Engine {
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
-        let results = cache.results(for: pid, key: cacheKey(query, role: role, window: windowTitle)) {
-            if let query {
+        // `all` is its own cache key (a distinct predicate) but the page — limit/offset — is
+        // applied after, over the cached full match set, so paging never re-walks.
+        let key = cacheKey(all ? "@all" : query, role: role, window: windowTitle)
+        let results = cache.results(for: pid, key: key) {
+            if all {
+                // Everything the walk can see and aim at: every element carrying a frame.
+                ElementQuery.search(pid: pid, windowTitle: windowTitle) {
+                    ElementQuery.roleMatches($0.role, wanted: role) && $0.frame != nil
+                }
+            } else if let query {
                 ElementQuery.named(query, role: role, pid: pid, windowTitle: windowTitle)
             } else if let role {
                 // A bare role query is a legitimate question ("list the buttons").
@@ -207,12 +222,16 @@ actor Engine {
             }
         }
         let statistics = cache.statistics
+        let start = max(offset, 0)
+        let page = results.matches.dropFirst(start).prefix(max(limit, 0))
         return FindOutcome(
-            elements: results.matches.prefix(20).map { descriptor(for: $0.element, depth: $0.depth) },
+            elements: page.map { descriptor(for: $0.element, depth: $0.depth) },
             elementsVisited: results.elementsVisited,
             truncated: results.truncated,
             cacheHits: statistics.hits,
             cacheMisses: statistics.misses,
+            total: results.matches.count,
+            offset: start,
         )
     }
 

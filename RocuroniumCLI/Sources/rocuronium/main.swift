@@ -22,7 +22,7 @@ Observe
   diag                                     what each permission check really returns
   apps                                     running apps: name, bundle id, pid, frontmost
   windows    --app <a>                     titles and frames
-  find       --app <a> [--label <t>] [--role <r>] [--ocr]   up to 20 elements with frames
+  find       --app <a> [--label <t>] [--role <r>] [--all] [--limit <n>] [--offset <n>] [--ocr]
   read       --app <a> [--label <t>] [--role <r>] [--since <token>] [--ocr]   text, or the delta
   wait       --app <a> (--label <t> [--role <r>] [--gone] | --for '<guard json>')
                         [--timeout <s, max 25>]
@@ -176,7 +176,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -199,6 +199,7 @@ if arguments.contains("--confirm") { payload["confirm"] = true }
 if arguments.contains("--restore") { payload["restore"] = true }
 if arguments.contains("--observe") { payload["observe"] = true }
 if arguments.contains("--ocr") { payload["ocr"] = true }
+if arguments.contains("--all") { payload["all"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
@@ -304,7 +305,12 @@ case "find":
         let grounded = match["groundedBy"].map { "  [\($0)]" } ?? ""
         print("\(match["role"] ?? "?")  \(name)\(position)\(suffix)  depth \(match["depth"] ?? "?")\(grounded)")
     }
-    print("\n\(matches.count) shown · \(reply["elementsVisited"] ?? 0) elements visited"
+    let shown = reply["shown"] as? Int ?? matches.count
+    let total = reply["total"] as? Int ?? shown
+    let offset = reply["offset"] as? Int ?? 0
+    let range = total > shown ? "shown \(offset + 1)–\(offset + shown) of \(total)" : "\(shown) shown"
+    let page = total > offset + shown ? " · more with --offset \(offset + shown)" : ""
+    print("\n\(range) · \(reply["elementsVisited"] ?? 0) elements visited\(page)"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
 
 case "read" where reply["delta"] != nil:
