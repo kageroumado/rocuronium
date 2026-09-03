@@ -39,6 +39,11 @@ actor Engine {
         /// Tiny walks are exempt from the ratio: two elements changing out of three is a
         /// perfectly good diff.
         static let diffDegradeMinimumElements = 20
+        /// Above this element count the tree-delta evidence channel is skipped unless
+        /// `--observe`: a Discord-sized tree would double every press's latency for a channel
+        /// the pixel and window-count evidence usually already cover. Discord's window walks
+        /// well past this; a normal document window is a few hundred.
+        static let treeEvidenceMaxElements = 3000
     }
 
     // MARK: - Boundary types
@@ -499,7 +504,8 @@ actor Engine {
     func pressShortcut(
         pid: pid_t,
         keys: String,
-        mode: ShortcutMode = .press
+        mode: ShortcutMode = .press,
+        observe: Bool = false
     ) async throws -> MenuPressResult {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         guard let shortcut = MenuQuery.Shortcut.parse(keys) else {
@@ -511,7 +517,7 @@ actor Engine {
         guard let match = MenuQuery.item(for: shortcut, in: menuBar) else {
             throw EngineError.notFound("a menu item carrying '\(keys)'")
         }
-        return try await press(match, pid: pid, mode: mode)
+        return try await press(match, pid: pid, mode: mode, observe: observe)
     }
 
     /// Presses a menu item named by its title path ("File ▸ Export…" — ">" works too).
@@ -521,7 +527,8 @@ actor Engine {
     func pressMenuPath(
         pid: pid_t,
         path: String,
-        mode: ShortcutMode = .press
+        mode: ShortcutMode = .press,
+        observe: Bool = false
     ) async throws -> MenuPressResult {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         let components = MenuQuery.parsePath(path)
@@ -533,7 +540,7 @@ actor Engine {
         }
         switch MenuQuery.item(atPath: components, in: menuBar) {
         case let .found(match):
-            return try await press(match, pid: pid, mode: mode)
+            return try await press(match, pid: pid, mode: mode, observe: observe)
         case let .notFound(component, available):
             throw EngineError.menuPathNotFound(component: component, available: available)
         case let .submenu(path, items):
@@ -544,7 +551,8 @@ actor Engine {
     private func press(
         _ match: MenuQuery.Match,
         pid: pid_t,
-        mode: ShortcutMode
+        mode: ShortcutMode,
+        observe: Bool = false
     ) async throws -> MenuPressResult {
         let hazard = match.hazard
         // Resolve-only answers what would happen and stops. Hazardous items refuse unless the
@@ -586,6 +594,7 @@ actor Engine {
         }
         let selectionBefore = ElementQuery.focused(pid: pid)?.selectedText
         let windowsBefore = onScreenWindowCount(pid)
+        let treeBaseline = treeEvidenceBaseline(pid: pid, observe: observe)
 
         // Accessibility only: `AXPress` is the sole meaningful way to actuate a menu item, and
         // the tentacles below would aim real clicks at a closed menu's meaningless geometry.
@@ -633,6 +642,12 @@ actor Engine {
             } else if let windowsAfter {
                 evidence = evidence.confirmedByWindowCountChange(before: windowsBefore, after: windowsAfter)
             }
+        }
+        // A menu press whose consequence is a value ticking somewhere in the window — invisible
+        // to selection, same-window pixels, and the window count alike. Skipped when the app
+        // already quit: its tree is gone, and the exit is the read-back.
+        if !processHasExited(pid) {
+            evidence = foldingTreeEvidence(into: evidence, pid: pid, baseline: treeBaseline)
         }
         return (evidence, match.path, match.enabled, hazard)
     }
@@ -1329,11 +1344,37 @@ actor Engine {
         return element
     }
 
+    /// The before half of the tree-delta evidence channel: one bounded walk of the primary
+    /// window, taken before an action so the after-walk has something to diff against. Nil
+    /// when no diff will be honest — no window, a truncated walk (which would report unwalked
+    /// elements as vanished), or a tree too large to walk twice without taxing every press
+    /// (unless the caller opted in with `observe`).
+    private func treeEvidenceBaseline(pid: pid_t, observe: Bool) -> [TreeSnapshot.Node]? {
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else { return nil }
+        let dump = TextDump.dump(root: window)
+        guard !dump.truncated else { return nil }
+        guard observe || dump.nodes.count <= Constants.treeEvidenceMaxElements else { return nil }
+        return dump.nodes
+    }
+
+    /// The after half: re-walks the primary window and folds the structural diff into the
+    /// evidence. A missing or truncated after-walk leaves the evidence exactly as it was —
+    /// this channel only ever adds signal, never removes it.
+    private func foldingTreeEvidence(
+        into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?
+    ) -> Evidence {
+        guard let baseline, let window = primaryWindow(of: AXElement(pid: pid)) else { return evidence }
+        let after = TextDump.dump(root: window)
+        guard !after.truncated else { return evidence }
+        return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after.nodes))
+    }
+
     func act(
         pid: pid_t,
         locator: Locator,
         action: GhostReach.Action,
-        allowHardwareInput: Bool
+        allowHardwareInput: Bool,
+        observe: Bool = false
     ) async throws -> Evidence {
         var groundingResult: GroundingResult?
         var effectiveLocator = locator
@@ -1407,6 +1448,8 @@ actor Engine {
         // Taken before the press for the same reason the pixel baseline is: the window-count
         // read-back below compares against the world as it was, not as the press left it.
         let windowsBefore = wantsPress ? onScreenWindowCount(pid) : nil
+        // The tree-delta channel's before-walk, same timing and same reason.
+        let treeBaseline = wantsPress ? treeEvidenceBaseline(pid: pid, observe: observe) : nil
 
         let reach = GhostReach(allowHardwareInput: allowHardwareInput)
         var evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
@@ -1438,6 +1481,12 @@ actor Engine {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
+        // The tree-delta channel, last because it is the strongest at seeing consequences the
+        // pixel and window-count channels miss (a value ticking on a sibling), and because
+        // "what changed" is worth more in the reply than "something changed". Folded even on a
+        // confirmed verdict: the diff is free once the baseline was taken, and it is the
+        // reply's most legible account of what the press did.
+        evidence = foldingTreeEvidence(into: evidence, pid: pid, baseline: treeBaseline)
         if let grounding = groundingResult {
             evidence.groundedBy = grounding.groundedBy
         }

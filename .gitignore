@@ -13,3 +13,4 @@ Docs/Archive/away-experiment-*.log
 
 # Agent worktrees are their own checkouts, never content of this one.
 .claude/worktrees/
+.detector-training/

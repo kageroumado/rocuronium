@@ -64,6 +64,14 @@ nonisolated struct Evidence: Codable, Sendable {
     /// "detector" when the YOLO+OCR tier matched; "vlm" when the VLM grounder produced them.
     var groundedBy: String? = nil
 
+    /// The window's accessibility-tree diff across the action, rendered the way `read --since`
+    /// renders it. Set whenever the tree-delta evidence channel walked and something changed —
+    /// the sibling label that ticked while the pressed button's own rect returned to rest.
+    var treeDelta: String? = nil
+    /// How many elements appeared, vanished, or changed value across the action. Zero is a
+    /// real answer (the tree was walked and held still), distinct from nil (never walked).
+    var treeChanges: Int? = nil
+
     struct Attempt: Codable, Sendable {
         let tentacle: Tentacle
         let outcome: String
@@ -241,6 +249,36 @@ nonisolated struct Evidence: Codable, Sendable {
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
         )
+    }
+
+    /// Folds the window's accessibility-tree diff into the verdict — the channel the pixel
+    /// and window-count channels cannot see, which caught a sibling `AXStaticText` ticking
+    /// 'clicks: 0' → 'clicks: 1' while the pressed button's own rectangle returned to rest.
+    ///
+    /// Confirm-only, like the window-pixel channel and for the same reason: the walk's scope
+    /// is the whole window, and a legitimate consequence can land in a popover or a second
+    /// window the walk never reached, so a still tree must never *refute* an action. Any
+    /// appeared, vanished, or changed element upgrades a weaker verdict to `.confirmed`; an
+    /// empty diff is recorded as `treeChanges: 0` and leaves the verdict untouched.
+    func addingTreeEvidence(_ delta: TreeDelta.Delta) -> Evidence {
+        let changed = !delta.isEmpty
+        let upgrading = verdict != .confirmed && changed
+        var result = Evidence(
+            action: action, target: target, tentacle: tentacle,
+            verdict: upgrading ? .confirmed : verdict,
+            readback: upgrading
+                ? "the window's accessibility tree changed (\(delta.changeCount) element(s))"
+                : readback,
+            pixelDelta: pixelDelta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts, referral: referral,
+            groundedBy: groundedBy,
+        )
+        result.treeChanges = delta.changeCount
+        result.treeDelta = changed ? TreeDelta.render(delta) : nil
+        return result
     }
 
     /// One line for the activity log and the CLI.

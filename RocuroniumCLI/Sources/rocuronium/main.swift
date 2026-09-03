@@ -30,10 +30,10 @@ Observe
 
 Act — ghost first; every reply carries verdict, tentacle, attempts
   type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
-  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>)
+  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>) [--observe]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
-  shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm]    presses the menu item
-  menu       --app <a> --path "File > Export" [--resolve-only] [--confirm]
+  shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item
+  menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
   scroll     --app <a> (--label <t> | --to <0..1> | --dy <px> [--dx <px>]
                         | --until-text <s> [--dy <±1>])
   statusitem --app <a> [--label <t>] [--press]
@@ -61,6 +61,8 @@ Meta
 Options
   --pid <n>                 target a process directly; overrides --app
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
+  --observe                 on click/shortcut/menu, diff the window's AX tree across the
+                            action and report what changed (walks a large tree it would skip)
   --json                    print the raw reply
 
 Eight things to know before the guide:
@@ -177,6 +179,7 @@ if arguments.contains("--press") { payload["press"] = true }
 if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
 if arguments.contains("--confirm") { payload["confirm"] = true }
 if arguments.contains("--restore") { payload["restore"] = true }
+if arguments.contains("--observe") { payload["observe"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
@@ -417,6 +420,12 @@ default:
     if let note = reply["note"] as? String { print("note: \(note)") }
     if let readback = reply["readback"] as? String, !readback.isEmpty {
         print("read back: \(readback.prefix(80))")
+    }
+    // What the AX tree diff caught — a sibling value ticking, a panel appearing — that the
+    // pixel and window-count channels could not see.
+    if let treeDelta = reply["treeDelta"] as? String, !treeDelta.isEmpty {
+        print("tree changed:")
+        for line in treeDelta.split(separator: "\n") { print("  \(line)") }
     }
     // Where OCR sighted the text — the coordinates a follow-up click aims at.
     if let found = reply["foundAt"] as? [String: Any] {

@@ -46,6 +46,7 @@ Every command answers one JSON object (`--json` prints it; MCP returns it verbat
 | `referral` | `{channel, reason, advice}` when no tentacle can reach the target and something else can (web content wants `refrax-ctl`, CDP, or Safari scripting). A referral means "compose that tool yourself". |
 | `suggestion` | a machine-readable next move on a refusal (the occlusion refusal suggests `park`) |
 | `groundedBy` | `detector` or `vlm` when the target's coordinates came from vision rather than the accessibility tree (§6) |
+| `treeChanges` / `treeDelta` | on `click`/`shortcut`/`menu`: how many window elements moved across the act, and the rendered diff of them. Any change confirms the act on its own — the channel that sees a sibling value ticking when pixels cannot. Absent when the tree was too large to walk twice (pass `--observe`) or truncated. |
 
 **The tentacles**, in the order they are tried. Each is verified before the next is
 attempted; a return code alone never counts.
@@ -63,7 +64,9 @@ attempted; a return code alone never counts.
 - **confirmed** — something observably changed: a read-back matched what was written, a
   scroll bar or element frame moved, pixels changed in a window that was provably still,
   the target's on-screen window count moved (File ▸ New, Cancel, Escape on a dialog, a
-  close button), or the process exited after a quit-shaped press. Proceed.
+  close button), an element in the window appeared, vanished, or changed value across the
+  act (the tree-diff channel — see below), or the process exited after a quit-shaped
+  press. Proceed.
 - **noEffect** — the call reported success and nothing observable changed. This is the
   verdict the system exists for: WebKit's `AXSetValue` lies, background AppKit menus
   never validate, wheel events are ignored. Do not retry the same call harder. Change
@@ -73,23 +76,30 @@ attempted; a return code alone never counts.
   testify. **Do not retry blindly**: the action may have landed, and a retry types it
   twice. Verify through another channel first.
 
-**Pixels are blind to small consequences.** Measured on the demo stage: a ghost click on
-"Tap Target" reads `noEffect` with `pixelDelta: 0`, because the button's own pixels
-return to rest and the counter that changed is one glyph in a 560×720 window, under the
-noise floor. `read --since` saw it exactly: `value changed: 'clicks: 0' → 'clicks: 1'`.
-When a verdict on a press is anything but `confirmed`, the tree diff is the cheap,
-deterministic second opinion. Take a `read` token before acting when you will need it.
+**Pixels are blind to small consequences — so the tree diff is a built-in channel.**
+Measured on the demo stage: a ghost click on "Tap Target" moves the button's own pixels
+back to rest and the counter that changed is one glyph in a 560×720 window, under the
+noise floor, so `pixelDelta` reads 0. `click`/`shortcut`/`menu` therefore walk the
+window's accessibility tree before and after the act and diff them: the click reports
+`treeChanges: 1`, `treeDelta: "value changed: AXStaticText 'clicks: 0' → 'clicks: 1'"`,
+and that alone confirms it. The walk is one bounded pass and is skipped on a tree too
+large to walk twice (Discord-sized) unless you pass `--observe`; the diff is emitted even
+on an already-confirmed act, because "what changed" is worth more than "something did".
+Confirm-only: a still tree never *refutes* a press, since the consequence can land in a
+popover or a second window the walk never reached. `read --since` remains the way to ask
+the same question by hand across any two moments.
 
 Two example replies, abbreviated:
 
     click --app Rocuronium --label "Tap Target" --json
-    { "ok": false, "verdict": "noEffect", "tentacle": "accessibility",
+    { "ok": true, "verdict": "confirmed", "tentacle": "accessibility",
       "attempts": [ {"tentacle":"displayWake","outcome":"alreadyAwake"},
                     {"tentacle":"accessibility","outcome":"press accepted"} ],
-      "pixelDelta": 0, "readback": "", "cursorMovedByUs": false, "focusTakenByUs": false,
-      "presence": {"state":"present","mayTakeCursor":false,"canSee":true,"offConsole":false,
-                   "advice":"A person is using this Mac right now. Stay on the ghost tentacles…"},
-      "summary": "click → AXButton 'Tap Target' [accessibility] NO EFFECT" }
+      "pixelDelta": 0, "treeChanges": 1,
+      "treeDelta": "value changed: AXStaticText 'clicks: 0' → 'clicks: 1'",
+      "readback": "the window's accessibility tree changed (1 element(s))",
+      "cursorMovedByUs": false, "focusTakenByUs": false,
+      "summary": "click → AXButton 'Tap Target' [accessibility] ok" }
 
     type --app Rocuronium --label "Type Here" --text hello --json
     { "ok": true, "verdict": "confirmed", "tentacle": "accessibility",
@@ -257,8 +267,10 @@ posted click → sting if permitted. An **accepted press ends the ladder** even 
 verifies as `unverifiable` or `noEffect`; escalation to posted or hardware clicks
 happens only when the element exposes no press action. So a `noEffect` click does not
 mean "try harder", it means "look elsewhere for the consequence": `read --since`, the
-window list, a region screenshot. Window-count and whole-window pixel evidence are added
-automatically for the dialog-opening and button-elsewhere cases.
+window list, a region screenshot. Window-count, whole-window pixel, and tree-diff
+evidence (`treeChanges`/`treeDelta`, §the verdicts) are added automatically for the
+dialog-opening and button-elsewhere cases; `--observe` forces the tree diff on a window
+large enough that it would otherwise be skipped.
 
 **`key --app X --keys K [--allow-hardware-input] [--confirm]`** — a bare named key with
 optional modifiers: `escape`, `return`, `enter`, `tab`, `space`, `delete`,

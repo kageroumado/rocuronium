@@ -170,6 +170,10 @@ final class CommandRouter {
         /// For `read`/`screenshot`: an observation token from a prior reply of the same
         /// verb; the reply becomes the delta against that observation.
         var since: String?
+        /// For `click`/`shortcut`/`menu`: walk the window's accessibility tree even when it
+        /// is large enough that the tree-delta evidence channel would otherwise skip it, so
+        /// the reply carries what changed. Off by default — one walk on a huge tree is slow.
+        var observe: Bool?
 
         /// For `plan`: the step list.
         var steps: [SequencePlan.Step]?
@@ -696,6 +700,7 @@ final class CommandRouter {
         let evidence = try await engine.act(
             pid: pid, locator: locator, action: action,
             allowHardwareInput: request.allowHardwareInput ?? false,
+            observe: request.observe ?? false,
         )
         return evidenceReply(evidence)
     }
@@ -788,7 +793,7 @@ final class CommandRouter {
 
         isDriving = true
         defer { isDriving = false }
-        let result = try await engine.pressShortcut(pid: pid, keys: keys, mode: mode)
+        let result = try await engine.pressShortcut(pid: pid, keys: keys, mode: mode, observe: request.observe ?? false)
         return menuPressReply(result, resolving: "'\(keys)'")
     }
 
@@ -814,7 +819,7 @@ final class CommandRouter {
 
         isDriving = true
         defer { isDriving = false }
-        let result = try await engine.pressMenuPath(pid: pid, path: path, mode: mode)
+        let result = try await engine.pressMenuPath(pid: pid, path: path, mode: mode, observe: request.observe ?? false)
         return menuPressReply(result, resolving: "'\(path)'")
     }
 
@@ -1278,6 +1283,10 @@ final class CommandRouter {
         // Coordinates that came from pixels rather than the tree are less certain; the
         // caller's cue to verify with a diff before building on them.
         if let groundedBy = evidence.groundedBy { reply["groundedBy"] = groundedBy }
+        // The tree-delta channel: how many elements moved, and (when any did) the rendered
+        // diff — the reply's most legible account of what the action caused.
+        if let treeChanges = evidence.treeChanges { reply["treeChanges"] = treeChanges }
+        if let treeDelta = evidence.treeDelta { reply["treeDelta"] = treeDelta }
         if let referral = evidence.referral {
             reply["referral"] = [
                 "channel": referral.channel,

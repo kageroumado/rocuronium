@@ -154,7 +154,10 @@ enum MCPServer {
             observably happened; an accepted press that verifies `noEffect` does not escalate, \
             because pixels miss small consequences (a counter changing elsewhere in the \
             window measured as pixelDelta 0) — confirm with `read` + `since` instead of \
-            retrying. Window-count and whole-window pixel evidence are added automatically. \
+            retrying. Window-count and whole-window pixel evidence are added automatically, \
+            as is the window's accessibility-tree diff: `treeChanges` counts what moved and \
+            `treeDelta` renders it (a sibling label ticking 'clicks: 0' → 'clicks: 1' that \
+            no pixel diff can see), and any tree change confirms the click on its own. \
             When a label matches several roles, pass `role`. A point on a plain group ascends \
             to the enclosing pressable control (SwiftUI wraps buttons this way). When the \
             accessibility tree has no match, vision grounding (OCR, then a local VLM if \
@@ -167,6 +170,7 @@ enum MCPServer {
                 "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
                 "y": ["type": "number"],
                 "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
+                "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app"],
         ),
         tool(
@@ -178,13 +182,16 @@ enum MCPServer {
             HAZARD: every app's menu bar includes the Apple menu, so session-wide items are reachable \
             from any target — cmd+shift+q resolves to Log Out. Items that end the session or destroy \
             data are refused unless `confirm` is true. Use `resolveOnly` to see which menu item a \
-            shortcut maps to before pressing it.
+            shortcut maps to before pressing it. Window-count, selection, whole-window pixel, \
+            and accessibility-tree-diff evidence (`treeChanges`/`treeDelta`) are added \
+            automatically.
             """,
             properties: [
                 "app": ["type": "string"],
                 "keys": ["type": "string", "description": "cmd+a, cmd+shift+z, cmd+left, ..."],
                 "resolveOnly": ["type": "boolean", "description": "Report the menu item without pressing it"],
                 "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
+                "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app", "keys"],
         ),
         tool(
@@ -236,13 +243,16 @@ enum MCPServer {
             the frontmost app, best-effort in the background (trust the verdict, not the \
             return); session- or data-destroying items are refused unless `confirm` is true; \
             `resolveOnly` reports the resolved item without pressing. A path that names a \
-            submenu is refused with its items listed — go one level deeper.
+            submenu is refused with its items listed — go one level deeper. Window-count, \
+            selection, whole-window pixel, and accessibility-tree-diff evidence \
+            (`treeChanges`/`treeDelta`) are added automatically.
             """,
             properties: [
                 "app": ["type": "string"],
                 "path": ["type": "string", "description": "Menu title path, levels separated by '>' or '▸'"],
                 "resolveOnly": ["type": "boolean", "description": "Report the resolved item without pressing it"],
                 "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
+                "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app", "path"],
         ),
         tool(
