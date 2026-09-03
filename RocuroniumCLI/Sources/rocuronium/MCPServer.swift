@@ -16,7 +16,7 @@ enum MCPServer {
     /// Tool definitions mirror the socket commands one-to-one. The descriptions carry the
     /// safety semantics — an agent picks tools by reading these, so the cursor and evidence
     /// guarantees belong here, not only in documentation.
-    private static let tools: [[String: Any]] = [
+    static let tools: [[String: Any]] = [
         tool(
             "status",
             """
@@ -161,7 +161,7 @@ enum MCPServer {
             """,
             properties: [
                 "app": ["type": "string"],
-                "text": ["type": "string"],
+                "text": ["type": "string", "description": "The text to put in the field (empty string clears it)"],
                 "label": ["type": "string", "description": "Target field's label; the focused element when omitted"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "submit": ["type": "boolean", "description": "Allow Return/Tab in the text"],
@@ -193,10 +193,10 @@ enum MCPServer {
             """,
             properties: [
                 "app": ["type": "string"],
-                "label": ["type": "string"],
+                "label": ["type": "string", "description": "Substring of the element's label to click"],
                 "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
                 "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
-                "y": ["type": "number"],
+                "y": ["type": "number", "description": "Screen y, paired with x"],
                 "button": ["type": "string", "enum": ["left", "right"], "description": "right opens a context menu"],
                 "count": ["type": "number", "description": "Clicks: 1 (default) or 2 for a double-click"],
                 "modifiers": ["type": "string", "description": "Held modifiers, comma-separated: cmd,shift,option,control,fn"],
@@ -388,7 +388,8 @@ enum MCPServer {
             "Move an app's primary window onto the virtual display (or to explicit x/y — the reply carries the previous position, which is the undo). Landing is read back as evidence. With no lease in force this takes an auto-lease (id in the reply) that releases itself — and sweeps its windows home — when the last parked window is returned or closes. Attaching the display is visually silent on the real screen (measured); the lease and the menu bar make it traceable.",
             properties: [
                 "app": ["type": "string"],
-                "x": ["type": "number"], "y": ["type": "number"],
+                "x": ["type": "number", "description": "Destination screen x (with y) — omit both to park onto the virtual display"],
+                "y": ["type": "number", "description": "Destination screen y, paired with x"],
             ], required: ["app"],
         ),
         tool(
@@ -456,8 +457,10 @@ enum MCPServer {
             """,
             properties: [
                 "app": ["type": "string"],
-                "x": ["type": "number"], "y": ["type": "number"],
-                "w": ["type": "number"], "h": ["type": "number"],
+                "x": ["type": "number", "description": "Region origin x (top-left), with y/w/h — omit all four for the whole display"],
+                "y": ["type": "number", "description": "Region origin y, paired with x"],
+                "w": ["type": "number", "description": "Region width in points"],
+                "h": ["type": "number", "description": "Region height in points"],
                 "path": ["type": "string", "description": "Where to write the PNG. Must end in .png, must not already exist, and must be under Desktop, Downloads, Pictures, /tmp, or the app's captures folder. Omit for a default path."],
                 "since": ["type": "string", "description": "Observation token from a prior capture of the same target; reply becomes changed-region crops or a scroll report"],
             ], required: [],
@@ -478,6 +481,13 @@ enum MCPServer {
         // Every tool that targets an app also accepts a pid, uniformly: it overrides `app`
         // and is the only unambiguous address when two instances share a bundle id.
         var properties = properties
+        if var app = properties["app"] as? [String: Any], app["description"] == nil {
+            // The one uniform meaning across every app-targeting tool — filled centrally so no
+            // tool has to repeat it, and so the docs-consistency test's "every property has a
+            // description" rule holds without noise.
+            app["description"] = "App name or bundle id to target"
+            properties["app"] = app
+        }
         if properties["app"] != nil, properties["pid"] == nil {
             properties["pid"] = [
                 "type": "number",
@@ -575,7 +585,7 @@ enum MCPServer {
         ]
     }
 
-    private static func schemaProperties(of tool: String) -> [String] {
+    static func schemaProperties(of tool: String) -> [String] {
         guard let definition = tools.first(where: { $0["name"] as? String == tool }),
               let schema = definition["inputSchema"] as? [String: Any],
               let properties = schema["properties"] as? [String: Any]

@@ -8,5 +8,6 @@ let package = Package(
     platforms: [.macOS(.v26)],
     targets: [
         .executableTarget(name: "rocuronium", path: "Sources/rocuronium"),
+        .testTarget(name: "rocuroniumTests", dependencies: ["rocuronium"], path: "Tests/rocuroniumTests"),
     ],
 )
