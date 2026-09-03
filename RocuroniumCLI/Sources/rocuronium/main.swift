@@ -32,6 +32,7 @@ Observe
 Act — ghost first; every reply carries verdict, tentacle, attempts
   type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
   click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>) [--observe]
+             [--button left|right] [--count 2] [--modifiers cmd,shift]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
   shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item
   menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
@@ -153,7 +154,7 @@ if command == "plan" {
         exit(2)
     }
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
@@ -175,7 +176,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that

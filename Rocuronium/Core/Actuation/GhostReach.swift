@@ -18,6 +18,19 @@ nonisolated struct GhostReach {
         case press
     }
 
+    /// How a click is delivered — button, count, and held modifiers. The default is the plain
+    /// left single click that `AXPress` can stand in for; anything else has no accessibility
+    /// equivalent and is delivered as a real posted (or hardware) event carrying these.
+    struct ClickOptions: Sendable {
+        enum Button: String, Sendable { case left, right }
+        var button: Button = .left
+        var count: Int = 1
+        var modifiers: CGEventFlags = []
+
+        /// The one shape `AXPress` faithfully reproduces. Everything else must be an event.
+        var isPlainLeftClick: Bool { button == .left && count == 1 && modifiers.isEmpty }
+    }
+
     // MARK: - Entry point
 
     /// Stop after the accessibility tentacle, whatever it reports.
@@ -29,9 +42,13 @@ nonisolated struct GhostReach {
     /// meaningful way to actuate a menu item.
     let accessibilityOnly: Bool
 
-    init(allowHardwareInput: Bool = false, accessibilityOnly: Bool = false) {
+    /// How a `.click` is delivered. Ignored by `.press` and `.setText`.
+    let clickOptions: ClickOptions
+
+    init(allowHardwareInput: Bool = false, accessibilityOnly: Bool = false, clickOptions: ClickOptions = .init()) {
         self.allowHardwareInput = allowHardwareInput
         self.accessibilityOnly = accessibilityOnly
+        self.clickOptions = clickOptions
     }
 
     func perform(
@@ -314,7 +331,11 @@ nonisolated struct GhostReach {
                     cursorBefore, frontBefore, attempts, pid, referral: referral,
                 )
             }
-            await HardwareInput.click(at: aim)
+            let hwClick: GhostReach.ClickOptions = if case .click = action { clickOptions } else { .init() }
+            await HardwareInput.click(
+                at: aim, button: hwClick.button == .right ? .right : .left,
+                count: hwClick.count, modifiers: hwClick.modifiers,
+            )
             PresenceRelay.impact(aim)
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
@@ -404,6 +425,29 @@ nonisolated struct GhostReach {
             )
 
         case .click, .press:
+            // A non-plain click — right button, double, or modified — has no accessibility
+            // equivalent (`AXPress` is a plain activation), so it falls straight through to a
+            // posted event carrying the button, count, and flags. The exception is a
+            // right-click on an element that exposes `AXShowMenu`: that opens the context menu
+            // cursor-free, which is exactly what the right-click wanted.
+            if case .click = action, !clickOptions.isPlainLeftClick {
+                if clickOptions.button == .right, let showMenu = element.showMenuAction {
+                    let code = element.perform(showMenu)
+                    guard code == .success else {
+                        attempts.append(.init(tentacle: .accessibility, outcome: "\(showMenu) failed (\(code.rawValue))"))
+                        return nil
+                    }
+                    try? await Task.sleep(for: .milliseconds(250))
+                    attempts.append(.init(tentacle: .accessibility, outcome: "show-menu action accepted — a context menu appearing is the consequence to watch for"))
+                    return await finish(
+                        action, element, .accessibility, .unverifiable, nil, nil,
+                        focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                        cursorBefore, frontBefore, attempts, pid,
+                    )
+                }
+                attempts.append(.init(tentacle: .accessibility, outcome: "no accessibility equivalent for a \(clickOptions.button.rawValue)/×\(clickOptions.count) click — falling through to a posted event"))
+                return nil
+            }
             // `AXShowMenu` counts as a press: menu buttons (and the remote elements System
             // Settings panes host) expose only it, and a human clicks them like any button.
             guard let pressish = element.pressishAction else {
@@ -503,7 +547,12 @@ nonisolated struct GhostReach {
                 attempts.append(.init(tentacle: .postedEvent, outcome: "element has no usable frame to click"))
                 return nil
             }
-            await EventPoster.click(at: CGPoint(x: frame.midX, y: frame.midY), pid: pid)
+            let click: GhostReach.ClickOptions = if case .click = action { clickOptions } else { .init() }
+            await EventPoster.click(
+                at: CGPoint(x: frame.midX, y: frame.midY), pid: pid,
+                button: click.button == .right ? .right : .left,
+                count: click.count, modifiers: click.modifiers,
+            )
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
             // A focus change is weak but real evidence that the click was received — unless a

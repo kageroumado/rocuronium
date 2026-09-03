@@ -180,7 +180,12 @@ enum MCPServer {
             When a label matches several roles, pass `role`. A point on a plain group ascends \
             to the enclosing pressable control (SwiftUI wraps buttons this way). When the \
             accessibility tree has no match, vision grounding (OCR, then a local VLM if \
-            installed) resolves the label to coordinates and the reply says `groundedBy`.
+            installed) resolves the label to coordinates and the reply says `groundedBy`. \
+            `button:'right'` opens a context menu (via AXShowMenu cursor-free where the \
+            element exposes it, else a posted right-click — a menu appearing is the window it \
+            watches for); `count:2` double-clicks; `modifiers` ("cmd,shift") are held during \
+            the click. A non-plain click has no AXPress equivalent, so it is delivered as a \
+            posted event and verified by pixels/tree/window-count rather than a press read-back.
             """,
             properties: [
                 "app": ["type": "string"],
@@ -188,6 +193,9 @@ enum MCPServer {
                 "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
                 "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
                 "y": ["type": "number"],
+                "button": ["type": "string", "enum": ["left", "right"], "description": "right opens a context menu"],
+                "count": ["type": "number", "description": "Clicks: 1 (default) or 2 for a double-click"],
+                "modifiers": ["type": "string", "description": "Held modifiers, comma-separated: cmd,shift,option,control,fn"],
                 "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app"],

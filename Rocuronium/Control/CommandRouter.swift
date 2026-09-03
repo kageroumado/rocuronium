@@ -162,8 +162,14 @@ final class CommandRouter {
         var duration: Double?
         /// For `move`/`drag`: linear, ease-in, ease-out, or ease-in-out (the default).
         var easing: String?
-        /// For `drag`: which button is held — left (the default) or right.
+        /// For `drag`: which button is held — left (the default) or right. For `click`:
+        /// which button is clicked.
         var button: String?
+        /// For `click`: number of clicks (1, or 2 for a double-click).
+        var count: Double?
+        /// For `click`: modifier keys held during the click, comma-separated
+        /// (cmd,shift,option,control,fn).
+        var modifiers: String?
         /// For `move`/`drag`: put the cursor back where it was after the gesture. Off by
         /// default — a hover only means something while the cursor stays on the target.
         var restore: Bool?
@@ -552,6 +558,25 @@ final class CommandRouter {
         return try await act(request, action: .setText(text))
     }
 
+    /// Parses a comma-separated modifier list ("cmd,shift") into event flags. Unknown tokens
+    /// are ignored rather than refused — a click with one modifier misspelled should still
+    /// carry the ones that parsed, and the reply's evidence shows what landed.
+    private static func parseModifiers(_ text: String?) -> CGEventFlags {
+        guard let text else { return [] }
+        var flags: CGEventFlags = []
+        for token in text.lowercased().split(whereSeparator: { $0 == "," || $0 == "+" }) {
+            switch token.trimmingCharacters(in: .whitespaces) {
+            case "cmd", "command", "⌘": flags.insert(.maskCommand)
+            case "shift", "⇧": flags.insert(.maskShift)
+            case "opt", "option", "alt", "⌥": flags.insert(.maskAlternate)
+            case "ctrl", "control", "⌃": flags.insert(.maskControl)
+            case "fn", "function": flags.insert(.maskSecondaryFn)
+            default: break
+            }
+        }
+        return flags
+    }
+
     /// The wire shape of one element: `label` is the element's own name (empty when it has
     /// none), with `roleDescription`, `help`, `identifier`, `subrole`, and `near` filling the
     /// gaps that a bare "button" label used to hide. Empty fields are omitted so a labelled
@@ -798,12 +823,18 @@ final class CommandRouter {
             .focused
         }
 
+        var clickOptions = GhostReach.ClickOptions()
+        if request.button == "right" { clickOptions.button = .right }
+        if let count = request.count { clickOptions.count = min(max(Int(count), 1), 3) }
+        clickOptions.modifiers = Self.parseModifiers(request.modifiers)
+
         isDriving = true
         defer { isDriving = false }
         let evidence = try await engine.act(
             pid: pid, locator: locator, action: action,
             allowHardwareInput: request.allowHardwareInput ?? false,
             observe: request.observe ?? false,
+            clickOptions: clickOptions,
         )
         return evidenceReply(evidence)
     }

@@ -295,6 +295,14 @@ evidence (`treeChanges`/`treeDelta`, §the verdicts) are added automatically for
 dialog-opening and button-elsewhere cases; `--observe` forces the tree diff on a window
 large enough that it would otherwise be skipped.
 
+`--button right` opens a context menu (through `AXShowMenu` where the element exposes it,
+cursor-free; a posted right-click otherwise — a menu appearing is the window-count change
+it confirms by). `--count 2` double-clicks; `--modifiers cmd,shift` holds those keys
+through the click. A non-plain click has no `AXPress` equivalent, so it skips tentacle 1
+and is delivered as a posted (or, with `--allow-hardware-input`, hardware) event carrying
+the button, count, and flags — verified by pixels, tree, and window count, not a press
+read-back.
+
 **`key --app X --keys K [--allow-hardware-input] [--confirm]`** — a bare named key with
 optional modifiers: `escape`, `return`, `enter`, `tab`, `space`, `delete`,
 `forwarddelete`, `left/right/up/down`, `home`, `end`, `pageup`, `pagedown`;

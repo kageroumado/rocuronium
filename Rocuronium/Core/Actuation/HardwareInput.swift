@@ -72,27 +72,41 @@ nonisolated enum HardwareInput {
     ///
     /// The restore is courtesy, not concealment: `Evidence.cursorMovedByUs` reports true for
     /// every hardware-tentacle action regardless, because the takeover happened even when undone.
-    static func click(at point: CGPoint) async {
+    static func click(
+        at point: CGPoint,
+        button: CGMouseButton = .left, count: Int = 1, modifiers: CGEventFlags = []
+    ) async {
         // Hardware events reset HIDIdleTime like any human input; record them so presence
         // detection is not fooled by our own hands.
         InputAttribution.shared.noteSyntheticInput()
         let restore = CGEvent(source: nil)?.location
         let source = CGEventSource(stateID: .hidSystemState)
+        let (downType, upType): (CGEventType, CGEventType) = button == .right
+            ? (.rightMouseDown, .rightMouseUp)
+            : (.leftMouseDown, .leftMouseUp)
 
         CGEvent(
             mouseEventSource: source, mouseType: .mouseMoved,
-            mouseCursorPosition: point, mouseButton: .left,
+            mouseCursorPosition: point, mouseButton: button,
         )?.post(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.settleDelay)
-        CGEvent(
-            mouseEventSource: source, mouseType: .leftMouseDown,
-            mouseCursorPosition: point, mouseButton: .left,
-        )?.post(tap: SessionContext.eventTap)
-        try? await Task.sleep(for: Constants.clickHoldDuration)
-        CGEvent(
-            mouseEventSource: source, mouseType: .leftMouseUp,
-            mouseCursorPosition: point, mouseButton: .left,
-        )?.post(tap: SessionContext.eventTap)
+        for clickState in 1 ... min(max(count, 1), 3) {
+            let down = CGEvent(
+                mouseEventSource: source, mouseType: downType,
+                mouseCursorPosition: point, mouseButton: button,
+            )
+            down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+            if !modifiers.isEmpty { down?.flags = modifiers }
+            down?.post(tap: SessionContext.eventTap)
+            try? await Task.sleep(for: Constants.clickHoldDuration)
+            let up = CGEvent(
+                mouseEventSource: source, mouseType: upType,
+                mouseCursorPosition: point, mouseButton: button,
+            )
+            up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+            if !modifiers.isEmpty { up?.flags = modifiers }
+            up?.post(tap: SessionContext.eventTap)
+        }
 
         if let restore {
             try? await Task.sleep(for: Constants.settleDelay)

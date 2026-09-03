@@ -143,6 +143,13 @@ nonisolated struct AXElement {
         return nil
     }
 
+    /// `AXShowMenu` when the element exposes it — the cursor-free way to open a context menu,
+    /// which is what a right-click asks for. Nil when the element has no such action, so the
+    /// caller falls through to a posted right-click.
+    var showMenuAction: String? {
+        actionNames.contains(kAXShowMenuAction) ? kAXShowMenuAction : nil
+    }
+
     var children: [AXElement] {
         ((attribute(kAXChildrenAttribute) as? [AXUIElement]) ?? []).map(AXElement.init)
     }

@@ -101,21 +101,35 @@ nonisolated enum EventPoster {
 
     /// Clicks a screen point inside one process. The pointer is not moved: the coordinate
     /// rides on the event itself.
-    static func click(at point: CGPoint, pid: pid_t) async {
+    static func click(
+        at point: CGPoint, pid: pid_t,
+        button: CGMouseButton = .left, count: Int = 1, modifiers: CGEventFlags = []
+    ) async {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
-        guard let down = CGEvent(
-            mouseEventSource: source, mouseType: .leftMouseDown,
-            mouseCursorPosition: point, mouseButton: .left,
-        ),
-            let up = CGEvent(
-                mouseEventSource: source, mouseType: .leftMouseUp,
-                mouseCursorPosition: point, mouseButton: .left,
-            )
-        else { return }
-        down.postToPid(pid)
-        try? await Task.sleep(for: Constants.clickHoldDuration)
-        up.postToPid(pid)
+        let (downType, upType): (CGEventType, CGEventType) = button == .right
+            ? (.rightMouseDown, .rightMouseUp)
+            : (.leftMouseDown, .leftMouseUp)
+        // Each click in a multi-click carries an increasing clickState (1, then 2) so the app
+        // recognizes a double-click rather than two unrelated clicks. Capped so a stray large
+        // count cannot hold the button through a long burst.
+        for clickState in 1 ... min(max(count, 1), 3) {
+            guard let down = CGEvent(
+                mouseEventSource: source, mouseType: downType,
+                mouseCursorPosition: point, mouseButton: button,
+            ),
+                let up = CGEvent(
+                    mouseEventSource: source, mouseType: upType,
+                    mouseCursorPosition: point, mouseButton: button,
+                )
+            else { return }
+            down.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+            up.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+            if !modifiers.isEmpty { down.flags = modifiers; up.flags = modifiers }
+            down.postToPid(pid)
+            try? await Task.sleep(for: Constants.clickHoldDuration)
+            up.postToPid(pid)
+        }
     }
 
     /// Posts scroll-wheel events to a process, aimed at a screen point.
