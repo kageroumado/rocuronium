@@ -115,6 +115,11 @@ actor Engine {
         /// calling agent has that context.
         case occludedTarget(String, suggestion: String)
 
+        var isNotFound: Bool {
+            if case .notFound = self { return true }
+            return false
+        }
+
         var errorDescription: String? {
             switch self {
             case .cannotSee:
@@ -142,6 +147,12 @@ actor Engine {
                 reason
             }
         }
+    }
+
+    struct GroundingResult: Sendable {
+        let point: CGPoint
+        let confidence: Double
+        let groundedBy: String
     }
 
     /// Proof rather than assumption: the whole point of this actor is that its work does not
@@ -1324,9 +1335,23 @@ actor Engine {
         action: GhostReach.Action,
         allowHardwareInput: Bool
     ) async throws -> Evidence {
-        var element = try resolve(locator, pid: pid)
+        var groundingResult: GroundingResult?
+        var effectiveLocator = locator
+        var element: AXElement
+        do {
+            element = try resolve(locator, pid: pid)
+        } catch let error as EngineError where error.isNotFound {
+            if case let .named(label, _) = locator {
+                let result = try await ground(instruction: label, pid: pid)
+                groundingResult = result
+                effectiveLocator = .point(x: result.point.x, y: result.point.y)
+                element = try resolve(effectiveLocator, pid: pid)
+            } else {
+                throw error
+            }
+        }
         let wantsPress = if case .setText = action { false } else { true }
-        if wantsPress, case .point = locator {
+        if wantsPress, case .point = effectiveLocator {
             element = ascendToPressable(element)
         }
         // How the reach recovers when the handle dies mid-action (Electron rebuilds elements
@@ -1342,11 +1367,11 @@ actor Engine {
         // what distinguishes two same-role fields in one app, and a rebuilt-in-place element
         // still matches it.
         let originalSignature = element.signature
-        let refetch: () -> AXElement? = { [wantsPress] in
+        let refetch: () -> AXElement? = { [wantsPress, effectiveLocator] in
             func accept(_ candidate: AXElement?) -> AXElement? {
                 candidate?.signature == originalSignature ? candidate : nil
             }
-            return switch locator {
+            return switch effectiveLocator {
             case .focused: accept(ElementQuery.focused(pid: pid))
             case let .point(x, y):
                 // The same ascent as resolution, so the refetched candidate is compared
@@ -1413,7 +1438,57 @@ actor Engine {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
+        if let grounding = groundingResult {
+            evidence.groundedBy = grounding.groundedBy
+        }
         return evidence
+    }
+
+    // MARK: - Vision grounding
+
+    private let detector = DetectorBackend()
+    private let vlm = MLXBackend()
+
+    private func ground(instruction: String, pid: pid_t) async throws -> GroundingResult {
+        guard ScreenCapture.isPermitted else {
+            throw GroundingError.screenRecordingRequired
+        }
+        guard DisplayWake.perceptionIsReliable else {
+            throw EngineError.cannotSee
+        }
+
+        let frame = try windowFrame(pid: pid)
+        let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+        let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
+
+        if detector.isAvailable {
+            let candidates = try await detector.locate(instruction, in: capture.image)
+            if let best = candidates.first {
+                let center = CGPoint(x: best.rect.midX, y: best.rect.midY)
+                let screen = imageToScreen(center, imageWidth: capture.image.width, imageHeight: capture.image.height, windowFrame: capture.windowFrame)
+                return GroundingResult(point: screen, confidence: best.confidence, groundedBy: "detector")
+            }
+        }
+
+        if await vlm.isAvailable {
+            let candidates = try await vlm.locate(instruction, in: capture.image)
+            if let best = candidates.first {
+                let center = CGPoint(x: best.rect.midX, y: best.rect.midY)
+                let screen = imageToScreen(center, imageWidth: capture.image.width, imageHeight: capture.image.height, windowFrame: capture.windowFrame)
+                return GroundingResult(point: screen, confidence: best.confidence, groundedBy: "vlm")
+            }
+        }
+
+        throw EngineError.notFound("'\(instruction)' (AX tree empty, vision grounding found nothing)")
+    }
+
+    private nonisolated func imageToScreen(
+        _ imagePoint: CGPoint, imageWidth: Int, imageHeight: Int, windowFrame: CGRect
+    ) -> CGPoint {
+        CGPoint(
+            x: windowFrame.minX + (imagePoint.x / CGFloat(imageWidth)) * windowFrame.width,
+            y: windowFrame.minY + (imagePoint.y / CGFloat(imageHeight)) * windowFrame.height
+        )
     }
 
     // MARK: - Cursor paths

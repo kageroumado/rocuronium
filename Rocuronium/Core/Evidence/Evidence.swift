@@ -60,6 +60,10 @@ nonisolated struct Evidence: Codable, Sendable {
     /// of a failed click.
     var suggestion: String? = nil
 
+    /// How the target's coordinates were obtained. Nil when AX resolved the element directly;
+    /// "detector" when the YOLO+OCR tier matched; "vlm" when the VLM grounder produced them.
+    var groundedBy: String? = nil
+
     struct Attempt: Codable, Sendable {
         let tentacle: Tentacle
         let outcome: String
@@ -127,6 +131,7 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
+            groundedBy: groundedBy,
         )
     }
 
@@ -150,6 +155,7 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
+            groundedBy: groundedBy,
         )
     }
 
@@ -171,6 +177,7 @@ nonisolated struct Evidence: Codable, Sendable {
                 outcome: "the target process exited — an action that closes its app cannot read back; the exit is the evidence",
             )],
             referral: referral,
+            groundedBy: groundedBy,
         )
     }
 
@@ -196,6 +203,7 @@ nonisolated struct Evidence: Codable, Sendable {
                 outcome: "window count \(before) → \(after) — the consequence landed at the window level, where element evidence cannot see",
             )],
             referral: referral,
+            groundedBy: groundedBy,
         )
     }
 
@@ -231,6 +239,7 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
+            groundedBy: groundedBy,
         )
     }
 

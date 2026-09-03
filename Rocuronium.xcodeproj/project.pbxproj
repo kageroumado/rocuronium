@@ -91,6 +91,10 @@
 			name = Rocuronium;
 			packageProductDependencies = (
 				7B0000000000000000000002 /* Propofol */,
+				7B0000000000000000000011 /* MLXVLM */,
+				7B0000000000000000000012 /* MLXLMCommon */,
+				7B0000000000000000000013 /* MLX */,
+				7B0000000000000000000021 /* Transformers */,
 			);
 			productName = Rocuronium;
 			productReference = 0B0929CD301FBEED006E2BB2 /* Rocuronium.app */;
@@ -149,6 +153,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				7B0000000000000000000001 /* XCRemoteSwiftPackageReference "propofol" */,
+				7B0000000000000000000010 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				7B0000000000000000000020 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0B0929CE301FBEED006E2BB2 /* Products */;
@@ -485,6 +491,22 @@
 				minimumVersion = 0.1.0;
 			};
 		};
+		7B0000000000000000000010 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm.git";
+			requirement = {
+				kind = branch;
+				branch = main;
+			};
+		};
+		7B0000000000000000000020 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -492,6 +514,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7B0000000000000000000001 /* XCRemoteSwiftPackageReference "propofol" */;
 			productName = Propofol;
+		};
+		7B0000000000000000000011 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7B0000000000000000000010 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXVLM;
+		};
+		7B0000000000000000000012 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7B0000000000000000000010 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		7B0000000000000000000013 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7B0000000000000000000010 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLX;
+		};
+		7B0000000000000000000021 /* Transformers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7B0000000000000000000020 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Transformers;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

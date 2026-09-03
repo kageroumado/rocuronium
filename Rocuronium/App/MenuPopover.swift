@@ -71,6 +71,8 @@ struct MenuPopover: View {
                     )
                 }
 
+                visionCard
+
                 if !engine.activityLog.entries.isEmpty {
                     activityCard
                 }
@@ -282,6 +284,34 @@ struct MenuPopover: View {
         .glassCard()
     }
 
+    private var visionCard: some View {
+        let vlmInstalled = ModelStore.isInstalled("holo-3.1-4b")
+        let detectorInstalled = ModelStore.isInstalled("yolo-detector")
+        let anyInstalled = vlmInstalled || detectorInstalled
+
+        return HStack(alignment: .top, spacing: Theme.Space.md) {
+            Image(systemName: anyInstalled ? "eye.fill" : "eye.slash")
+                .foregroundStyle(anyInstalled ? Theme.agent : .secondary)
+                .symbolRenderingMode(.hierarchical)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(anyInstalled ? "Vision grounding" : "Vision grounding (not set up)")
+                    .font(.callout.weight(.medium))
+                Text(anyInstalled
+                    ? (vlmInstalled ? "VLM + detector ready" : "Detector only")
+                    : "Download models to find UI elements when accessibility is empty.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !anyInstalled {
+                    Button("Set up in Settings…") { engine.showSettings() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(Theme.Space.md)
+        .glassCard(tint: anyInstalled ? nil : Theme.agent.opacity(0.08))
+    }
+
     private var overlayToggleCard: some View {
         @Bindable var model = engine.overlayModel
         return VStack(alignment: .leading, spacing: 2) {
@@ -313,6 +343,14 @@ struct MenuPopover: View {
             Spacer(minLength: 0)
             GlassEffectContainer(spacing: Theme.Space.sm) {
                 HStack(spacing: Theme.Space.sm) {
+                    Button {
+                        engine.showSettings()
+                    } label: {
+                        Image(systemName: "gearshape").frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .help("Settings — models, preferences")
                     Button {
                         engine.showDemoStage()
                     } label: {

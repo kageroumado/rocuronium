@@ -16,6 +16,10 @@ struct RocuroniumApp: App {
             Image(nsImage: MenuBarGlyph.glyph(driving: engine.isDriving, badged: engine.strayCount > 0))
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 
@@ -47,6 +51,12 @@ final class EngineHost {
 
     func showDemoStage() {
         router.demoStage.show(reset: true)
+    }
+
+    private let settingsWindow = SettingsWindowController()
+
+    func showSettings() {
+        settingsWindow.show()
     }
 
     init() {
