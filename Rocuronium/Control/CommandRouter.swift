@@ -542,6 +542,28 @@ final class CommandRouter {
         return try await act(request, action: .setText(text))
     }
 
+    /// The wire shape of one element: `label` is the element's own name (empty when it has
+    /// none), with `roleDescription`, `help`, `identifier`, `subrole`, and `near` filling the
+    /// gaps that a bare "button" label used to hide. Empty fields are omitted so a labelled
+    /// control's row stays as terse as it was.
+    private func elementRow(_ element: Engine.ElementDescriptor) -> [String: Any] {
+        var row: [String: Any] = [
+            "role": element.role,
+            "label": element.label,
+            "value": element.value,
+            "depth": element.depth,
+        ]
+        if let roleDescription = element.roleDescription { row["roleDescription"] = roleDescription }
+        if let help = element.help { row["help"] = help }
+        if let identifier = element.identifier { row["identifier"] = identifier }
+        if let subrole = element.subrole { row["subrole"] = subrole }
+        if let near = element.near { row["near"] = near }
+        if let frame = element.frame {
+            row["frame"] = ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
+        }
+        return row
+    }
+
     private func find(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         // Explicit --ocr skips the tree; otherwise walk it, and fall back to OCR only when the
@@ -557,18 +579,7 @@ final class CommandRouter {
         }
         return [
             "ok": true,
-            "matches": outcome.elements.map { element -> [String: Any] in
-                var row: [String: Any] = [
-                    "role": element.role,
-                    "label": element.label,
-                    "value": element.value,
-                    "depth": element.depth,
-                ]
-                if let frame = element.frame {
-                    row["frame"] = ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
-                }
-                return row
-            },
+            "matches": outcome.elements.map(elementRow),
             "truncated": outcome.truncated,
             "elementsVisited": outcome.elementsVisited,
             "canSee": true,
@@ -1612,11 +1623,7 @@ final class CommandRouter {
             let items = try await engine.statusItems(pid: pid)
             return [
                 "ok": true,
-                "items": items.map { item -> [String: Any] in
-                    var row: [String: Any] = ["role": item.role, "label": item.label]
-                    if let frame = item.frame { row["frame"] = block(for: frame) }
-                    return row
-                },
+                "items": items.map(elementRow),
                 "count": items.count,
                 "summary": items.isEmpty
                     ? "no status items — this app installs none"

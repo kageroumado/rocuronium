@@ -131,12 +131,16 @@ one address, `--pid`, which every app-taking verb accepts and which overrides `-
 always know which mechanism answered:
 
 - `--label <text>` — case-insensitive substring match, in one walk of the app's windows.
-  An element's label is the first non-empty of title, description, placeholder, and role
-  description; its value is the fallback tier, tried only when no label matched, so text
-  you saw in `read` output is findable even when it exists only as a value. Because role
-  description is the last fallback, an **icon-only button reports the label `button`**;
-  `find --role button` lists them with frames, and `read` shows their symbol names when
-  the app exposes them as descriptions (Finder's sidebar icons read `home`, `clock`, `move`).
+  Matching consults title, description, placeholder, then role description, then (as the
+  last tier, only when no label matched) the element's value, so text you saw in `read`
+  output is findable even when it exists only as a value. **What comes back is split from
+  what is matched**: a row's `label` is the element's own name only (title / description /
+  placeholder) and is empty when it has none, with `roleDescription` ("button"), `help`
+  (the tooltip, `AXHelp` — an icon button's name without a hover), `identifier`
+  (`AXIdentifier`, SwiftUI's `accessibilityIdentifier`, often the symbol name), `subrole`,
+  and `near` (the nearest labelled sibling and the bearing to it, "right of 'Undo'") in
+  their own fields. So an **icon-only button is `label:""`, `roleDescription:"button"`** —
+  match on its help, identifier, or near, or list `find --role button` and aim by frame.
 - `--role <r>` narrows a label match when several roles share the text (a button and a
   menu item both named "Restart"). `button` and `AXButton` both work.
 - `--x <n> --y <n>` hit-tests the point. For a press, a hit on a plain group ascends to
@@ -185,8 +189,8 @@ is granted, `find` **falls back to OCR** automatically; `--ocr` forces it. OCR r
 screen-point frames for a window whose tree is empty or lying.
 
     find --app Finder --role button
-    AXButton  'button'  @(1448,474)  depth 7
-    AXButton  'button'  @(1448,698)  depth 7
+    AXButton  (button)  @(1448,474)  help 'Back'  near left of 'Path'  depth 7
+    AXButton  (button)  @(1448,698)  near right of 'Back'  depth 7
     …
     5 shown · 994 elements visited
 

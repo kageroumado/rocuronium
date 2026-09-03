@@ -36,14 +36,17 @@ enum MCPServer {
             "find",
             """
             List elements of a running app via accessibility: up to 20 rows of {role, \
-            label, value, depth, frame}, frames in screen points with a top-left origin. \
-            Give `label` to search by case-insensitive substring of the element's title, \
+            label, roleDescription, help, identifier, subrole, value, depth, frame, near}, \
+            frames in screen points with a top-left origin. `label` is the element's OWN name \
+            (title/description/placeholder) and is empty when it has none — an icon-only \
+            control is `label:"", roleDescription:"button"`, often with `help` (its tooltip, \
+            readable without hovering), `identifier` (SwiftUI's accessibilityIdentifier, \
+            frequently the symbol name), and `near` ("right of 'Undo'"): match on those and \
+            aim by frame. Give `label` to search by case-insensitive substring of the title, \
             description, or placeholder (element *values* are the fallback tier, so text \
             seen in `read` output is findable); give `role` alone to list every element of \
-            that role; omit both to list editable fields. An icon-only control with no \
-            title reports the label 'button' (its role description), so list those by role \
-            and aim by frame. `truncated:true` means the walk stopped, not that nothing \
-            else exists. When the tree yields nothing and Screen Recording is granted, `find` \
+            that role; omit both to list editable fields. `truncated:true` means the walk \
+            stopped, not that nothing else exists. When the tree yields nothing and Screen Recording is granted, `find` \
             falls back to OCR automatically; pass `ocr:true` to force it. OCR rows come back \
             as {role:'OCRText', label:<text>, frame, groundedBy:'ocr'} with `shown`/`total` \
             counts — text with screen-point frames for a window whose tree is empty or lying.

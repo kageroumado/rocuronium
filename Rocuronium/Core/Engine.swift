@@ -51,10 +51,26 @@ actor Engine {
     /// A `Sendable` snapshot of an element, since the element itself cannot cross.
     struct ElementDescriptor: Codable, Sendable {
         let role: String
+        /// The element's own name only — title, description, or placeholder — empty when it
+        /// has none. Never the role description, which now has its own field: an agent must be
+        /// able to tell an unlabelled control from one titled with a word like "button".
         let label: String
+        /// The system's phrase for the kind ("button", "close button"). Fills the gap `label`
+        /// used to paper over.
+        let roleDescription: String?
+        /// Tooltip text (`AXHelp`), when the app exposes one — an icon button's name without a
+        /// hover.
+        let help: String?
+        /// `AXIdentifier` — SwiftUI's `accessibilityIdentifier`, often the symbol name.
+        let identifier: String?
+        /// `AXSubrole` ("AXCloseButton", "AXSecureTextField", …).
+        let subrole: String?
         let value: String
         let depth: Int
         let frame: Frame?
+        /// For a row with no `label` of its own: the nearest labelled sibling and the bearing
+        /// to it ("right of 'Undo'"), the only handle an agent has on an unnamed control.
+        let near: String?
 
         struct Frame: Codable, Sendable {
             let x: Double, y: Double, width: Double, height: Double
@@ -1778,15 +1794,53 @@ actor Engine {
     }
 
     private func descriptor(for element: AXElement, depth: Int) -> ElementDescriptor {
-        ElementDescriptor(
+        let title = element.title
+        return ElementDescriptor(
             role: element.role,
-            label: element.label,
+            label: title,
+            roleDescription: element.roleDescription,
+            help: element.help,
+            identifier: element.identifier,
+            subrole: element.subrole,
             value: element.value ?? "",
             depth: depth,
             frame: element.frame.map {
                 .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height)
             },
+            // Only for the unnamed rows, and only from siblings — see the helper's note.
+            near: title.isEmpty ? nearestLabelledSibling(of: element) : nil,
         )
+    }
+
+    /// The nearest labelled sibling of an unnamed element, phrased as a bearing an agent can
+    /// use — "right of 'Undo'". Read from the element's siblings only (one parent fetch, its
+    /// children bounded), never a tree walk, so a `find` returning twenty icon buttons stays
+    /// twenty parent reads rather than twenty traversals.
+    private func nearestLabelledSibling(of element: AXElement) -> String? {
+        guard let frame = element.frame, let siblings = element.parent?.children else { return nil }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        var best: (label: String, distance: Double, dx: Double, dy: Double)?
+        for sibling in siblings {
+            let title = sibling.title
+            guard !title.isEmpty, let siblingFrame = sibling.frame,
+                  siblingFrame.width >= 1, siblingFrame.height >= 1 else { continue }
+            let dx = Double(siblingFrame.midX - center.x)
+            let dy = Double(siblingFrame.midY - center.y)
+            let distance = hypot(dx, dy)
+            if best == nil || distance < best!.distance {
+                best = (title, distance, dx, dy)
+            }
+        }
+        guard let best else { return nil }
+        // The bearing is from the sibling to this element: a sibling to our right (dx > 0)
+        // sits us to its left. Screen y grows downward, so a sibling above us has dy < 0.
+        let direction: String
+        if abs(best.dx) >= abs(best.dy) {
+            direction = best.dx < 0 ? "right of" : "left of"
+        } else {
+            direction = best.dy < 0 ? "below" : "above"
+        }
+        return "\(direction) '\(best.label)'"
     }
 
     /// Read on this actor rather than hopping to the main one: `runningApplications` is safe to

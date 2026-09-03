@@ -53,6 +53,39 @@ nonisolated struct AXElement {
         return ""
     }
 
+    /// The element's own name — title, description, or placeholder — and never the role
+    /// description. `label` falls back to the role description because matching benefits from
+    /// it, but a row reported to the caller must not: an unlabelled button whose `title` is
+    /// empty is a different fact from one titled with the literal word its kind happens to be,
+    /// and only `title` can tell them apart. Empty when the element carries no name of its own.
+    var title: String {
+        for name in [kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute] {
+            if let value = string(name), !value.isEmpty { return value }
+        }
+        return ""
+    }
+
+    /// The system's human phrase for the element's kind — "button", "text field", "close
+    /// button". Its own field so it never masquerades as a title in a reported row.
+    var roleDescription: String? {
+        let value = string(kAXRoleDescriptionAttribute)
+        return (value?.isEmpty ?? true) ? nil : value
+    }
+
+    /// Tooltip text (`AXHelp`), readable without hovering — often the only name an icon-only
+    /// control carries, which is what makes this the cheap half of closing the icon-only gap.
+    var help: String? {
+        let value = string(kAXHelpAttribute)
+        return (value?.isEmpty ?? true) ? nil : value
+    }
+
+    /// `AXIdentifier`: SwiftUI fills it from `accessibilityIdentifier`, and AppKit often
+    /// leaves it as the control's symbol name — a stable handle when the title is absent.
+    var identifier: String? {
+        let value = string(kAXIdentifierAttribute)
+        return (value?.isEmpty ?? true) ? nil : value
+    }
+
     var value: String? {
         guard let raw = attribute(kAXValueAttribute) else { return nil }
         if let text = raw as? String { return text }

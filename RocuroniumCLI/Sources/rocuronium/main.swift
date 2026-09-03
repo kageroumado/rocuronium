@@ -73,7 +73,8 @@ Eight things to know before the guide:
      landed: verify before retrying).
   2. Coordinates are points, origin at the top-left of the main display, everywhere.
   3. `--label` is a case-insensitive substring of title, description, placeholder, then
-     value. Ambiguity is refused; narrow with --role. Icon-only buttons read as 'button'.
+     value. Ambiguity is refused; narrow with --role. An icon-only button has an empty
+     label and a roleDescription of 'button' — match its help, identifier, or near instead.
   4. `type` sets the field's value through accessibility; when that is refused it falls
      through to keystrokes at the caret. The reply's tentacle says which happened.
   5. `read` returns a token; `read --since <token>` returns only what changed. Pixels miss
@@ -274,7 +275,19 @@ case "find":
     for match in matches {
         let frame = match["frame"] as? [String: Any] ?? [:]
         let position = frame.isEmpty ? "" : "  @(\(Int(frame["x"] as? Double ?? 0)),\(Int(frame["y"] as? Double ?? 0)))"
-        print("\(match["role"] ?? "?")  '\(match["label"] ?? "")'\(position)  depth \(match["depth"] ?? "?")")
+        // An element's own name if it has one; otherwise the kind, the tooltip, and where it
+        // sits — everything that lets an agent aim at an icon-only control.
+        let label = match["label"] as? String ?? ""
+        var name = label.isEmpty ? "" : "'\(label)'"
+        if label.isEmpty, let roleDescription = match["roleDescription"] as? String { name = "(\(roleDescription))" }
+        let extras = [
+            (match["help"] as? String).map { "help '\($0)'" },
+            (match["identifier"] as? String).map { "id '\($0)'" },
+            (match["near"] as? String).map { "near \($0)" },
+        ].compactMap { $0 }
+        let suffix = extras.isEmpty ? "" : "  " + extras.joined(separator: "  ")
+        let grounded = match["groundedBy"].map { "  [\($0)]" } ?? ""
+        print("\(match["role"] ?? "?")  \(name)\(position)\(suffix)  depth \(match["depth"] ?? "?")\(grounded)")
     }
     print("\n\(matches.count) shown · \(reply["elementsVisited"] ?? 0) elements visited"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
