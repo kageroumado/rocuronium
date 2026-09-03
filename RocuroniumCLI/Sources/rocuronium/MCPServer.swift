@@ -399,7 +399,10 @@ enum MCPServer {
             Each step is an existing verb (click, type, scroll, etc.) with an optional \
             'expect' guard (verdict, readback-contains, window-appears, window-vanishes, \
             text-visible, text-vanishes, quiet, token-changed) and 'onFail' policy (abort, continue, \
-            pause-for-human, or {\"fallback\": {step}}). Profile 'ghost' (default) stays \
+            pause-for-human, or {\"fallback\": {step}}). A step's 'refs' map feeds a field from \
+            an earlier step's reply — {\"refs\": {\"x\": \"$2.foundAt.cx\", \"y\": \
+            \"$2.foundAt.cy\"}} clicks the center of the rectangle step 2 found (cx/cy are \
+            derived from a {x,y,w,h} block). Profile 'ghost' (default) stays \
             invisible; 'visible' shows bezel narration per step with human pacing. The \
             reply is one transcript with per-step verdicts. ���⌥⇧⎋ aborts mid-plan.
             """,

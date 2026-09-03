@@ -54,6 +54,13 @@ struct SequencePlan: Decodable, Sendable {
         let expect: PlanGuard?
         let onFail: FailurePolicy?
 
+        /// References into earlier steps' replies, resolved by the executor just before this
+        /// step runs: `{"x": "$2.foundAt.cx", "y": "$2.foundAt.cy"}` sets this step's `x`/`y`
+        /// from step 2's `foundAt` rectangle. A field here overrides the step's own value; the
+        /// path is one level of reply keys, with `cx`/`cy` derived from a `{x,y,w,h}` block.
+        /// Lives in its own map because the step's typed fields cannot hold a `$…` string.
+        let refs: [String: String]?
+
         /// Encodes this step back into the flat dictionary the socket protocol expects.
         func asRequestJSON(profile: Profile) -> [String: Any] {
             var dict: [String: Any] = ["command": command]

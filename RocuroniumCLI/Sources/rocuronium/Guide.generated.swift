@@ -458,7 +458,8 @@ mid-path releases its button where it stopped, never leaving it held.
 
 `plan` executes a list of steps as one daemon-side operation, no round-trips between
 steps, so the world cannot change between them. Each step is an existing verb with its
-arguments plus an optional `expect` guard and an `onFail` policy.
+arguments plus an optional `expect` guard, an `onFail` policy, and a `refs` map that feeds
+a field from an earlier step's reply.
 
     rocuronium plan --file steps.json      (or pipe JSON to stdin)
     { "profile": "ghost", "steps": [
@@ -466,6 +467,19 @@ arguments plus an optional `expect` guard and an `onFail` policy.
         "expect": { "type": "window-vanishes", "title": "Save" }, "onFail": "abort" },
       { "command": "type", "app": "TextEdit", "text": "done",
         "expect": { "type": "readback-contains", "text": "done" } } ] }
+
+A step's **`refs`** map sets one of its fields from an earlier step's reply, resolved just
+before the step runs — how a `scroll --until-text` feeds the click that follows:
+
+    { "steps": [
+      { "command": "scroll", "app": "Books", "untilText": "Chapter 7" },
+      { "command": "click", "app": "Books",
+        "refs": { "x": "$1.foundAt.cx", "y": "$1.foundAt.cy" } } ] }
+
+`$<step>` is the 1-based step number; the rest is a dotted path into that reply, with
+`cx`/`cy` derived as the center of a `{x,y,w,h}` block (`foundAt`, `frame`). One level, no
+expressions; an unresolved reference fails the step with a named error rather than acting
+on the wrong target.
 
 | guard `type` | passes when |
 |---|---|

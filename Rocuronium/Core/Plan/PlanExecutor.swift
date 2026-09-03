@@ -50,6 +50,9 @@ final class PlanExecutor {
     func execute(_ plan: SequencePlan) async -> [String: Any] {
         var results: [StepResult] = []
         var abortReason: String?
+        // Each step's reply, keyed by 1-based step number, so a later step's `refs` can read
+        // it ("$2.foundAt.cx").
+        var priorReplies: [Int: [String: Any]] = [:]
 
         if plan.profile == .visible {
             overlay?.begin(
@@ -69,7 +72,8 @@ final class PlanExecutor {
                 )
             }
 
-            let (reply, resolvedPid) = await executeStep(step, profile: plan.profile)
+            let (reply, resolvedPid) = await executeStep(step, profile: plan.profile, priorReplies: priorReplies)
+            priorReplies[index + 1] = reply
 
             var guardResult: PlanGuard.Result?
             if let expect = step.expect {
@@ -120,7 +124,7 @@ final class PlanExecutor {
                     continue
 
                 case let .fallback(fallbackStep):
-                    let (fallbackReply, _) = await executeStep(fallbackStep, profile: plan.profile)
+                    let (fallbackReply, _) = await executeStep(fallbackStep, profile: plan.profile, priorReplies: priorReplies)
                     result = StepResult(
                         index: index, command: step.command, intent: step.intent,
                         reply: reply, guardResult: guardResult,
@@ -155,9 +159,22 @@ final class PlanExecutor {
     // MARK: - Private
 
     private func executeStep(
-        _ step: SequencePlan.Step, profile: SequencePlan.Profile
+        _ step: SequencePlan.Step, profile: SequencePlan.Profile,
+        priorReplies: [Int: [String: Any]]
     ) async -> ([String: Any], pid_t?) {
-        let json = step.asRequestJSON(profile: profile)
+        var json = step.asRequestJSON(profile: profile)
+        // Resolve `refs` — a field set from an earlier step's reply, like a scroll's foundAt
+        // rectangle feeding the click that follows. An unresolved reference is reported rather
+        // than silently dropped: a plan that meant to click where step 2 found text must not
+        // instead click the focused element.
+        if let refs = step.refs {
+            for (field, reference) in refs {
+                guard let value = Self.resolveReference(reference, in: priorReplies) else {
+                    return (["ok": false, "error": "could not resolve reference '\(reference)' for '\(field)' — no such step reply or path"], nil)
+                }
+                json[field] = value
+            }
+        }
         do {
             let data = try JSONSerialization.data(withJSONObject: json)
             let request = try JSONDecoder().decode(CommandRouter.Request.self, from: data)
@@ -166,6 +183,29 @@ final class PlanExecutor {
         } catch {
             return (["ok": false, "error": error.localizedDescription], nil)
         }
+    }
+
+    /// Resolves one `$<step>.<key>.<key>` reference against the transcript so far. One level of
+    /// expression: dotted reply keys, plus `cx`/`cy` derived as the center of a `{x,y,w,h}`
+    /// block (a `foundAt` or `frame` rectangle). Nil when the step, a key, or the shape is
+    /// missing — the caller turns that into a visible error.
+    static func resolveReference(_ reference: String, in priorReplies: [Int: [String: Any]]) -> Any? {
+        guard reference.hasPrefix("$") else { return nil }
+        let segments = reference.dropFirst().split(separator: ".").map(String.init)
+        guard let head = segments.first, let step = Int(head), let reply = priorReplies[step] else { return nil }
+        func number(_ any: Any?) -> Double? { (any as? Double) ?? (any as? NSNumber)?.doubleValue }
+        var current: Any = reply
+        for segment in segments.dropFirst() {
+            if segment == "cx" || segment == "cy", let rect = current as? [String: Any],
+               let x = number(rect["x"]), let y = number(rect["y"]),
+               let w = number(rect["w"]), let h = number(rect["h"]) {
+                // Center of the rect; a terminal derivation, so return straight away.
+                return segment == "cx" ? x + w / 2 : y + h / 2
+            }
+            guard let dict = current as? [String: Any], let next = dict[segment] else { return nil }
+            current = next
+        }
+        return current
     }
 
     private func pauseForHuman(reason: String) async {
