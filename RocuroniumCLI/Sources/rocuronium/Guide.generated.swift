@@ -175,11 +175,14 @@ Recording prompt; after a decline it returns instantly forever until
 `onVirtualDisplay`, `stray` (on the virtual display, parked by nobody), and
 `onAnyDisplay: false` for a window stranded where no display reaches.
 
-**`find --app X [--label Y] [--role R]`** — up to **20** matches, each `{role, label,
-value, depth, frame}`, plus `elementsVisited` and `truncated`. With only `--role`, every
-element of that role; with neither, every editable field. The walk is bounded (60 000
-elements, 18 s wall clock) and truncation is reported: "nothing found" and "stopped
-looking" are different answers.
+**`find --app X [--label Y] [--role R] [--ocr]`** — up to **20** matches, each `{role,
+label, value, depth, frame}`, plus `elementsVisited` and `truncated`. With only `--role`,
+every element of that role; with neither, every editable field. The walk is bounded
+(60 000 elements, 18 s wall clock) and truncation is reported: "nothing found" and
+"stopped looking" are different answers. When the walk finds nothing and Screen Recording
+is granted, `find` **falls back to OCR** automatically; `--ocr` forces it. OCR rows are
+`{role: OCRText, label: <text>, frame, groundedBy: ocr}` with `shown`/`total` — text with
+screen-point frames for a window whose tree is empty or lying.
 
     find --app Finder --role button
     AXButton  'button'  @(1448,474)  depth 7
@@ -187,13 +190,17 @@ looking" are different answers.
     …
     5 shown · 994 elements visited
 
-**`read --app X [--label Y] [--role R] [--since T]`** — the app's text through
+**`read --app X [--label Y] [--role R] [--since T] [--ocr]`** — the app's text through
 accessibility: static text, field values, button titles, checked states, indented by
 depth, with every interactive element's role shown so you know it can be acted on.
 Orders of magnitude cheaper than a screenshot, and it works behind a locked screen.
 Budgets: 20 000 elements, 30 000 characters, 4 000 per value, depth 40, 18 s; the reply
 carries `truncationReason` when one bit. A web area that yields no text is reported as
-**hidden, not blank**, with a referral to the channel that can read the DOM.
+**hidden, not blank**, with a referral to the channel that can read the DOM. When the
+whole-window walk finds no text and Screen Recording is granted, `read` **falls back to
+OCR** automatically; `--ocr` forces it. OCR rows come back as `{role: OCRText, value:
+<text>, frame}` in reading order (scope `window (OCR)`, `groundedBy: ocr`), with no token
+or delta — there is no tree walk to diff.
 
     read --app Rocuronium
     Rocuronium Demo Stage  [AXWindow]

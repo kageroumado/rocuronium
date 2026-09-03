@@ -43,12 +43,16 @@ enum MCPServer {
             that role; omit both to list editable fields. An icon-only control with no \
             title reports the label 'button' (its role description), so list those by role \
             and aim by frame. `truncated:true` means the walk stopped, not that nothing \
-            else exists.
+            else exists. When the tree yields nothing and Screen Recording is granted, `find` \
+            falls back to OCR automatically; pass `ocr:true` to force it. OCR rows come back \
+            as {role:'OCRText', label:<text>, frame, groundedBy:'ocr'} with `shown`/`total` \
+            counts — text with screen-point frames for a window whose tree is empty or lying.
             """,
             properties: [
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
                 "label": ["type": "string", "description": "Substring of the element's label/placeholder"],
                 "role": ["type": "string", "description": "Element role filter, e.g. 'button' or 'AXButton'"],
+                "ocr": ["type": "boolean", "description": "Read the window's pixels as text rows instead of the tree (needs Screen Recording)"],
             ], required: ["app"],
         ),
         tool(
@@ -65,13 +69,18 @@ enum MCPServer {
             `since` on the next read of the same scope to get ONLY what changed — elements \
             appeared/vanished and values old → new — instead of the whole window. A token \
             that cannot be diffed honestly (evicted, different window, truncated walk, \
-            wholesale change) degrades to a full read with `diffNote` naming why.
+            wholesale change) degrades to a full read with `diffNote` naming why. When the \
+            whole-window walk finds no text and Screen Recording is granted, `read` falls \
+            back to OCR automatically; pass `ocr:true` to force it. OCR rows come back as \
+            {role:'OCRText', value:<text>, frame, groundedBy:'ocr'} in reading order, with no \
+            token or delta — the answer for a window whose accessibility tree is empty.
             """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "since": ["type": "string", "description": "Observation token from a prior read of the same scope; reply becomes the structural delta"],
+                "ocr": ["type": "boolean", "description": "Read the window's pixels as text rows instead of the tree (needs Screen Recording)"],
             ], required: ["app"],
         ),
         tool(

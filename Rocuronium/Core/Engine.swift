@@ -1493,6 +1493,43 @@ actor Engine {
         return evidence
     }
 
+    // MARK: - OCR rows
+
+    /// One line of on-screen text with its screen-point rectangle — the row shape `find` and
+    /// `read` return for a window whose accessibility tree is empty or lying. `label` is the
+    /// text; the frame is where a follow-up coordinate click aims.
+    struct OCRRow: Sendable {
+        let text: String
+        let frame: ElementDescriptor.Frame
+    }
+
+    /// OCRs the target's window into text rows in reading order — top to bottom, then left to
+    /// right within a line. No model and no tokens (~100 ms on Vision's fast path), the same
+    /// primitive `scroll --until-text` uses. Needs Screen Recording; refuses honestly without
+    /// it, and while the display sleeps.
+    func ocrRows(pid: pid_t) async throws -> [OCRRow] {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard ScreenCapture.isPermitted else { throw GroundingError.screenRecordingRequired }
+        let frame = try windowFrame(pid: pid)
+        let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+        let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
+        let rows = TextSighting.sight(in: capture.image).map { sighting -> OCRRow in
+            let r = TextSighting.screenRect(of: sighting, in: capture.windowFrame)
+            return OCRRow(
+                text: sighting.text,
+                frame: .init(x: r.minX, y: r.minY, width: r.width, height: r.height),
+            )
+        }
+        // Reading order: rows on roughly the same baseline (within half the taller row's
+        // height) read left-to-right; otherwise top-to-bottom. OCR returns lines in no
+        // dependable order, and a caller pays for a jumbled read in comprehension.
+        return rows.sorted { first, second in
+            let band = max(first.frame.height, second.frame.height) * 0.5
+            if abs(first.frame.y - second.frame.y) > band { return first.frame.y < second.frame.y }
+            return first.frame.x < second.frame.x
+        }
+    }
+
     // MARK: - Vision grounding
 
     private let detector = DetectorBackend()

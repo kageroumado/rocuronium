@@ -22,8 +22,8 @@ Observe
   diag                                     what each permission check really returns
   apps                                     running apps: name, bundle id, pid, frontmost
   windows    --app <a>                     titles and frames
-  find       --app <a> [--label <t>] [--role <r>]           up to 20 elements with frames
-  read       --app <a> [--label <t>] [--role <r>] [--since <token>]   text, or the delta
+  find       --app <a> [--label <t>] [--role <r>] [--ocr]   up to 20 elements with frames
+  read       --app <a> [--label <t>] [--role <r>] [--since <token>] [--ocr]   text, or the delta
   wait       --app <a> --label <t> [--role <r>] [--gone] [--timeout <s, max 25>]
   screenshot [--app <a> | --x --y --w --h] [--path <f.png>] [--since <token>]
   activity                                 the last 50 acting commands with verdicts
@@ -63,6 +63,8 @@ Options
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
   --observe                 on click/shortcut/menu, diff the window's AX tree across the
                             action and report what changed (walks a large tree it would skip)
+  --ocr                     on read/find, read the window's pixels as text rows instead of
+                            the AX tree — for apps whose tree is empty (needs Screen Recording)
   --json                    print the raw reply
 
 Eight things to know before the guide:
@@ -180,6 +182,7 @@ if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
 if arguments.contains("--confirm") { payload["confirm"] = true }
 if arguments.contains("--restore") { payload["restore"] = true }
 if arguments.contains("--observe") { payload["observe"] = true }
+if arguments.contains("--ocr") { payload["ocr"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
@@ -287,9 +290,9 @@ case "read":
         let title = line["title"] as? String ?? ""
         let value = line["value"] as? String ?? ""
         let role = line["role"] as? String ?? "?"
-        // Static text reads as prose; anything interactive keeps its role visible so the
-        // reader knows it can be acted on.
-        let annotation = role == "AXStaticText" ? "" : "  [\(role)]"
+        // Static text and OCR rows read as prose; anything interactive keeps its role visible
+        // so the reader knows it can be acted on.
+        let annotation = (role == "AXStaticText" || role == "OCRText") ? "" : "  [\(role)]"
         let text = [title, value].filter { !$0.isEmpty }.joined(separator: ": ")
         print("\(indent)\(text)\(annotation)")
     }

@@ -174,6 +174,10 @@ final class CommandRouter {
         /// is large enough that the tree-delta evidence channel would otherwise skip it, so
         /// the reply carries what changed. Off by default — one walk on a huge tree is slow.
         var observe: Bool?
+        /// For `read`/`find`: OCR the window's pixels into text rows instead of (or, on an
+        /// empty tree, in addition to) walking accessibility — the way to read an app whose
+        /// AX tree is empty or lying. Needs Screen Recording.
+        var ocr: Bool?
 
         /// For `plan`: the step list.
         var steps: [SequencePlan.Step]?
@@ -540,7 +544,17 @@ final class CommandRouter {
 
     private func find(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        // Explicit --ocr skips the tree; otherwise walk it, and fall back to OCR only when the
+        // walk found nothing and Screen Recording can supply an answer — an AX-dead app then
+        // reads instead of returning an empty list.
+        if request.ocr == true {
+            return try await ocrFindReply(pid: pid, query: request.label)
+        }
         let outcome = try await engine.find(pid: pid, query: request.label, role: request.role)
+        if outcome.elements.isEmpty, ScreenCapture.isPermitted,
+           let fallback = try? await ocrFindReply(pid: pid, query: request.label) {
+            return fallback
+        }
         return [
             "ok": true,
             "matches": outcome.elements.map { element -> [String: Any] in
@@ -563,15 +577,58 @@ final class CommandRouter {
         ]
     }
 
+    /// `find` over OCR rows: text lines with screen-point frames, each stamped
+    /// `groundedBy: ocr` so the caller knows these came from pixels, not the tree. Filtered
+    /// by the query substring when one is given, capped at 20 like the tree find.
+    private func ocrFindReply(pid: pid_t, query: String?) async throws -> [String: Any] {
+        var rows = try await engine.ocrRows(pid: pid)
+        if let needle = query?.lowercased(), !needle.isEmpty {
+            rows = rows.filter { $0.text.lowercased().contains(needle) }
+        }
+        let total = rows.count
+        let shown = Array(rows.prefix(20))
+        return [
+            "ok": true,
+            "matches": shown.map { row -> [String: Any] in
+                [
+                    "role": "OCRText",
+                    "label": row.text,
+                    "value": "",
+                    "depth": 0,
+                    "groundedBy": "ocr",
+                    "frame": ["x": row.frame.x, "y": row.frame.y, "w": row.frame.width, "h": row.frame.height],
+                ]
+            },
+            "truncated": total > shown.count,
+            "shown": shown.count,
+            "total": total,
+            "elementsVisited": total,
+            "groundedBy": "ocr",
+            "canSee": true,
+            "presence": presenceBlock(),
+        ]
+    }
+
     /// Text out of an app without pixels — the most-used observe verb. Orders of magnitude
     /// cheaper in tokens than screenshot-plus-vision, and it works behind a locked screen.
     /// With `since`, the reply is the structural delta against that earlier read — the
     /// caller pays for the change, not the window.
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        if request.ocr == true {
+            return try await ocrReadReply(pid: pid)
+        }
         let outcome = try await engine.read(
             pid: pid, label: request.label, role: request.role, since: request.since,
         )
+        // An empty walk on an app that exposes no tree is exactly where OCR earns its place —
+        // fall back rather than reply "nothing here" about a window full of text. Only for the
+        // whole-window read, and never when a diff was requested (a `--since` diff of a full
+        // window against nothing is not what OCR answers).
+        if outcome.delta == nil, outcome.lines.isEmpty, request.label == nil, request.since == nil,
+           ScreenCapture.isPermitted, let fallback = try? await ocrReadReply(pid: pid) {
+            return fallback
+        }
         // A usable diff replaces the lines wholesale — sending both would defeat the verb.
         if let delta = outcome.delta {
             return [
@@ -613,6 +670,30 @@ final class CommandRouter {
             ]
         }
         return reply
+    }
+
+    /// `read` over OCR rows: the window's on-screen text in reading order, each line stamped
+    /// `groundedBy: ocr`. The answer for a window whose accessibility tree is empty or lying —
+    /// no token or delta, because there is no tree walk to diff against.
+    private func ocrReadReply(pid: pid_t) async throws -> [String: Any] {
+        let rows = try await engine.ocrRows(pid: pid)
+        return [
+            "ok": true,
+            "scope": "window (OCR)",
+            "groundedBy": "ocr",
+            "lines": rows.map { row -> [String: Any] in
+                [
+                    "role": "OCRText",
+                    "value": row.text,
+                    "depth": 0,
+                    "frame": ["x": row.frame.x, "y": row.frame.y, "w": row.frame.width, "h": row.frame.height],
+                ]
+            },
+            "characters": rows.reduce(0) { $0 + $1.text.count },
+            "elementsVisited": rows.count,
+            "truncated": false,
+            "presence": presenceBlock(),
+        ]
     }
 
     /// The running apps a human would recognize as running — regular activation policy, the
