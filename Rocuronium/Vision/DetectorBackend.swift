@@ -7,8 +7,32 @@ nonisolated struct DetectorBackend: GroundingBackend {
 
     var isAvailable: Bool { true }
 
+    /// Whether the detector weights are on disk. When false, `detect` returns nothing and the
+    /// vision path is OCR-only — a working, degraded configuration, never a broken one.
+    var isModelInstalled: Bool { hasYOLO }
+
     private var hasYOLO: Bool {
         FileManager.default.fileExists(atPath: Self.modelPath.path)
+    }
+
+    /// One proposed UI-element box in image pixel coordinates, top-left origin.
+    struct DetectedBox: Sendable {
+        let rect: CGRect
+        let confidence: Double
+    }
+
+    /// Every control box the detector proposes for a window, unfiltered — the "parse the
+    /// window" primitive behind detector rows. Empty when no model is installed. The model is
+    /// single-class (`UIElement`), so the box carries a frame and a confidence; the caller
+    /// derives the label from the OCR text inside the box.
+    func detect(in image: CGImage) throws -> [DetectedBox] {
+        guard hasYOLO else { return [] }
+        return try detectBoxes(in: image).map { detection in
+            DetectedBox(
+                rect: denormalize(detection.rect, imageWidth: image.width, imageHeight: image.height),
+                confidence: Double(detection.confidence),
+            )
+        }
     }
 
     private static var modelPath: URL {

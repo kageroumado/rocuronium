@@ -68,8 +68,10 @@ Options
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
   --observe                 on click/shortcut/menu, diff the window's AX tree across the
                             action and report what changed (walks a large tree it would skip)
-  --ocr                     on read/find, read the window's pixels as text rows instead of
-                            the AX tree — for apps whose tree is empty (needs Screen Recording)
+  --ocr                     on read/find, read the window's pixels instead of the AX tree —
+                            for apps whose tree is empty. Text rows come back groundedBy ocr;
+                            with the UI Detector model installed, control boxes (icon buttons
+                            included) come back groundedBy detector (needs Screen Recording)
   --json                    print the raw reply
 
 Eight things to know before the guide:
@@ -329,7 +331,14 @@ case "read":
         let role = line["role"] as? String ?? "?"
         // Static text and OCR rows read as prose; anything interactive keeps its role visible
         // so the reader knows it can be acted on.
-        let annotation = (role == "AXStaticText" || role == "OCRText") ? "" : "  [\(role)]"
+        var annotation = (role == "AXStaticText" || role == "OCRText") ? "" : "  [\(role)]"
+        // A detector control often has no label — show its click point so an icon button is
+        // aimable straight from the read.
+        if role == "UIElement", let frame = line["frame"] as? [String: Any],
+           let x = frame["x"] as? Double, let y = frame["y"] as? Double,
+           let w = frame["w"] as? Double, let h = frame["h"] as? Double {
+            annotation += "  @(\(Int(x + w / 2)),\(Int(y + h / 2)))"
+        }
         let text = [title, value].filter { !$0.isEmpty }.joined(separator: ": ")
         print("\(indent)\(text)\(annotation)")
     }

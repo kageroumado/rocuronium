@@ -210,8 +210,8 @@ final class ModelSettingsStore {
             globs: ["*.safetensors", "*.json", "*.jinja"]
         ),
         "yolo-detector": ModelSource(
-            repo: "ab-dev26/targetfinder",
-            globs: ["models/yolo26n-640.pt"]
+            repo: "kageroumado/rocuronium-ui-detector",
+            globs: ["model.mlpackage/*", "model.mlpackage/**/*"]
         ),
     ]
 
@@ -251,10 +251,11 @@ final class ModelSettingsStore {
         ModelInfo(
             id: "yolo-detector",
             displayName: "UI Detector",
-            detail: "Fast element detector — finds bounding boxes in ~20 ms. "
-                + "Text in detected boxes is matched before the VLM is loaded.",
+            detail: "Fast element detector — proposes control boxes in ~8 ms, so icon toolbars "
+                + "become addressable. Each box is labeled from the text inside it; matched "
+                + "before the VLM is loaded.",
             icon: "square.dashed",
-            expectedBytes: 15_000_000
+            expectedBytes: 5_400_000
         ),
     ]
 }

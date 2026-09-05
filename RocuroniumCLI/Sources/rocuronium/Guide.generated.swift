@@ -196,9 +196,14 @@ that carries a frame** ("show me everything you can see"), which `--role` still 
 explicit instead of silent. The walk is bounded
 (60 000 elements, 18 s wall clock) and truncation is reported: "nothing found" and
 "stopped looking" are different answers. When the walk finds nothing and Screen Recording
-is granted, `find` **falls back to OCR** automatically; `--ocr` forces it. OCR rows are
+is granted, `find` **falls back to OCR** automatically; `--ocr` forces it. Vision rows are
 `{role: OCRText, label: <text>, frame, groundedBy: ocr}` with `shown`/`total` — text with
-screen-point frames for a window whose tree is empty or lying.
+screen-point frames for a window whose tree is empty or lying. When the **UI Detector**
+model is installed (§6), the vision path also returns control boxes as
+`{role: UIElement, label, frame, groundedBy: detector, confidence}` — each box labeled from
+the text inside it, so an **icon-only control comes back with an empty label and a real
+frame**, addressable by coordinate. Each row's `groundedBy` distinguishes a text sighting
+from a proposed control.
 
     find --app Finder --role button
     AXButton  (button)  @(1448,474)  help 'Back'  near left of 'Path'  depth 7
@@ -214,9 +219,12 @@ Budgets: 20 000 elements, 30 000 characters, 4 000 per value, depth 40, 18 s; th
 carries `truncationReason` when one bit. A web area that yields no text is reported as
 **hidden, not blank**, with a referral to the channel that can read the DOM. When the
 whole-window walk finds no text and Screen Recording is granted, `read` **falls back to
-OCR** automatically; `--ocr` forces it. OCR rows come back as `{role: OCRText, value:
+OCR** automatically; `--ocr` forces it. Vision rows come back as `{role: OCRText, value:
 <text>, frame}` in reading order (scope `window (OCR)`, `groundedBy: ocr`), with no token
-or delta — there is no tree walk to diff.
+or delta — there is no tree walk to diff. When the **UI Detector** model is installed (§6),
+control boxes join the text as `{role: UIElement, value, frame, groundedBy: detector,
+confidence}` (scope `window (vision)`), so an icon toolbar reads as addressable controls
+rather than blank space.
 
     read --app Rocuronium
     Rocuronium Demo Stage  [AXWindow]
@@ -392,8 +400,11 @@ answer has three tiers, tried only when the previous one fails.
 2. **Detector + OCR** — when `click --label` or `type --label` finds nothing in the tree,
    the engine captures the target's window and looks for the label as legible text; a
    hit becomes coordinates, delivered through the normal tentacles by hit-test, and the
-   reply says `groundedBy: "detector"`. Needs Screen Recording. A YOLO detector for
-   icon-shaped controls is being trained; until it ships, this tier is OCR only.
+   reply says `groundedBy: "detector"`. Needs Screen Recording. The **UI Detector** (a
+   YOLOv11n trained on GroundCUA, a 5.4 MB CoreML model, ~8 ms per window, a download from
+   the Settings window) proposes control boxes so icon-shaped controls resolve too; the box
+   is labeled from the text inside it. It is single-class — a box means "a control is here",
+   the role comes from that OCR text. Without it, this tier is OCR only.
 3. **Local VLM** — when OCR cannot match (icon-only targets, loose phrasing), a local
    grounding model (Holo 3.1 4B via MLX) turns the instruction plus the window into a
    point, `groundedBy: "vlm"`. Loaded on first use, evicted after five idle minutes.
@@ -405,8 +416,9 @@ field is your cue to verify with a `screenshot --since` or a `read --since`. Whe
 three fail, the error names it: "'Send' (AX tree empty, vision grounding found nothing)".
 
 For your own eyes there is `screenshot` (§4), and for text the tree does not carry,
-`scroll --until-text` (§5). There is no verb yet that returns OCR'd text with rectangles
-directly; that is on the plan.
+`scroll --until-text` (§5). To read an AX-dead window as rows rather than ground a single
+click, `read --ocr` and `find --ocr` return text — and, with the UI Detector installed,
+control boxes — with screen-point frames.
 
 ## 7. Cursor paths: move and drag
 

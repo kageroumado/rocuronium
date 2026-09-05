@@ -611,7 +611,7 @@ final class CommandRouter {
         // walk found nothing and Screen Recording can supply an answer — an AX-dead app then
         // reads instead of returning an empty list.
         if request.ocr == true {
-            return try await ocrFindReply(pid: pid, query: request.label, window: request.window)
+            return try await visionFindReply(pid: pid, query: request.label, window: request.window)
         }
         let outcome = try await engine.find(
             pid: pid, query: request.label, role: request.role, windowTitle: request.window,
@@ -620,7 +620,7 @@ final class CommandRouter {
             offset: request.offset.map { max(Int($0), 0) } ?? 0,
         )
         if outcome.elements.isEmpty, request.all != true, ScreenCapture.isPermitted,
-           let fallback = try? await ocrFindReply(pid: pid, query: request.label, window: request.window) {
+           let fallback = try? await visionFindReply(pid: pid, query: request.label, window: request.window) {
             return fallback
         }
         return [
@@ -638,33 +638,39 @@ final class CommandRouter {
         ]
     }
 
-    /// `find` over OCR rows: text lines with screen-point frames, each stamped
-    /// `groundedBy: ocr` so the caller knows these came from pixels, not the tree. Filtered
-    /// by the query substring when one is given, capped at 20 like the tree find.
-    private func ocrFindReply(pid: pid_t, query: String?, window: String? = nil) async throws -> [String: Any] {
-        var rows = try await engine.ocrRows(pid: pid, windowTitle: window)
+    /// `find` over vision rows: OCR text lines plus, when the detector model is installed,
+    /// control boxes — each row stamped with its own `groundedBy` (`ocr` or `detector`) so the
+    /// caller knows a text sighting from a proposed control. A detector control that carries no
+    /// text (an icon button) still appears, with an empty label and a real frame, so it is
+    /// addressable. Filtered by the query substring against the label when one is given
+    /// (icon-only controls have no text to match), capped at 20 like the tree find.
+    private func visionFindReply(pid: pid_t, query: String?, window: String? = nil) async throws -> [String: Any] {
+        var rows = try await engine.visionRows(pid: pid, windowTitle: window)
         if let needle = query?.lowercased(), !needle.isEmpty {
-            rows = rows.filter { $0.text.lowercased().contains(needle) }
+            rows = rows.filter { $0.label.lowercased().contains(needle) }
         }
         let total = rows.count
         let shown = Array(rows.prefix(20))
+        let usedDetector = shown.contains { $0.groundedBy == "detector" }
         return [
             "ok": true,
             "matches": shown.map { row -> [String: Any] in
-                [
-                    "role": "OCRText",
-                    "label": row.text,
+                var match: [String: Any] = [
+                    "role": row.role,
+                    "label": row.label,
                     "value": "",
                     "depth": 0,
-                    "groundedBy": "ocr",
+                    "groundedBy": row.groundedBy,
                     "frame": ["x": row.frame.x, "y": row.frame.y, "w": row.frame.width, "h": row.frame.height],
                 ]
+                if let confidence = row.confidence { match["confidence"] = confidence }
+                return match
             },
             "truncated": total > shown.count,
             "shown": shown.count,
             "total": total,
             "elementsVisited": total,
-            "groundedBy": "ocr",
+            "groundedBy": usedDetector ? "vision" : "ocr",
             "canSee": true,
             "presence": presenceBlock(),
         ]
@@ -677,7 +683,7 @@ final class CommandRouter {
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         if request.ocr == true {
-            return try await ocrReadReply(pid: pid, window: request.window)
+            return try await visionReadReply(pid: pid, window: request.window)
         }
         let outcome = try await engine.read(
             pid: pid, label: request.label, role: request.role, since: request.since,
@@ -688,7 +694,7 @@ final class CommandRouter {
         // whole-window read, and never when a diff was requested (a `--since` diff of a full
         // window against nothing is not what OCR answers).
         if outcome.delta == nil, outcome.lines.isEmpty, request.label == nil, request.since == nil,
-           ScreenCapture.isPermitted, let fallback = try? await ocrReadReply(pid: pid, window: request.window) {
+           ScreenCapture.isPermitted, let fallback = try? await visionReadReply(pid: pid, window: request.window) {
             return fallback
         }
         // A usable diff replaces the lines wholesale — sending both would defeat the verb.
@@ -734,24 +740,30 @@ final class CommandRouter {
         return reply
     }
 
-    /// `read` over OCR rows: the window's on-screen text in reading order, each line stamped
-    /// `groundedBy: ocr`. The answer for a window whose accessibility tree is empty or lying —
-    /// no token or delta, because there is no tree walk to diff against.
-    private func ocrReadReply(pid: pid_t, window: String? = nil) async throws -> [String: Any] {
-        let rows = try await engine.ocrRows(pid: pid, windowTitle: window)
+    /// `read` over vision rows: the window's on-screen text in reading order, plus control
+    /// boxes when the detector model is installed, each line stamped with its own `groundedBy`
+    /// (`ocr` or `detector`). The answer for a window whose accessibility tree is empty or
+    /// lying — no token or delta, because there is no tree walk to diff against.
+    private func visionReadReply(pid: pid_t, window: String? = nil) async throws -> [String: Any] {
+        let rows = try await engine.visionRows(pid: pid, windowTitle: window)
+        let usedDetector = rows.contains { $0.groundedBy == "detector" }
+        let channel = usedDetector ? "vision" : "OCR"
         return [
             "ok": true,
-            "scope": window.map { "window '\($0)' (OCR)" } ?? "window (OCR)",
-            "groundedBy": "ocr",
+            "scope": window.map { "window '\($0)' (\(channel))" } ?? "window (\(channel))",
+            "groundedBy": usedDetector ? "vision" : "ocr",
             "lines": rows.map { row -> [String: Any] in
-                [
-                    "role": "OCRText",
-                    "value": row.text,
+                var line: [String: Any] = [
+                    "role": row.role,
                     "depth": 0,
+                    "groundedBy": row.groundedBy,
                     "frame": ["x": row.frame.x, "y": row.frame.y, "w": row.frame.width, "h": row.frame.height],
                 ]
+                if !row.label.isEmpty { line["value"] = row.label }
+                if let confidence = row.confidence { line["confidence"] = confidence }
+                return line
             },
-            "characters": rows.reduce(0) { $0 + $1.text.count },
+            "characters": rows.reduce(0) { $0 + $1.label.count },
             "elementsVisited": rows.count,
             "truncated": false,
             "presence": presenceBlock(),

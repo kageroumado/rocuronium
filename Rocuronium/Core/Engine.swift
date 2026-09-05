@@ -1642,35 +1642,79 @@ actor Engine {
         return evidence
     }
 
-    // MARK: - OCR rows
+    // MARK: - Vision rows
 
-    /// One line of on-screen text with its screen-point rectangle — the row shape `find` and
-    /// `read` return for a window whose accessibility tree is empty or lying. `label` is the
-    /// text; the frame is where a follow-up coordinate click aims.
-    struct OCRRow: Sendable {
-        let text: String
+    /// One parsed element of a window read through pixels — the row shape `find` and `read`
+    /// return for a window whose accessibility tree is empty or lying. A loose line of text is
+    /// `role: "OCRText"`, `groundedBy: "ocr"`; a control box the detector proposed is
+    /// `role: "UIElement"`, `groundedBy: "detector"`, with `label` taken from the OCR text
+    /// inside it (empty for an icon-only control) and a `confidence`. The frame is where a
+    /// follow-up coordinate click aims.
+    struct VisionRow: Sendable {
+        let role: String
+        let label: String
         let frame: ElementDescriptor.Frame
+        let groundedBy: String
+        let confidence: Double?
     }
 
-    /// OCRs the target's window into text rows in reading order — top to bottom, then left to
-    /// right within a line. No model and no tokens (~100 ms on Vision's fast path), the same
-    /// primitive `scroll --until-text` uses. Needs Screen Recording; refuses honestly without
-    /// it, and while the display sleeps.
-    func ocrRows(pid: pid_t, windowTitle: String? = nil) async throws -> [OCRRow] {
+    /// Parses the target's window into rows through pixels, in reading order — top to bottom,
+    /// then left to right within a line. OCR is the floor (no model, no tokens, ~100 ms on
+    /// Vision's fast path, the same primitive `scroll --until-text` uses). When the detector
+    /// model is installed it adds control boxes — including icon-only controls that carry no
+    /// text — so an icon toolbar becomes addressable; each box is labeled from the OCR text
+    /// whose center falls inside it, and the text so consumed is not repeated as a loose row.
+    /// Needs Screen Recording; refuses honestly without it, and while the display sleeps.
+    func visionRows(pid: pid_t, windowTitle: String? = nil) async throws -> [VisionRow] {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         guard ScreenCapture.isPermitted else { throw GroundingError.screenRecordingRequired }
         let frame = try windowFrame(pid: pid, title: windowTitle)
         let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
         let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
-        let rows = TextSighting.sight(in: capture.image).map { sighting -> OCRRow in
-            let r = TextSighting.screenRect(of: sighting, in: capture.windowFrame)
-            return OCRRow(
-                text: sighting.text,
-                frame: .init(x: r.minX, y: r.minY, width: r.width, height: r.height),
-            )
+
+        struct Sighted { let text: String; let frame: CGRect }
+        let sighted = TextSighting.sight(in: capture.image).map { sighting in
+            Sighted(text: sighting.text, frame: TextSighting.screenRect(of: sighting, in: capture.windowFrame))
         }
+        let boxes = try detector.detect(in: capture.image).map { box in
+            (frame: imageRectToScreen(box.rect, imageWidth: capture.image.width,
+                                      imageHeight: capture.image.height, windowFrame: capture.windowFrame),
+             confidence: box.confidence)
+        }
+
+        var rows: [VisionRow] = []
+        var consumed = [Bool](repeating: false, count: sighted.count)
+
+        for box in boxes {
+            var parts: [(x: CGFloat, y: CGFloat, text: String)] = []
+            for (index, sighting) in sighted.enumerated() where !consumed[index] {
+                if box.frame.contains(CGPoint(x: sighting.frame.midX, y: sighting.frame.midY)) {
+                    consumed[index] = true
+                    parts.append((sighting.frame.minX, sighting.frame.minY, sighting.text))
+                }
+            }
+            let label = parts
+                .sorted { $0.y == $1.y ? $0.x < $1.x : $0.y < $1.y }
+                .map(\.text)
+                .joined(separator: " ")
+            rows.append(VisionRow(
+                role: "UIElement", label: label,
+                frame: .init(x: box.frame.minX, y: box.frame.minY, width: box.frame.width, height: box.frame.height),
+                groundedBy: "detector", confidence: box.confidence,
+            ))
+        }
+
+        for (index, sighting) in sighted.enumerated() where !consumed[index] {
+            rows.append(VisionRow(
+                role: "OCRText", label: sighting.text,
+                frame: .init(x: sighting.frame.minX, y: sighting.frame.minY,
+                             width: sighting.frame.width, height: sighting.frame.height),
+                groundedBy: "ocr", confidence: nil,
+            ))
+        }
+
         // Reading order: rows on roughly the same baseline (within half the taller row's
-        // height) read left-to-right; otherwise top-to-bottom. OCR returns lines in no
+        // height) read left-to-right; otherwise top-to-bottom. Vision returns elements in no
         // dependable order, and a caller pays for a jumbled read in comprehension.
         return rows.sorted { first, second in
             let band = max(first.frame.height, second.frame.height) * 0.5
@@ -1723,6 +1767,19 @@ actor Engine {
         CGPoint(
             x: windowFrame.minX + (imagePoint.x / CGFloat(imageWidth)) * windowFrame.width,
             y: windowFrame.minY + (imagePoint.y / CGFloat(imageHeight)) * windowFrame.height
+        )
+    }
+
+    /// Maps a pixel rectangle in the capture (top-left origin) to screen points. Normalizing by
+    /// the image's own pixel size makes it scale-independent, so a Retina capture lands right.
+    private nonisolated func imageRectToScreen(
+        _ pixelRect: CGRect, imageWidth: Int, imageHeight: Int, windowFrame: CGRect
+    ) -> CGRect {
+        CGRect(
+            x: windowFrame.minX + (pixelRect.minX / CGFloat(imageWidth)) * windowFrame.width,
+            y: windowFrame.minY + (pixelRect.minY / CGFloat(imageHeight)) * windowFrame.height,
+            width: (pixelRect.width / CGFloat(imageWidth)) * windowFrame.width,
+            height: (pixelRect.height / CGFloat(imageHeight)) * windowFrame.height
         )
     }
 

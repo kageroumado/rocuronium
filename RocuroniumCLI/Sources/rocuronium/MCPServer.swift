@@ -48,9 +48,13 @@ enum MCPServer {
             seen in `read` output is findable); give `role` alone to list every element of \
             that role; omit both to list editable fields. `truncated:true` means the walk \
             stopped, not that nothing else exists. When the tree yields nothing and Screen Recording is granted, `find` \
-            falls back to OCR automatically; pass `ocr:true` to force it. OCR rows come back \
+            falls back to OCR automatically; pass `ocr:true` to force it. Vision rows come back \
             as {role:'OCRText', label:<text>, frame, groundedBy:'ocr'} with `shown`/`total` \
-            counts — text with screen-point frames for a window whose tree is empty or lying.
+            counts — text with screen-point frames for a window whose tree is empty or lying. \
+            With the UI Detector model installed, control boxes also come back as \
+            {role:'UIElement', label, frame, groundedBy:'detector', confidence} — each labeled \
+            from the text inside it, so an icon-only control appears with an empty label and a \
+            clickable frame.
             """,
             properties: [
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
@@ -59,7 +63,7 @@ enum MCPServer {
                 "all": ["type": "boolean", "description": "List every element carrying a frame, not just editables ('show me everything'); role still narrows"],
                 "limit": ["type": "number", "description": "Page size (default 20); reply carries shown/total/offset"],
                 "offset": ["type": "number", "description": "Skip this many matches — page with limit"],
-                "ocr": ["type": "boolean", "description": "Read the window's pixels as text rows instead of the tree (needs Screen Recording)"],
+                "ocr": ["type": "boolean", "description": "Read the window's pixels instead of the tree — text rows groundedBy ocr, plus control boxes groundedBy detector when the UI Detector model is installed (needs Screen Recording)"],
             ], required: ["app"],
         ),
         tool(
@@ -78,16 +82,19 @@ enum MCPServer {
             that cannot be diffed honestly (evicted, different window, truncated walk, \
             wholesale change) degrades to a full read with `diffNote` naming why. When the \
             whole-window walk finds no text and Screen Recording is granted, `read` falls \
-            back to OCR automatically; pass `ocr:true` to force it. OCR rows come back as \
+            back to OCR automatically; pass `ocr:true` to force it. Vision rows come back as \
             {role:'OCRText', value:<text>, frame, groundedBy:'ocr'} in reading order, with no \
-            token or delta — the answer for a window whose accessibility tree is empty.
+            token or delta — the answer for a window whose accessibility tree is empty. With \
+            the UI Detector model installed, control boxes join as {role:'UIElement', value, \
+            frame, groundedBy:'detector', confidence}, so an icon toolbar reads as addressable \
+            controls rather than blank space.
             """,
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "since": ["type": "string", "description": "Observation token from a prior read of the same scope; reply becomes the structural delta"],
-                "ocr": ["type": "boolean", "description": "Read the window's pixels as text rows instead of the tree (needs Screen Recording)"],
+                "ocr": ["type": "boolean", "description": "Read the window's pixels instead of the tree — text rows groundedBy ocr, plus control boxes groundedBy detector when the UI Detector model is installed (needs Screen Recording)"],
             ], required: ["app"],
         ),
         tool(
