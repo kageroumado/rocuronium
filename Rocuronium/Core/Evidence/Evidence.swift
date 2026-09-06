@@ -118,9 +118,8 @@ nonisolated struct Evidence: Codable, Sendable {
         guard verdict != .confirmed, let delta else { return self }
         // `.noEffect` participates too, and it must: the reach's fall-through paths assert
         // no-effect while holding a capture, which is exactly where the pixels are the only
-        // signal left. The previous guard admitted only `.unverifiable`, so those call sites
-        // captured a baseline, diffed it, and discarded the answer — the fix recorded as
-        // item 11 in the review was inert from the day it was written.
+        // signal left. A guard that admitted only `.unverifiable` would let those call sites
+        // capture a baseline, diff it, and discard the answer.
         //
         // A well-evidenced `.noEffect` is only ever overturned by a *strong* signal, never
         // softened to `.unverifiable` by a caret blink: read-back that refuted the action is

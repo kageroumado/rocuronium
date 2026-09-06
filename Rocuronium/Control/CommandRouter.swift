@@ -115,9 +115,6 @@ final class CommandRouter {
         var y: Double?
         /// Opt-in to the cursor-stealing tentacle. Absent means no.
         var allowHardwareInput: Bool?
-        /// Opt-in for `park` to attach a virtual display while a human is at the keyboard —
-        /// attach is a system-visible event, so it is presence-gated like hardware input.
-        /// Absent means no.
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?

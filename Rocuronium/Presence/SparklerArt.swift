@@ -151,9 +151,9 @@ enum SparklerArt {
             ),
         )
         // The flower hat's pinstripes — dark opaque lines radiating from the top centre out
-        // to the margin. This is what keeps her apart from the aurora now that they share the
-        // standard cap: the aurora is plain glass with weather inside it, and this one has a
-        // patterned skin.
+        // to the margin. This is what keeps her apart from the aurora, with which she shares
+        // the standard cap: the aurora is plain glass with weather inside it, and this one has
+        // a patterned skin.
         for k in 0 ..< 15 {
             let t = Double(k) / 14 * 2 - 1
             var stripe = Path()

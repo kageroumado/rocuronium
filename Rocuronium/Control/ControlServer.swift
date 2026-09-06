@@ -40,7 +40,6 @@ final class ControlServer {
     }
 
     private var listeningDescriptor: Int32 = -1
-    private var acceptThread: Thread?
     private var watchdog: Task<Void, Never>?
     private let router: CommandRouter
 
@@ -114,19 +113,7 @@ final class ControlServer {
         }
         thread.name = "rocuronium.control"
         thread.start()
-        acceptThread = thread
         Self.log.notice("Control socket listening at \(path, privacy: .public)")
-    }
-
-    func stop() {
-        watchdog?.cancel()
-        watchdog = nil
-        if listeningDescriptor >= 0 {
-            close(listeningDescriptor)
-            listeningDescriptor = -1
-        }
-        unlink(Self.socketPath)
-        acceptThread = nil
     }
 
     // MARK: - Self-healing
@@ -164,7 +151,6 @@ final class ControlServer {
         Self.log.notice("Control socket file at \(Self.socketPath, privacy: .public) was replaced or removed — rebinding")
         close(listeningDescriptor)
         listeningDescriptor = -1
-        acceptThread = nil
         do {
             try startListener()
         } catch {
@@ -178,7 +164,7 @@ final class ControlServer {
         while true {
             let client = accept(descriptor, nil, nil)
             guard client >= 0 else {
-                // The listening descriptor was closed by stop(); leaving the loop is correct.
+                // The listening descriptor was closed; leaving the loop is correct.
                 if errno == EBADF || errno == EINVAL { return }
                 continue
             }

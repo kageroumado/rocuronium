@@ -61,9 +61,9 @@ final class VirtualDisplayBridge {
     }
 
     /// Every outstanding lease, not just the latest. Concurrent tasks each hold their own, and
-    /// the display is torn down only when the last one goes — previously a second caller was
-    /// handed the *same* lease id, so whoever released first killed the display underneath the
-    /// other, which is precisely what the refcount in Adrafinil's holds exists to prevent.
+    /// the display is torn down only when the last one goes. Handing two callers the *same*
+    /// lease id would let whoever releases first kill the display underneath the other — the
+    /// refcount in Adrafinil's holds exists precisely to prevent that.
     private(set) var leases: [UUID: Lease] = [:]
     /// The parked set: which windows are on the virtual display on purpose, and where they
     /// belong. Everything else on that display is a stray.

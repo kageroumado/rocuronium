@@ -121,9 +121,9 @@ enum AuroraArt {
             // height do the work meant the short bands left the top of the bell empty, and a
             // half-empty bell is what made her look like the small one of the four.
             //
-            // Capped at 1.56 bell-heights so the fade completes *inside* the bell. It used to
-            // run to two and a half, so the crown cut it off mid-gradient and the top was a
-            // flat bright bar rather than a curtain thinning out.
+            // Capped at 1.56 bell-heights so the fade completes *inside* the bell: past the
+            // crown the gradient is cut off mid-curve, leaving a flat bright bar at the top
+            // rather than a curtain thinning out.
             let tall = (0.82 + 0.18 * pow(max(0, sin(ph)), 1.3)) * h * 1.56
             // A floor under `lev`, so idle still has real colour in it. A curtain that is
             // only visible while working is not a curtain, it is a progress bar.
