@@ -277,6 +277,12 @@ if let error = reply["error"] as? String {
     exit(1)
 }
 
+// A disruptive action that a present human approved in the popup says so, so the outcome is
+// not mistaken for one that ran unattended. (A decline surfaces as the error above.)
+if let consent = reply["consent"] as? String {
+    FileHandle.standardError.write(Data("rocuronium: the human \(consent) this action.\n".utf8))
+}
+
 switch command {
 case "status":
     // JSON booleans arrive as NSNumber and would otherwise print as 0 and 1.

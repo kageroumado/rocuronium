@@ -246,11 +246,15 @@ final class CommandRouter {
 
     func route(_ data: Data) async -> Data {
         do {
+            consentOutcome = nil
             let request = try JSONDecoder().decode(Request.self, from: data)
             if let complaint = validate(request) {
                 return encode(["ok": false, "error": complaint])
             }
-            let reply = try await execute(request)
+            var reply = try await execute(request)
+            // A consent prompt shown mid-request rides out on the reply, so the caller learns a
+            // human approved or declined — actionable state, not just success/failure prose.
+            if let consentOutcome { reply["consent"] = consentOutcome }
             if Self.actingVerbs.contains(request.command) {
                 activityLog.append(
                     action: request.command,
@@ -1053,9 +1057,17 @@ final class CommandRouter {
     /// here) or a caller that already carries the human's authority via `--confirm` proceeds
     /// without asking. Otherwise the overlay puts the decision to the human — a one-second hold
     /// on Y or N — and this blocks on it; the socket call waits with it, and a timeout is a no.
+    /// The outcome of an in-app consent prompt shown during the current request, so the reply
+    /// can carry it: an agent that was asked to approve an action needs to hear, in structured
+    /// form, that a human said yes or no — not just that the action succeeded or was refused.
+    /// `nil` when no prompt was shown (nobody present, or `--confirm` already carried authority).
+    private var consentOutcome: String?
+
     private func consented(prompt: String, detail: String, away: Bool, confirm: Bool) async -> Bool {
         if away || confirm { return true }
-        return await overlay.requestConsent(prompt: prompt, detail: detail)
+        let granted = await overlay.requestConsent(prompt: prompt, detail: detail)
+        consentOutcome = granted ? "approved" : "declined"
+        return granted
     }
 
     /// The refusal a declined (or unanswered) consent returns — the same shape as the old

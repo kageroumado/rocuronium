@@ -148,6 +148,16 @@ final class PresenceOverlayController {
 
     private func positionConsentWindow() {
         guard let consentWindow, let screen = NSScreen.screens.first else { return }
+        // Settle the card to its final size before placing it. NSHostingView resizes the
+        // window to fit its content *after* the view lays out, and that resize keeps the
+        // top-left corner — growing the window downward, into the bezel, after it was already
+        // positioned. Force layout and pin the content size first, so the bottom edge set
+        // below is the last word and cannot drift down onto the bezel.
+        consentWindow.contentView?.layoutSubtreeIfNeeded()
+        if let fitting = consentWindow.contentView?.fittingSize, fitting.height > 0 {
+            consentWindow.setContentSize(fitting)
+        }
+
         let x = screen.frame.midX - consentWindow.frame.width / 2
         // Default home: above the bezel's bottom-center perch.
         var y = screen.frame.minY + 190
