@@ -148,17 +148,16 @@ final class PresenceOverlayController {
 
     private func positionConsentWindow() {
         guard let consentWindow, let screen = NSScreen.screens.first else { return }
-        let frame = consentWindow.frame
-        let x = screen.frame.midX - frame.width / 2
+        let x = screen.frame.midX - consentWindow.frame.width / 2
         // Default home: above the bezel's bottom-center perch.
         var y = screen.frame.minY + 190
-        // The prompt and the bezel share the bottom-center, so at their default sizes — or
-        // with the bezel dragged — the two frames can overlap and clip the prompt. When the
-        // prompt's home would intersect the bezel, lift it so its bottom edge clears the
-        // bezel's top edge by `consentBezelGap`.
-        let home = NSRect(x: x, y: y, width: frame.width, height: frame.height)
-        if let bezelWindow, bezelWindow.isVisible, home.intersects(bezelWindow.frame) {
-            y = bezelWindow.frame.maxY + Constants.consentBezelGap
+        // The prompt and the bezel share the bottom-center. `requestConsent` always shows the
+        // bezel first, so whenever it is up, stack the prompt's bottom edge a fixed gap above
+        // the bezel's top edge — keyed off the bezel's live frame, so it holds at any bezel
+        // size or dragged position, and never depends on the prompt's own (not-yet-laid-out)
+        // height. `max` keeps the default home as a floor.
+        if let bezelWindow {
+            y = max(y, bezelWindow.frame.maxY + Constants.consentBezelGap)
         }
         consentWindow.setFrameOrigin(NSPoint(x: x, y: y))
     }
