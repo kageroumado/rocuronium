@@ -21,11 +21,6 @@ nonisolated enum HardwareInput {
         /// Ordinary application windows. Higher layers are the Dock and menu bar, whose
         /// full-screen backing windows would otherwise look like they cover everything.
         static let normalWindowLayer = 0
-        /// Trace pacing waits with (near-)zero tolerance. The system's default timer
-        /// tolerance coalesces a ~8 ms frame sleep up to tens of ms, which is exactly the
-        /// "cursor moves at 20 fps" complaint — the plan samples at 120 Hz, and only
-        /// uncoalesced sleeps deliver it.
-        static let traceTolerance: Duration = .milliseconds(1)
         /// Elasticity: cursor movement below this between two of our samples is rounding
         /// noise, not a hand.
         static let humanNoiseFloor = 1.0

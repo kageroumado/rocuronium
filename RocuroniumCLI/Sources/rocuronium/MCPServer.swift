@@ -22,7 +22,8 @@ enum MCPServer {
             """
             Presence and capability report: whether a human is at the keyboard, whether the \
             display can be seen, whether the cursor may be taken, whether the engine is \
-            halted (⌃⌥⇧⎋), and what holds the display awake. Every action reply also carries \
+            halted (⌃⌥⇧⎋) and why (haltReason — the chord, or a plan that paused for the \
+            human), and what holds the display awake. Every action reply also carries \
             the presence block. Cheap and safe to poll.
             """,
             properties: [:], required: [],
@@ -382,7 +383,7 @@ enum MCPServer {
         ),
         tool(
             "display",
-            "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives it back and sweeps parked windows home, 'status' reports leases, parked windows, and strays (windows on the display nobody parked). Windows parked there are invisible to the person at the Mac.",
+            "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives one lease back (with --lease) or every lease at once (without) and sweeps parked windows home, 'status' reports leases (with seconds until each auto-expires), parked windows, and strays (windows on the display nobody parked). Windows parked there are invisible to the person at the Mac.",
             properties: [
                 "action": ["type": "string", "enum": ["acquire", "release", "status"]],
                 "reason": ["type": "string", "description": "Recorded on the lease — who/why"],

@@ -377,12 +377,12 @@ final class CommandRouter {
         switch request.action {
         case "hide":
             demoStage.hide()
-            return ["ok": true, "summary": "demo stage hidden"]
+            return ["ok": true, "visible": demoStage.isVisible, "summary": "demo stage hidden"]
         case "show", "reset", nil:
             demoStage.show(reset: request.action != "show")
             return [
                 "ok": true,
-                "visible": true,
+                "visible": demoStage.isVisible,
                 "reset": request.action != "show",
                 "summary": "demo stage is up at (720, 200), 560×720 — fixed and reset unless action:show; "
                     + "drive it with --app Rocuronium",
@@ -486,7 +486,7 @@ final class CommandRouter {
 
     private func status() -> [String: Any] {
         let presence = UserPresence.read()
-        return [
+        var reply: [String: Any] = [
             "ok": true,
             "trusted": AXIsProcessTrusted(),
             "presence": presence.state.rawValue,
@@ -501,6 +501,12 @@ final class CommandRouter {
             "displayHold": adrafinil.isHolding ? (adrafinil.mechanism ?? "internal") : "none",
             "halted": EmergencyStop.isHalted,
         ]
+        // Why the halt happened — the ⌃⌥⇧⎋ press, or a plan that paused for the human — so a
+        // halted agent learns more than the generic refusal string tells it.
+        if EmergencyStop.isHalted, let reason = EmergencyStop.reason {
+            reply["haltReason"] = reason
+        }
+        return reply
     }
 
     /// Fires the Screen Recording prompt.
@@ -1537,8 +1543,21 @@ final class CommandRouter {
             return reply
 
         case "release":
-            guard let id = request.lease.flatMap(UUID.init(uuidString:)) else {
-                return ["ok": false, "error": "'display release' requires --lease <id> from acquire"]
+            guard let leaseArgument = request.lease else {
+                // No id given: release every lease at once and sweep the display clean — the
+                // deliberate reset for when nothing else is going to release them.
+                let count = virtualDisplay.leases.count
+                await virtualDisplay.releaseAll()
+                return [
+                    "ok": true,
+                    "leasesRemaining": 0,
+                    "summary": count > 0
+                        ? "released all \(count) lease(s); display torn down and windows swept home"
+                        : "no outstanding leases to release",
+                ]
+            }
+            guard let id = UUID(uuidString: leaseArgument) else {
+                return ["ok": false, "error": "'display release --lease' needs a valid lease id from acquire (or omit --lease to release all)"]
             }
             guard let outcome = await virtualDisplay.release(id: id) else {
                 return ["ok": false, "error": "no outstanding lease \(id.uuidString) — already released or expired"]
@@ -1570,6 +1589,10 @@ final class CommandRouter {
                         "reason": lease.reason,
                         "kind": lease.kind.rawValue,
                         "parkedWindows": virtualDisplay.ledger.entries(under: lease.id).count,
+                        // How long until this lease auto-expires and releases itself.
+                        "expiresInSeconds": max(
+                            0, Int(ContinuousClock().now.duration(to: lease.expiresAt).components.seconds),
+                        ),
                     ]
                 },
                 "parked": virtualDisplay.ledger.entries.map { entry -> [String: Any] in
@@ -1922,7 +1945,6 @@ final class CommandRouter {
         let token = frames.store(
             key: key, bytes: bytes,
             pixelWidth: image.width, pixelHeight: image.height,
-            scale: scale, origin: rect.origin,
         )
 
         if var delta {

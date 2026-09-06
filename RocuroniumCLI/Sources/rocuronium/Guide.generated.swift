@@ -574,10 +574,11 @@ and the politeness contract. It is modeled as a **lease**, never a mode.
 
 - `display acquire [--reason R] [--minutes N]` returns a lease id (30 min by default, up
   to 1440); `display release --lease ID` sweeps parked windows home and tears the display
-  down when the last holder leaves; `display status` lists leases, parked windows, and
-  **strays** (windows on the virtual display nobody parked: a saved frame restored there,
-  a second window of a parked app), which release warns about and sweeps to the main
-  screen.
+  down when the last holder leaves, and `display release` with no `--lease` releases every
+  lease at once (the deliberate reset); `display status` lists leases (each with the
+  seconds until it auto-expires), parked windows, and **strays** (windows on the virtual
+  display nobody parked: a saved frame restored there, a second window of a parked app),
+  which release warns about and sweeps to the main screen.
 - `park --app X` moves the app's primary window there. With no lease in force it takes an
   **auto-lease** (reason recorded from the command, id in the reply) that releases itself
   when its last parked window is returned or closes. `park --app X --x N --y N` moves the

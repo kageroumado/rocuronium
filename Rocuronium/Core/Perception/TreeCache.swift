@@ -113,12 +113,6 @@ nonisolated final class TreeCache {
         entries[pid] = nil
     }
 
-    /// Drops everything. Used on display power transitions, where every tree in every process
-    /// changes shape at once.
-    func invalidateAll() {
-        entries.removeAll()
-    }
-
     /// Drops entries for processes that no longer exist, so the cache cannot grow without
     /// bound and cannot serve a dead app's tree to whatever inherits its pid.
     func evictDeadProcesses(livePIDs: Set<pid_t>) {

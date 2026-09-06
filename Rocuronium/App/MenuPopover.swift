@@ -107,7 +107,7 @@ struct MenuPopover: View {
         case .driving:
             (Theme.agent, "An agent has hands", drivingSubtitle, false)
         case .idle:
-            (.secondary, "Standing by", idleSubtitle, true)
+            (Theme.idle, "Standing by", idleSubtitle, true)
         }
         return HStack(spacing: Theme.Space.md) {
             Group {

@@ -28,7 +28,6 @@ nonisolated enum ElementQuery {
     struct Match {
         let element: AXElement
         let depth: Int
-        let path: String
     }
 
     struct Results {
@@ -101,7 +100,7 @@ nonisolated enum ElementQuery {
         let deadline = clock.now.advanced(by: Constants.timeBudget)
         var outOfTime = false
 
-        func visit(_ element: AXElement, depth: Int, path: String) {
+        func visit(_ element: AXElement, depth: Int) {
             guard visited < budget, depth <= maxDepth, !outOfTime else { return }
             // Both stops matter and they are different: the deadline keeps this walk inside
             // the socket's reply window, and the cancellation check stops a walk whose caller
@@ -114,16 +113,13 @@ nonisolated enum ElementQuery {
             }
             visited += 1
             if predicate(element), seenSignatures.insert(element.signature).inserted {
-                matches.append(Match(element: element, depth: depth, path: path))
+                matches.append(Match(element: element, depth: depth))
             }
             guard depth < maxDepth else { return }
-            // `element.role` is loop-invariant but was being re-read per child — one IPC round
-            // trip each, thousands of them on a large tree.
-            let parentRole = element.role
-            for (index, child) in element.children.enumerated() {
+            for child in element.children {
                 guard visited < budget, !outOfTime else { return }
                 guard child.role != "AXApplication" else { continue }
-                visit(child, depth: depth + 1, path: "\(path)/\(parentRole)[\(index)]")
+                visit(child, depth: depth + 1)
             }
         }
 
@@ -131,18 +127,18 @@ nonisolated enum ElementQuery {
         // non-window children entirely — a `--window` query means "inside this window", not
         // "this window plus whatever floats beside it".
         if let windowTitle {
-            for (index, window) in windows(pid: pid, titled: windowTitle).enumerated() {
-                visit(window, depth: 1, path: "/win[\(index)]")
+            for window in windows(pid: pid, titled: windowTitle) {
+                visit(window, depth: 1)
             }
         } else {
-            for (index, window) in root.windows.enumerated() {
-                visit(window, depth: 1, path: "/win[\(index)]")
+            for window in root.windows {
+                visit(window, depth: 1)
             }
             // The menu bar arrives through `AXChildren` too, so it is skipped here as well —
             // see the type comment for why menus are excluded from label walks entirely.
-            for (index, child) in root.children.enumerated()
+            for child in root.children
                 where child.role != "AXApplication" && child.role != "AXMenuBar" {
-                visit(child, depth: 1, path: "/kid[\(index)]")
+                visit(child, depth: 1)
             }
         }
 

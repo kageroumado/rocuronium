@@ -12,7 +12,6 @@ import Foundation
 @MainActor
 final class FrameStore {
     struct Frame {
-        let token: String
         /// The capture target ("app:<pid>", "rect:…", "display:main"). A token only diffs
         /// against a capture of the same target — same-sized pixels of a different window
         /// would produce a confident, wrong answer.
@@ -21,11 +20,6 @@ final class FrameStore {
         let bytes: [UInt8]
         let pixelWidth: Int
         let pixelHeight: Int
-        /// Pixels per point of the captured surface, for mapping diff rectangles back to
-        /// the screen coordinates every other verb speaks.
-        let scale: Double
-        /// Top-left of the captured rect in global screen points.
-        let origin: CGPoint
     }
 
     private enum Constants {
@@ -41,15 +35,14 @@ final class FrameStore {
     /// Stores a capture and returns its observation token. Any previous frame for the same
     /// target is replaced: one frame per target is the contract, and the newest is the
     /// only one the next `--since` can honestly want.
-    func store(key: String, bytes: [UInt8], pixelWidth: Int, pixelHeight: Int, scale: Double, origin: CGPoint) -> String {
+    func store(key: String, bytes: [UInt8], pixelWidth: Int, pixelHeight: Int) -> String {
         for stale in order where frames[stale]?.key == key {
             evict(stale)
         }
         let token = "px-\(UUID().uuidString.prefix(8).lowercased())"
         frames[token] = Frame(
-            token: token, key: key, bytes: bytes,
+            key: key, bytes: bytes,
             pixelWidth: pixelWidth, pixelHeight: pixelHeight,
-            scale: scale, origin: origin,
         )
         order.append(token)
         while totalBytes > Constants.byteBudget, order.count > 1 {

@@ -38,14 +38,13 @@ final class PlanExecutor {
         self.activityLog = activityLog
     }
 
-    /// Wakes a plan paused by `pause-for-human`. Called from `resumeFromHalt()`.
+    /// Wakes a plan paused by `pause-for-human`. Called from `resumeFromHalt()`; a no-op when
+    /// no plan is paused. The paused state itself is visible through `EmergencyStop.reason`,
+    /// which a pause sets to "Plan paused: …".
     func resume() {
         pauseContinuation?.resume()
         pauseContinuation = nil
     }
-
-    /// Whether a plan is currently paused and waiting for the human.
-    var isPaused: Bool { pauseContinuation != nil }
 
     func execute(_ plan: SequencePlan) async -> [String: Any] {
         var results: [StepResult] = []
