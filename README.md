@@ -39,6 +39,13 @@ observation token back and get only what changed — elements appeared, vanished
 moved. Screenshots diff the same way: changed-region crops instead of the whole frame,
 scroll detection with revealed-edge strips.
 
+**Vision when the tree lies.** About a sixth of Mac apps expose no usable accessibility
+tree. A three-tier cascade covers them: accessibility first, then a local
+[UI-element detector](https://huggingface.co/kageroumado/rocuronium-ui-detector) — a
+5.4 MB CoreML YOLOv11n, ~8 ms per window — plus OCR to turn an icon toolbar into
+addressable boxes, then a local VLM for the rest. `read --ocr` and `find --ocr` return the
+parsed rows, and `groundedBy` on every row says which tier answered.
+
 ## Install
 
 ```bash
@@ -111,6 +118,45 @@ Two invariants hold for every action:
 
 The emergency stop (Ctrl+Option+Shift+Escape) halts everything within one cursor sample.
 Resume is a button in the menu bar popover — no socket command can clear the halt.
+
+## Stack
+
+Swift 6.2 with strict concurrency and `@MainActor` isolation by default. A menu-bar app
+that holds the Accessibility grant, plus a dependency-free CLI that speaks to it over a
+Unix-domain socket. The CLI is also the MCP server.
+
+**Apple frameworks**
+
+- **Accessibility** (ApplicationServices) — reading trees, `AXPress`/`AXSetValue` delivery
+- **CoreGraphics / CGEvent** — per-process posted events (ghost input) and cursor paths
+- **ScreenCaptureKit** — occlusion-proof window captures and region diffs
+- **Vision** — on-device OCR (the `scroll --until-text` and `--ocr` paths)
+- **CoreML** — the UI-element detector runs on the Neural Engine (`.cpuAndNeuralEngine`)
+- **SwiftUI + AppKit** — menu-bar popover and the presence overlay
+- **Carbon / IOKit / Synchronization** — the ⌃⌥⇧⎋ global kill switch, the virtual display,
+  the lock-free cursor-sampling thread
+
+**Swift packages**
+
+- [Propofol](https://github.com/kageroumado/propofol) — the menu-bar popover UI kit
+- [mlx-swift + mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) — local VLM
+  inference on Apple silicon
+- [swift-transformers](https://github.com/huggingface/swift-transformers) — HuggingFace Hub
+  model downloads and tokenizers
+
+**Vision models**
+
+- [rocuronium-ui-detector](https://huggingface.co/kageroumado/rocuronium-ui-detector) —
+  YOLOv11n trained with [Ultralytics](https://github.com/ultralytics/ultralytics) on
+  [GroundCUA](https://huggingface.co/datasets/ServiceNow/GroundCUA) (ServiceNow, Apache-2.0),
+  exported to CoreML, hosted on HuggingFace (Apache-2.0)
+- [Holo 3.1 4B](https://huggingface.co/pipenetwork/Holo-3.1-4B-MLX-4bit) — GUI-grounding
+  VLM, downloaded on demand and run through MLX
+
+**Interface**
+
+- [Model Context Protocol](https://modelcontextprotocol.io) — every verb exposed as an MCP
+  tool with the same name and arguments
 
 ## Documentation
 
