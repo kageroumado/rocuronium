@@ -3,7 +3,7 @@
 #
 # GUIDE.md is the full operator manual; this bakes it into the binary so
 # `rocuronium guide` works with nothing but the CLI on hand. Called by
-# release.sh before the CLI build; the generated file is committed so a
+# embed-cli.sh before the CLI build; the generated file is committed so a
 # plain `swift build` still compiles without running this.
 
 set -euo pipefail

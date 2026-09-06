@@ -41,8 +41,9 @@ construction — the same trick Dantrolene uses for home/away.
 
 - **The debug loop is build-sign-install.** The socket verifies the peer's code signature
   (team `52K336H235`) against its audit token, so `.build/debug/rocuronium` is refused —
-  correctly. Use `./Scripts/release.sh --install` (notarization ~4 min; run it backgrounded),
-  then `/Applications/Rocuronium.app/Contents/Resources/rocuronium`.
+  correctly. Use `./Scripts/install.sh` (Rilmazafone builds and signs the bundle, no version
+  bump, notarization skipped for speed), then
+  `/Applications/Rocuronium.app/Contents/Resources/rocuronium`.
 - **The CLI lives in `Contents/Resources`, never `Contents/MacOS`** — the filesystem is
   case-insensitive, so `rocuronium` there overwrites the app's own `Rocuronium` executable.
 - **`AXUIElement` is not `Sendable`** (checked against the SDK, not assumed). Elements are

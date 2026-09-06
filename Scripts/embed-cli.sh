@@ -9,8 +9,9 @@
 # and releases — but it archives only the Xcode scheme, and the CLI is a separate SwiftPM
 # package, so it must be embedded here BEFORE the pipeline's signing stage seals the bundle.
 #
-# Run it after the archive and before signing. `Scripts/release.sh` calls it inline; the
-# release pipeline should call it as a post-archive / pre-sign hook.
+# Run it after the archive and before signing — the release pipeline calls it as its
+# post-archive / pre-sign hook (`hooks.preSign` in the `.releaseplan`). The local
+# `Scripts/install.sh` reaches it through that same pipeline.
 #
 # Usage: Scripts/embed-cli.sh <path-to-Rocuronium.app>
 
