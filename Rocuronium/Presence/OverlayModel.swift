@@ -47,6 +47,22 @@ final class OverlayModel {
 
     var chargeRing: ChargeRing?
     var ripples: [Ripple] = []
+
+    /// A disruptive action is waiting on the human at the machine. Rather than refuse with
+    /// "pass --confirm" — a decision the caller has to guess — the overlay asks, and the
+    /// socket call blocks on the answer. `nil` when nothing is pending.
+    struct ConsentRequest {
+        /// One line naming what will happen: "Bring Discord to the front and click 'Inbox'".
+        let prompt: String
+        /// The app the action targets, for the second line ("Discord · click").
+        let detail: String
+    }
+
+    var consent: ConsentRequest?
+    /// While a confirm key is held, which answer it is and how far toward the 1 s threshold —
+    /// drives the fill on the Yes/No affordance so a hold reads as deliberate, and a tap does
+    /// nothing. `true` = yes, `false` = no.
+    var consentHold: (answer: Bool, fraction: Double)?
     /// The bezel window's frame, in the effects window's top-left coordinates — home for
     /// the jellyfish's perch, kept current as the human drags the bezel around.
     var bezelFrame: CGRect?

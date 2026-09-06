@@ -1021,13 +1021,12 @@ final class CommandRouter {
                     "presence": presenceBlock(),
                 ]
             }
-            guard presence.state == .away || request.confirm == true else {
-                return [
-                    "ok": false,
-                    "error": "presence is '\(presence.state.rawValue)' — a session-level key lands in global focus, "
-                        + "which belongs to the human right now. Pass confirm:true if that is genuinely intended.",
-                    "presence": presenceBlock(),
-                ]
+            guard await consented(
+                prompt: "Send a session-level key press to the front app",
+                detail: "\(Self.target(of: request)) · key",
+                away: presence.state == .away, confirm: request.confirm == true,
+            ) else {
+                return declinedReply("The session key")
             }
             let frontmostPid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
             guard frontmostPid == pid else {
@@ -1047,6 +1046,26 @@ final class CommandRouter {
         return evidenceReply(evidence)
     }
 
+    /// A disruptive action wants to run while a human may be at the machine. `away` (nobody
+    /// here) or a caller that already carries the human's authority via `--confirm` proceeds
+    /// without asking. Otherwise the overlay puts the decision to the human — a one-second hold
+    /// on Y or N — and this blocks on it; the socket call waits with it, and a timeout is a no.
+    private func consented(prompt: String, detail: String, away: Bool, confirm: Bool) async -> Bool {
+        if away || confirm { return true }
+        return await overlay.requestConsent(prompt: prompt, detail: detail)
+    }
+
+    /// The refusal a declined (or unanswered) consent returns — the same shape as the old
+    /// `--confirm` refusal, so a caller that was ready to hear "pass confirm" still gets a
+    /// clean `ok:false` it can reason about.
+    private func declinedReply(_ what: String) -> [String: Any] {
+        [
+            "ok": false,
+            "error": "\(what) was declined by the human at the machine (held N, or no answer in time).",
+            "presence": presenceBlock(),
+        ]
+    }
+
     /// `move` (hover, glide) and `drag` (button held along the path) — the cursor-path
     /// verbs. Hardware-tentacle by measurement: per-pid posted motion is dropped wholesale by
     /// the window server (cursor-paths experiment, 2026-08-20), so these take the real
@@ -1061,13 +1080,12 @@ final class CommandRouter {
                 "presence": presenceBlock(),
             ]
         }
-        guard presence.state == .away || request.confirm == true else {
-            return [
-                "ok": false,
-                "error": "presence is '\(presence.state.rawValue)' — '\(verb)' takes the real cursor out of a "
-                    + "human's hands. Pass confirm:true if that is genuinely intended.",
-                "presence": presenceBlock(),
-            ]
+        guard await consented(
+            prompt: "\(dragging ? "Drag" : "Move") the real cursor across the screen",
+            detail: "\(Self.target(of: request)) · \(verb)",
+            away: presence.state == .away, confirm: request.confirm == true,
+        ) else {
+            return declinedReply("The \(verb)")
         }
 
         func parsePoint(_ text: String, flag: String) throws -> CGPoint {
@@ -1411,13 +1429,12 @@ final class CommandRouter {
     private func activate(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         let presence = UserPresence.read()
-        guard presence.state == .away || request.confirm == true else {
-            return [
-                "ok": false,
-                "error": "presence is '\(presence.state.rawValue)' — 'activate' would take focus out of a "
-                    + "human's hands. Pass confirm:true if that is genuinely intended.",
-                "presence": presenceBlock(),
-            ]
+        guard await consented(
+            prompt: "Bring \(Self.target(of: request)) to the front",
+            detail: "\(Self.target(of: request)) · activate",
+            away: presence.state == .away, confirm: request.confirm == true,
+        ) else {
+            return declinedReply("Activating \(Self.target(of: request))")
         }
         guard let application = NSRunningApplication(processIdentifier: pid) else {
             throw RouterError.appNotRunning(request.app ?? "?")

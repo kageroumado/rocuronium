@@ -19,8 +19,11 @@ final class PresenceOverlayController {
 
     private var window: NSWindow?
     private var bezelWindow: NSWindow?
+    private var consentWindow: NSWindow?
     private var bezelMoveObserver: (any NSObjectProtocol)?
     private let hotkey = HotkeyMonitor()
+    private let consentKeys = ConsentHotkeys()
+    private var consentContinuation: CheckedContinuation<Bool, Never>?
     private var lingerTask: Task<Void, Never>?
 
     private enum Constants {
@@ -32,6 +35,9 @@ final class PresenceOverlayController {
         static let shortLinger: TimeInterval = 3
         /// The charge-up ring's wind-up — the visible interrupt window before each click.
         static let charge: TimeInterval = 0.6
+        /// How long a consent prompt waits for the human before it cancels itself — well
+        /// inside the socket's 30 s so the caller gets a clean "declined", not a dead call.
+        static let consentTimeout: TimeInterval = 25
     }
 
     init() {
@@ -77,6 +83,93 @@ final class PresenceOverlayController {
         }
         if let error = reply["error"] as? String { return error }
         return reply["summary"] as? String ?? "done"
+    }
+
+    // MARK: - Consent
+
+    /// Ask the human at the machine to approve a disruptive action, and block on the answer.
+    /// The socket call awaits this, so the whole point is that it resolves quickly: a one-second
+    /// hold on **Y** or **N**, or the timeout (treated as no) well inside the socket's 30 s.
+    func requestConsent(prompt: String, detail: String) async -> Bool {
+        // Resolve any prompt already standing (only one at a time) as a decline before opening
+        // the new one — a stale continuation must never be abandoned unresumed.
+        if consentContinuation != nil { resolveConsent(false) }
+
+        show()
+        model.phase = .needsHuman
+        model.narration = prompt
+        model.consent = OverlayModel.ConsentRequest(prompt: prompt, detail: detail)
+        model.consentHold = nil
+        model.lastEngagement = Date()
+        // Hold the chrome up for the whole wait; the linger would otherwise fade it mid-decision.
+        lingerTask?.cancel()
+
+        if consentWindow == nil { consentWindow = makeConsentWindow() }
+        positionConsentWindow()
+        consentWindow?.alphaValue = 1
+        consentWindow?.orderFrontRegardless()
+
+        consentKeys.onProgress = { [weak self] answer, fraction in
+            self?.model.consentHold = (answer, fraction)
+        }
+        consentKeys.onResolve = { [weak self] answer in
+            self?.resolveConsent(answer)
+        }
+        consentKeys.start()
+
+        let deadline = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Constants.consentTimeout))
+            guard !Task.isCancelled else { return }
+            self?.resolveConsent(false)
+        }
+        defer { deadline.cancel() }
+
+        return await withCheckedContinuation { continuation in
+            consentContinuation = continuation
+        }
+    }
+
+    private func resolveConsent(_ answer: Bool) {
+        guard let continuation = consentContinuation else { return }
+        consentContinuation = nil
+        consentKeys.stop()
+        consentWindow?.orderOut(nil)
+        model.consent = nil
+        model.consentHold = nil
+        model.phase = .idle
+        model.narration = answer ? "Approved — proceeding" : "Declined"
+        model.lastEngagement = Date()
+        restartLinger()
+        continuation.resume(returning: answer)
+    }
+
+    private func positionConsentWindow() {
+        guard let consentWindow, let screen = NSScreen.screens.first else { return }
+        let frame = consentWindow.frame
+        let x = screen.frame.midX - frame.width / 2
+        // Above the bezel's bottom-center home, clear of it.
+        let y = screen.frame.minY + 190
+        consentWindow.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func makeConsentWindow() -> NSWindow? {
+        let hosting = NSHostingView(rootView: ConsentView(model: model))
+        let size = hosting.fittingSize
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false,
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.ignoresMouseEvents = true
+        window.level = .screenSaver
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        return window
     }
 
     // MARK: - Effects (called through the relay)
