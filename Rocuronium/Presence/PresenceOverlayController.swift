@@ -38,6 +38,9 @@ final class PresenceOverlayController {
         /// How long a consent prompt waits for the human before it cancels itself — well
         /// inside the socket's 30 s so the caller gets a clean "declined", not a dead call.
         static let consentTimeout: TimeInterval = 25
+        /// Vertical clearance kept between the consent prompt's bottom edge and the bezel's
+        /// top edge when both are up, so the two share the bottom-center without overlapping.
+        static let consentBezelGap: CGFloat = 16
     }
 
     init() {
@@ -147,8 +150,16 @@ final class PresenceOverlayController {
         guard let consentWindow, let screen = NSScreen.screens.first else { return }
         let frame = consentWindow.frame
         let x = screen.frame.midX - frame.width / 2
-        // Above the bezel's bottom-center home, clear of it.
-        let y = screen.frame.minY + 190
+        // Default home: above the bezel's bottom-center perch.
+        var y = screen.frame.minY + 190
+        // The prompt and the bezel share the bottom-center, so at their default sizes — or
+        // with the bezel dragged — the two frames can overlap and clip the prompt. When the
+        // prompt's home would intersect the bezel, lift it so its bottom edge clears the
+        // bezel's top edge by `consentBezelGap`.
+        let home = NSRect(x: x, y: y, width: frame.width, height: frame.height)
+        if let bezelWindow, bezelWindow.isVisible, home.intersects(bezelWindow.frame) {
+            y = bezelWindow.frame.maxY + Constants.consentBezelGap
+        }
         consentWindow.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
