@@ -1778,10 +1778,13 @@ final class CommandRouter {
         // never going to be honored.
         let destination = try request.path.map(resolveCapturePath)
 
-        // An app capture goes through the window filter, not a region of the display: a region
-        // returns whatever is *topmost* there, and an occluded window would be captured as
-        // someone else's pixels at exactly the right size — a correct-looking wrong answer.
-        if request.app != nil {
+        // A process-scoped capture goes through the window filter, not a region of the display:
+        // a region returns whatever is *topmost* there, and an occluded window would be captured
+        // as someone else's pixels at exactly the right size — a correct-looking wrong answer.
+        // Any of `app`, `pid`, or `window` names a target: a bare `--pid` (or `--window`) must
+        // scope the same way `--app` does, never fall through to a full-display grab. A
+        // `--window` with no process resolves through `resolve`, which asks for `--app`/`--pid`.
+        if request.app != nil || request.pid != nil || request.window != nil {
             let pid = try resolve(request)
             // A named window that cannot be resolved refuses here rather than widening to the
             // primary window or the whole display — the measured hazard was a screenshot
