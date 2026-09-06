@@ -37,20 +37,9 @@ xcodebuild -project Rocuronium.xcodeproj -scheme Rocuronium -configuration Relea
 APP="$BUILD_DIR/DerivedData/Build/Products/Release/$APP_NAME"
 [ -d "$APP" ] || { echo "no app produced at $APP"; exit 1; }
 
-echo "==> Embedding the operator guide"
-"$PROJECT_DIR/Scripts/embed-guide.sh"
-
-echo "==> Building the CLI (release)"
-(cd RocuroniumCLI && swift build -c release >"$BUILD_DIR/swiftbuild.log" 2>&1) ||
-    { tail -30 "$BUILD_DIR/swiftbuild.log"; exit 1; }
-CLI="$PROJECT_DIR/RocuroniumCLI/.build/release/rocuronium"
-
-echo "==> Embedding the CLI"
-# NOT Contents/MacOS/rocuronium: the filesystem is case-insensitive, so that path is the same
-# file as the app's own "Rocuronium" executable and silently replaces it — the bundle then
-# launches the CLI, which prints usage and exits. Resources/ keeps the clean binary name.
-mkdir -p "$APP/Contents/Resources"
-cp "$CLI" "$APP/Contents/Resources/rocuronium"
+# The guide-embed + CLI-build + CLI-embed the release pipeline does not know about, factored
+# out so the pipeline can call the same script as a post-archive / pre-sign hook.
+"$PROJECT_DIR/Scripts/embed-cli.sh" "$APP"
 
 # Inner binaries first, then the bundle: signing the outer bundle seals the inner signatures,
 # so doing it the other way round produces a bundle that fails validation.
