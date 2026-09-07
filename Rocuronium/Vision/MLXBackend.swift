@@ -36,7 +36,12 @@ actor MLXBackend: GroundingBackend {
             chat: [
                 .system(Constants.systemPrompt),
                 .user(prompt, images: [.url(resizedURL)]),
-            ]
+            ],
+            // Holo answers a grounding prompt with `Click(x, y)` directly. Left to default,
+            // the Qwen3-VL template opens a `<think>` block and the model spends the whole
+            // token budget reasoning before it ever reaches the coordinates; disabling it
+            // makes the model emit the click immediately.
+            additionalContext: ["enable_thinking": false]
         )
 
         let lmInput = try await container.prepare(input: userInput)
@@ -101,6 +106,9 @@ actor MLXBackend: GroundingBackend {
             )
         }
 
+        Self.normalizeTokenizerConfig(in: modelDir)
+        Self.patchChatTemplate(in: modelDir)
+
         let tokenizer = LocalTokenizerLoader()
         let loaded = try await VLMModelFactory.shared.loadContainer(
             from: modelDir, using: tokenizer
@@ -108,6 +116,41 @@ actor MLXBackend: GroundingBackend {
         container = loaded
         touchTimer()
         return loaded
+    }
+
+    /// The `pipenetwork/Holo-3.1-4B-MLX-4bit` conversion writes
+    /// `tokenizer_class: "TokenizersBackend"`, which is not a HuggingFace tokenizer class:
+    /// swift-transformers cannot map it and throws `unsupportedTokenizer`, so the model never
+    /// loads. Holo-3.1-4B is Qwen3.5-VL, whose text tokenizer is the Qwen2 BPE tokenizer, so
+    /// rewrite the class to the one swift-transformers maps. The vocab and merges come from
+    /// `tokenizer.json`, so only the class name matters. Idempotent — a correct file is left
+    /// untouched.
+    static func normalizeTokenizerConfig(in dir: URL) {
+        let url = dir.appending(path: "tokenizer_config.json")
+        guard let data = try? Data(contentsOf: url),
+              var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              obj["tokenizer_class"] as? String != "Qwen2Tokenizer"
+        else { return }
+        obj["tokenizer_class"] = "Qwen2Tokenizer"
+        guard let out = try? JSONSerialization.data(
+            withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]
+        ) else { return }
+        try? out.write(to: url)
+    }
+
+    /// johnmai-dev/Jinja — the template engine `mlx-swift-lm` renders chat templates with —
+    /// evaluates the Python extended slice `messages[::-1]` to an empty array: for a negative
+    /// step it never swaps the default bounds. Qwen3-VL's template reverses `messages` that way
+    /// to find the last user turn, so the loop never runs and the template raises "No user query
+    /// found in messages." Rewrite the slice to the `reverse` filter, which the engine
+    /// implements. Idempotent — a template without the slice is left untouched.
+    static func patchChatTemplate(in dir: URL) {
+        let url = dir.appending(path: "chat_template.jinja")
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              text.contains("messages[::-1]")
+        else { return }
+        let patched = text.replacingOccurrences(of: "messages[::-1]", with: "messages | reverse")
+        try? patched.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func touchTimer() {
