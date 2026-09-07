@@ -135,9 +135,10 @@ enum MCPServer {
         ),
         tool(
             "launch",
-            "Launch an app without taking focus, and return only once its accessibility tree answers — ready:true means 'you can drive it now', not merely 'the process started'. Reports alreadyRunning when it was.",
+            "Launch an app without taking focus, and return only once its accessibility tree answers — ready:true means 'you can drive it now', not merely 'the process started'. Reports alreadyRunning when it was. Refused while the frontmost app is fullscreen unless `confirm` is true: the new app's first window switches Spaces and drops the human out of their game.",
             properties: [
                 "app": ["type": "string", "description": "App name, bundle id, or full path"],
+                "confirm": ["type": "boolean", "description": "Launch even though a fullscreen app would be interrupted"],
             ], required: ["app"],
         ),
         tool(
@@ -145,14 +146,16 @@ enum MCPServer {
             """
             Bring an app to the foreground, taking focus — the one thing the ghost verbs \
             promise never to do, offered deliberately as a named, gated verb. Refused while a \
-            human is present or recently active unless `confirm` is true. Use when background \
-            delivery is not dependable (AppKit apps never validate menus in the background) \
-            and bringing the app forward is the honest option. Read-back confirms whether the \
-            target actually came forward.
+            human is present or recently active unless `confirm` is true, and refused while the \
+            frontmost app is fullscreen (activating another app switches Spaces and drops the \
+            human out of their game) unless `confirm` is true. Use when background delivery is \
+            not dependable (AppKit apps never validate menus in the background) and bringing the \
+            app forward is the honest option. Read-back confirms whether the target actually \
+            came forward.
             """,
             properties: [
                 "app": ["type": "string"],
-                "confirm": ["type": "boolean", "description": "Take focus even though someone is at the Mac"],
+                "confirm": ["type": "boolean", "description": "Take focus even though someone is at the Mac or a fullscreen app is up"],
             ], required: ["app"],
         ),
         tool(
@@ -326,7 +329,8 @@ enum MCPServer {
             hover menus, tooltips, hover-intent flows, and anything that tracks pointer \
             motion. There is no ghost variant: per-pid posted motion is dropped by the window \
             server (measured), so this takes the physical cursor and is refused while a human \
-            is present unless `confirm` is true. Destination is `end` ("x,y" in screen \
+            is present, or while the frontmost app is fullscreen (the cursor over the game \
+            switches Spaces), unless `confirm` is true. Destination is `end` ("x,y" in screen \
             points) or an element by `label` (+`app`); `via` waypoints bend the path into a \
             smooth curve through them (glide from a nav tab down into its flyout). Starts \
             from the current cursor position unless `start` is given. Evidence: the cursor's \
@@ -362,8 +366,9 @@ enum MCPServer {
             Drag along a path with a mouse button held: down at `start`, real motion through \
             any `via` waypoints, up at `end`. Moves content, sliders, selection ranges, and \
             windows (title-bar drags work even on background windows, measured). Same \
-            hardware-tentacle rules as `move`: takes the physical cursor, presence-gated behind \
-            `confirm`, occlusion at the start point refused when `app` is given. An aborted \
+            hardware-tentacle rules as `move`: takes the physical cursor, presence- and \
+            fullscreen-gated behind `confirm`, occlusion at the start point refused when `app` \
+            is given. An aborted \
             drag (lock/cancel mid-path) releases the button where it stopped — never left \
             held. Note: apps reading drag *deltas* get exact double-precision values; apps \
             reading positions get the same path — both measured working.

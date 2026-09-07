@@ -39,11 +39,11 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
   scroll     --app <a> (--label <t> | --to <0..1> | --dy <px> [--dx <px>]
                         | --until-text <s> [--dy <±1>])
   statusitem --app <a> [--label <t>] [--press]
-  launch     --app <name|bundle id|path> [--confirm]
-  activate   --app <a> [--confirm]
+  launch     --app <name|bundle id|path> [--confirm]   (--confirm to interrupt a fullscreen app)
+  activate   --app <a> [--confirm]                      (--confirm to interrupt a fullscreen app)
   plan       --file <steps.json>           (or JSON on stdin)
 
-Cursor paths — take the real cursor; refused while a human is present unless --confirm
+Cursor paths — take the real cursor; refused while a human is present or an app is fullscreen unless --confirm
   move       (--to <x,y> | --app <a> --label <t> [--role <r>]) [--from <x,y>]
              [--via "<x,y> <x,y>…"] [--duration <s>] [--dwell <ms>]
              [--easing <linear|ease-in|ease-out|ease-in-out>] [--restore] [--confirm]
