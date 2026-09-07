@@ -1081,6 +1081,27 @@ final class CommandRouter {
         ]
     }
 
+    /// Whether bringing another app forward right now would drop the human out of a fullscreen
+    /// Space they are watching. A fullscreen app owns a Space of its own, so launching an app,
+    /// activating one, or letting a cursor-path verb raise its target all switch Spaces and pull
+    /// the human out of it. True only when someone is present, the frontmost app fills a display,
+    /// and the caller has not opted into the interruption with `confirm:true`.
+    private func wouldInterruptFullscreen(confirm: Bool) -> Bool {
+        guard !confirm else { return false }
+        return Foreground.frontmostIsFullscreen && UserPresence.read().state != .away
+    }
+
+    /// The refusal a fullscreen-protected verb returns: names the app that would be disturbed and
+    /// the flag that permits the act, matching the machine-readable `ok:false` shape of the other
+    /// gates.
+    private func fullscreenRefusal(effect: String, override: String) -> [String: Any] {
+        [
+            "ok": false,
+            "error": "'\(Foreground.frontmostName)' is fullscreen — \(effect). \(override)",
+            "presence": presenceBlock(),
+        ]
+    }
+
     /// `move` (hover, glide) and `drag` (button held along the path) — the cursor-path
     /// verbs. Hardware-tentacle by measurement: per-pid posted motion is dropped wholesale by
     /// the window server (cursor-paths experiment, 2026-08-20), so these take the real
@@ -1094,6 +1115,15 @@ final class CommandRouter {
                 "error": "the screen is locked — the cursor belongs to the login window right now",
                 "presence": presenceBlock(),
             ]
+        }
+        // A cursor path aimed at a background app raises it first (below), and taking the cursor
+        // over a fullscreen game is disruptive on its own — both drop the human out of their
+        // Space. Refuse before the consent overlay, which would render onto that game.
+        if wouldInterruptFullscreen(confirm: request.confirm == true) {
+            return fullscreenRefusal(
+                effect: "a cursor path would take the cursor over it and switch Spaces",
+                override: "Pass confirm:true if interrupting the fullscreen app is genuinely intended.",
+            )
         }
         guard await consented(
             prompt: "\(dragging ? "Drag" : "Move") the real cursor across the screen",
@@ -1403,15 +1433,11 @@ final class CommandRouter {
         // first window off the human's Space — and when the frontmost app is fullscreen, that
         // window arriving is what switches Spaces and throws them out of it. Refuse rather than
         // do it silently; `park` puts the new window on the virtual display instead.
-        let presence = UserPresence.read()
-        if Foreground.frontmostIsFullscreen, presence.state != .away, request.confirm != true {
-            return [
-                "ok": false,
-                "error": "'\(Foreground.frontmostName)' is fullscreen — a launching app's first "
-                    + "window would switch Spaces and pull the human out of it. Park the target on "
-                    + "the virtual display, or pass confirm:true if that is genuinely intended.",
-                "presence": presenceBlock(),
-            ]
+        if wouldInterruptFullscreen(confirm: request.confirm == true) {
+            return fullscreenRefusal(
+                effect: "a launching app's first window would switch Spaces and pull the human out of it",
+                override: "Park the target on the virtual display, or pass confirm:true if that is genuinely intended.",
+            )
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
@@ -1443,6 +1469,17 @@ final class CommandRouter {
     /// presence-gated exactly like hardware input.
     private func activate(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        // Raising another app is a Space switch when the frontmost app is fullscreen — the same
+        // disruption `launch` guards against, and worse here because activation is the switch
+        // itself, not a side effect of a new window. Refuse ahead of the consent prompt: the
+        // overlay would render onto the game the human is watching, and an agent gets a reason it
+        // can act on rather than a prompt nobody sees.
+        if wouldInterruptFullscreen(confirm: request.confirm == true) {
+            return fullscreenRefusal(
+                effect: "activating \(Self.target(of: request)) would switch Spaces and pull the human out of it",
+                override: "Pass confirm:true if interrupting the fullscreen app is genuinely intended.",
+            )
+        }
         let presence = UserPresence.read()
         guard await consented(
             prompt: "Bring \(Self.target(of: request)) to the front",

@@ -385,11 +385,12 @@ unless `--confirm`: a new window arriving switches Spaces and throws the human o
 their game. `park` the target instead.
 
 **`activate --app X [--confirm]`** — brings an app forward on purpose, the one thing
-ghost verbs promise never to do, so it is presence-gated like hardware input. Read-back
-says whether it landed: macOS sometimes declines to promote an accessory (menu-bar,
-LSUIElement) app while a regular app holds focus, and the reply says so rather than
-claiming success. Use it when background delivery is not dependable: AppKit menus,
-WebKit hover.
+ghost verbs promise never to do, so it is presence-gated like hardware input, and refused
+outright while the frontmost app is fullscreen (activating another app switches Spaces and
+drops the human out of their game) unless `--confirm`. Read-back says whether it landed:
+macOS sometimes declines to promote an accessory (menu-bar, LSUIElement) app while a
+regular app holds focus, and the reply says so rather than claiming success. Use it when
+background delivery is not dependable: AppKit menus, WebKit hover.
 
 ## 6. When the tree is empty: vision
 
@@ -520,7 +521,9 @@ what is acceptable right now. What gates on it:
 - `activate`, `move`, `drag`, `key --allow-hardware-input`: refused unless `away` or
   `--confirm`, and refused outright while the screen is locked or the aim point is
   covered by another app's window.
-- `launch`: refused while the frontmost app is fullscreen unless `--confirm`.
+- `launch`, `activate`, `move`, `drag`: refused while the frontmost app is fullscreen unless
+  `--confirm` — bringing another app forward (or taking the cursor over the game) switches
+  Spaces and throws the human out of it.
 - Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor
   and never change the frontmost app, so they are fine while a human is typing.
 
@@ -553,7 +556,7 @@ a deliberate, legitimate choice when the situation calls for it.
 | absent text | `type` | pass `""` | clearing a field is unrecoverable |
 | session-ending or data-destroying menu item | `shortcut`, `menu` | `--confirm` | `cmd+shift+q` is Log Out from any app |
 | a human is present | `activate`, `move`, `drag`, hardware `key` | `--confirm` | focus and cursor belong to the human |
-| frontmost app is fullscreen | `launch` | `--confirm` | a new window switches Spaces |
+| frontmost app is fullscreen | `launch`, `activate`, `move`, `drag` | `--confirm` | bringing another app forward switches Spaces, dropping the human out of the game |
 | target occluded at the aim point | sting, `move`, `drag` | park the target | a real click hits whatever is topmost |
 | screen locked | all hardware | none | keystrokes would land in the password field |
 | display asleep | all perception | none | every tree collapses; wake first |
