@@ -58,6 +58,14 @@ final class OverlayModel {
         let detail: String
     }
 
+    /// The instant an action finished, when a settle beat should play before idle. The
+    /// jellyfish eases to rest here rather than the state flipping silently. `nil` outside
+    /// that beat — cleared when the next action begins and when the chrome hides.
+    var settleStart: Date?
+    /// Where the settle rests: `true` holds at the last escort position (a cursor action just
+    /// ended there), `false` eases home to the perch beside the bezel.
+    var settleInPlace = false
+
     var consent: ConsentRequest?
     /// While a confirm key is held, which answer it is and how far toward the 1 s threshold —
     /// drives the fill on the Yes/No affordance so a hold reads as deliberate, and a tap does

@@ -17,4 +17,10 @@ nonisolated enum PresenceRelay {
 
     /// Called after a hardware-tentacle click lands; draws the ripple. Fire-and-forget.
     nonisolated(unsafe) static var impact: @Sendable (CGPoint) -> Void = { _ in }
+
+    /// Called after a *ghost* (posted, cursor-free) click lands, with the click point. The
+    /// overlay pings there only when the human asked to watch every action and is present to
+    /// see it, so an invisible action's location is legible without taking the cursor. The
+    /// gate lives in the installed hook; the actuation path calls unconditionally.
+    nonisolated(unsafe) static var ghostImpact: @Sendable (CGPoint) -> Void = { _ in }
 }
