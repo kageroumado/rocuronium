@@ -1,6 +1,6 @@
 #!/bin/bash
-# Prepare a freshly built Rocuronium.app for signing: embed the operator guide, build the
-# dependency-free SwiftPM CLI, and copy it into Contents/Resources. One signature and one
+# Prepare a freshly built Rocuronium.app for signing: build the dependency-free SwiftPM CLI
+# and copy it into Contents/Resources. One signature and one
 # notarization then cover both, and the embedded CLI carries the app's Developer ID — which
 # is what lets the control socket verify that a process talking to it is one of ours.
 #
@@ -21,9 +21,6 @@ APP="${1:?usage: Scripts/embed-cli.sh <path-to-Rocuronium.app>}"
 [ -d "$APP" ] || { echo "no app bundle at $APP"; exit 1; }
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
-
-echo "==> Embedding the operator guide"
-"$PROJECT_DIR/Scripts/embed-guide.sh"
 
 echo "==> Building the CLI (release)"
 (cd RocuroniumCLI && swift build -c release)

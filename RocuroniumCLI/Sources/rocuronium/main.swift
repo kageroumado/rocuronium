@@ -60,7 +60,6 @@ Meta
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
-  guide                                    the operator manual — the full contract
 
 Options
   --pid <n>                 target a process directly; overrides --app
@@ -83,7 +82,7 @@ Options
                             included) come back groundedBy detector (needs Screen Recording)
   --json                    print the raw reply
 
-Eight things to know before the guide:
+Eight things to know:
   1. Trust `verdict`, never the exit code. confirmed · noEffect (success was reported and
      nothing changed: change mechanism, do not retry harder) · unverifiable (it may have
      landed: verify before retrying).
@@ -116,13 +115,6 @@ arguments.removeFirst()
 func value(for flag: String) -> String? {
     guard let index = arguments.firstIndex(of: "--\(flag)"), index + 1 < arguments.count else { return nil }
     return arguments[index + 1]
-}
-
-// The operator manual, embedded at build time from Docs/GUIDE.md. Needs no socket and no
-// running app: an agent holding nothing but this binary can learn the contract.
-if command == "guide" {
-    print(Guide.text)
-    exit(0)
 }
 
 // MCP mode: a stdio tool server for agent harnesses. Register with e.g.

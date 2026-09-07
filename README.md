@@ -67,7 +67,6 @@ rocuronium type --app Notes --text "hello" # type into the focused field
 rocuronium screenshot --app Finder         # capture a window (occlusion-proof)
 
 rocuronium mcp                             # start the MCP server (stdio)
-rocuronium guide                           # print the full operator manual
 ```
 
 ## MCP
@@ -96,10 +95,10 @@ All verbs are exposed as MCP tools with the same names and arguments.
 | **Cursor** | `move` `drag` (hardware — takes the real cursor, presence-gated) |
 | **Orchestrate** | `plan` (multi-step with guards) |
 | **Isolate** | `display` (virtual display lease) `park` (move window to it) |
-| **Meta** | `guide` `demo` (practice window) `request-capture` `mcp` |
+| **Meta** | `demo` (practice window) `request-capture` `mcp` |
 
 One coordinate frame everywhere: points, origin at the top-left of the main display.
-`rocuronium --help` lists every flag; `rocuronium guide` is the full contract.
+`rocuronium --help` lists every flag; each MCP tool carries its own contract in its description.
 
 ## Safety model
 
@@ -160,9 +159,10 @@ Unix-domain socket. The CLI is also the MCP server.
 
 ## Documentation
 
-- `rocuronium guide` — the full operator manual (also at [`Docs/GUIDE.md`](Docs/GUIDE.md))
-- [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) — system design (11 sections, stable numbering)
-- [`Docs/INTERFACE-PLAN.md`](Docs/INTERFACE-PLAN.md) — what the agent-facing surface should become next
+- **[`.claude/skills/rocuronium`](.claude/skills/rocuronium)** — the agent's operator guide as a Claude Code skill: `SKILL.md` plus a `reference/` folder (the reply contract, targeting, acting, vision, plans, presence, isolation). Copy or symlink it into `~/.claude/skills/` to have it on hand in any project.
+- `rocuronium --help` — every command and flag.
+- Each MCP tool carries its own contract in its description.
+- [`CLAUDE.md`](CLAUDE.md) — architecture and invariants for working on the code.
 
 ## License
 

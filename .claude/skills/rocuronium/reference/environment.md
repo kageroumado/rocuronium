@@ -1,0 +1,13 @@
+# Environment facts that trip agents
+
+**Display asleep is blindness; screen locked is not.** When the display sleeps, every app's accessibility tree collapses to the app element, and a naive tool concludes "this app exposes nothing". Rocuronium refuses instead: perception verbs answer "I cannot see" and acting verbs wake the display first. A locked screen with an awake display is harmless: full trees, ghost input works, only hardware input is refused.
+
+**The display hold.** While a session is active (any perceiving or acting command) the app keeps the display awake, through Adrafinil's display-class hold when its CLI is installed or a process-local assertion otherwise, releasing after a few quiet minutes; `status.displayHold` says which. The hold stops at the lock screen on purpose. Neither the wake nor the hold resets `HIDIdleTime`, so presence stays honest.
+
+**Actions that close their own app.** A press that quits or restarts its app can never verify through the app. The engine treats the process exiting as the read-back: `confirmed`, with the exit named. An `unverifiable` press on an app still running really is unverified; check `apps` before retrying anything quit-shaped.
+
+**Background apps.** Ghost delivery to background apps is dependable for accessibility writes and unicode text, best-effort for menu presses (AppKit never validates background menus; Electron keeps items enabled and the press usually works). When the verdict matters and the target is AppKit-in-background, `activate` it first.
+
+**The demo stage.** `demo` opens a deterministic practice window at (720, 200), 560×720, every control instrumented with a counter: "Tap Target" → "clicks: N", "Type Here" → "echo: …", a switch, a slider, a hover pad that counts even in the background, a 120-row scroll list whose needle is "Row 87 · the needle". Drive it with `--app Rocuronium`. `demo reset` (default) zeroes the counters, `demo show` keeps state, `demo hide` closes it, `demo render --path f.png [--w --h] [--reason opaque]` draws the jellyfish for artwork.
+
+**"could not reach Rocuronium.app".** The CLI speaks to a unix socket at `~/Library/Application Support/glass.kagerou.rocuronium/control.sock`. If the app is running and the connect still fails instantly, a second instance (a debug build) bound the same path and quit, leaving the release daemon listening on an unlinked inode. `Scripts/install-launchagent.sh` quits it and re-registers the LaunchAgent; `launchctl kickstart -k gui/$UID/glass.kagerou.rocuronium` restarts one launchd already manages. The socket serializes requests and cancels each at 30 s; a walk that outlives its caller is cancelled with it, so one slow target cannot poison the queue.

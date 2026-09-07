@@ -1,15 +1,15 @@
 import Testing
 @testable import rocuronium
 
-/// The usage text, the MCP tool schemas, and the guide are the agent's whole interface — an
-/// agent picks verbs by reading them, so a command the router grew but the docs never
-/// mentioned is invisible, and a flag the docs promise but the router dropped is a lie. These
-/// tests keep the two the CLI owns — `usage` and `MCPServer.tools` — honest against each other
-/// and against the canonical command set, so drift fails the build instead of a session.
+/// The usage text and the MCP tool schemas are the agent's whole interface — an agent picks
+/// verbs by reading them, so a command the router grew but the docs never mentioned is
+/// invisible, and a flag the docs promise but the router dropped is a lie. These tests keep the
+/// two the CLI owns — `usage` and `MCPServer.tools` — honest against each other and against the
+/// canonical command set, so drift fails the build instead of a session.
 ///
-/// House rule (also in ROADMAP): a command or flag change lands in four places — the router's
-/// `dispatch`, the CLI `usage`, `MCPServer.tools`, and `Docs/GUIDE.md`. This suite covers the
-/// two that live here; the guide is regenerated from GUIDE.md at release.
+/// House rule: a command or flag change lands in the router's `dispatch`, the CLI `usage`,
+/// `MCPServer.tools`, and the skill (`.claude/skills/rocuronium`). This suite covers the three
+/// that live in the CLI and router.
 @MainActor
 struct DocsConsistencyTests {
     /// Every verb `CommandRouter.dispatch` handles. Kept here as the cross-check's fixed point:
@@ -22,8 +22,8 @@ struct DocsConsistencyTests {
     ]
 
     /// Commands with no MCP tool, and why. `request-capture` fires the Screen Recording
-    /// prompt — a human-in-the-loop action an agent has no use for; `guide`/`mcp` are CLI-only
-    /// entry points, not socket verbs.
+    /// prompt — a human-in-the-loop action an agent has no use for; `mcp` is a CLI-only
+    /// entry point, not a socket verb.
     static let noMCPTool: Set<String> = ["request-capture"]
 
     private var toolNames: [String] {
