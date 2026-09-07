@@ -198,13 +198,18 @@ struct OverlayEffectsView: View {
                 // Home is beside the bezel, wherever the human has dragged it.
                 let perch = model.bezelFrame.map { CGPoint(x: $0.minX - 54, y: $0.minY - 52) }
                     ?? CGPoint(x: size.width / 2 - 160, y: size.height - 240)
-                follow.update(
-                    now: now, cursor: cursor,
-                    target: escorting
-                        ? CGPoint(x: cursor.x - 44, y: cursor.y - 62)
-                        : perch,
-                    escorting: escorting,
-                )
+                // A cursor action that just finished holds where it last escorted and settles
+                // there before the chrome fades — the work happened here, so this is where the
+                // creature comes to rest. Every other end drifts home to the perch.
+                let holdInPlace = !escorting && model.settleInPlace && model.settleStart != nil
+                let target: CGPoint = if escorting {
+                    CGPoint(x: cursor.x - 44, y: cursor.y - 62)
+                } else if holdInPlace {
+                    follow.position
+                } else {
+                    perch
+                }
+                follow.update(now: now, cursor: cursor, target: target, escorting: escorting)
 
                 for dot in follow.trail {
                     let age = now - dot.time
@@ -244,9 +249,44 @@ struct OverlayEffectsView: View {
                     )
                 }
 
+                var jellyRect = CGRect(x: follow.position.x, y: follow.position.y, width: 46, height: 60)
+
+                // The settle beat: a deliberate finish rather than a silent flip to idle. For a
+                // short spell after an action the creature eases down and exhales a soft bloom of
+                // light at its center, then rests. Drawn behind the jellyfish so the body sits atop
+                // its own glow.
+                let settleDuration = 0.7
+                if let settleStart = model.settleStart {
+                    let elapsed = timeline.date.timeIntervalSince(settleStart)
+                    if elapsed >= 0, elapsed < settleDuration {
+                        let progress = elapsed / settleDuration
+                        let eased = progress * progress * (3 - 2 * progress)
+                        jellyRect = jellyRect.offsetBy(dx: 0, dy: 5 * eased)
+                        // The bell's glow sits at (32, 26) in the 64×84 design box.
+                        let center = CGPoint(
+                            x: jellyRect.minX + 32.0 / 64.0 * jellyRect.width,
+                            y: jellyRect.minY + 26.0 / 84.0 * jellyRect.height,
+                        )
+                        let radius = 12 + 30 * eased
+                        context.fill(
+                            Path(ellipseIn: CGRect(
+                                x: center.x - radius, y: center.y - radius,
+                                width: radius * 2, height: radius * 2,
+                            )),
+                            with: .radialGradient(
+                                Gradient(colors: [
+                                    JellyPalette.glow.opacity(0.4 * (1 - eased)),
+                                    JellyPalette.glow.opacity(0),
+                                ]),
+                                center: center, startRadius: 0, endRadius: radius,
+                            ),
+                        )
+                    }
+                }
+
                 JellyfishArt.draw(
                     in: context,
-                    rect: CGRect(x: follow.position.x, y: follow.position.y, width: 46, height: 60),
+                    rect: jellyRect,
                     time: now,
                     phase: model.phase,
                     lean: follow.lean,
