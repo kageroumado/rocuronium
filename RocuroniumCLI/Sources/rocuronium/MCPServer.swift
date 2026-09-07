@@ -395,6 +395,14 @@ enum MCPServer {
             ], required: ["start", "end"],
         ),
         tool(
+            "busy",
+            "Hold the presence overlay up while you work. Call `busy` with action 'on' (and an optional note) when you START a chain of steps, and again with 'off' when you FINISH — the jellyfish then stays visible through the thinking and waiting between commands, and vanishing means 'nothing more is coming', so the person can stop guarding their mouse. Renewable: any acting command renews the hold, and it self-releases after ~90 s if you go silent. Visual only, and only when the person has 'show overlay for every action' on — it never changes what the engine does.",
+            properties: [
+                "action": ["type": "string", "enum": ["on", "off"], "description": "'on' (default) raises the hold; 'off' releases it"],
+                "note": ["type": "string", "description": "One line shown under the mark while held, e.g. 'moving the Finder window'"],
+            ], required: [],
+        ),
+        tool(
             "display",
             "Manage the headless virtual display: action 'acquire' leases it (returns a lease id), 'release' gives one lease back (with --lease) or every lease at once (without) and sweeps parked windows home, 'status' reports leases (with seconds until each auto-expires), parked windows, and strays (windows on the display nobody parked). Windows parked there are invisible to the person at the Mac.",
             properties: [

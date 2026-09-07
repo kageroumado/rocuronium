@@ -57,6 +57,8 @@ Windows
   park       --app <a> [--x <n> --y <n>]   onto the virtual display, or back to a point
 
 Meta
+  busy       [on|off] [--note <t>]           hold the presence overlay up while you work,
+                                             so "creature gone" means "nothing is coming"
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
@@ -126,7 +128,7 @@ if command == "mcp" {
 
 var payload: [String: Any] = ["command": command]
 // `display` and `demo` take a positional subcommand: `rocuronium display acquire`.
-if command == "display" || command == "demo", let action = arguments.first, !action.hasPrefix("-") {
+if command == "display" || command == "demo" || command == "busy", let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }
@@ -157,7 +159,7 @@ if command == "plan" {
         exit(2)
     }
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.

@@ -123,8 +123,10 @@ final class CommandRouter {
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?
-        /// Subcommand for verbs that have one (`display acquire|release|status`).
+        /// Subcommand for verbs that have one (`display acquire|release|status`, `busy on|off`).
         var action: String?
+        /// For `busy`: the line shown under the mark while the agent holds the work bracket.
+        var note: String?
         /// Why a virtual display lease is being taken; recorded on the lease.
         var reason: String?
         /// Lease duration. The bridge's 30-minute backstop applies when absent.
@@ -341,7 +343,7 @@ final class CommandRouter {
         // keeps renewing) the session-level display hold. Status-shaped commands do not:
         // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
-        case "status", "diag", "request-capture", "display", "activity", "demo": break
+        case "status", "diag", "request-capture", "display", "activity", "demo", "busy": break
         default:
             adrafinil.noteActivity()
             // A command aimed at an app with a parked window renews that window's
@@ -399,6 +401,7 @@ final class CommandRouter {
         case "screenshot": try await screenshot(request)
         case "statusitem": try await statusItem(request)
         case "activity": activity()
+        case "busy": busy(request)
         case "demo": demo(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
@@ -413,6 +416,30 @@ final class CommandRouter {
     /// Opens (reset), re-shows, or hides the demo stage. The reply carries the window's
     /// fixed frame in the same top-left coordinates every other verb speaks, so a test can
     /// aim at the stage without a `windows` round-trip.
+    /// Raise or drop the agent's work bracket on the presence overlay. `busy on` (the default)
+    /// holds the creature up through the thinking and waiting between commands; `busy off`
+    /// releases it so it settles away. Visual only, and only when the human is watching every
+    /// action — it never gates or changes what the engine does.
+    private func busy(_ request: Request) -> [String: Any] {
+        let action = request.action ?? "on"
+        switch action {
+        case "on":
+            overlay.beginHold(note: request.note ?? "")
+            return [
+                "ok": true, "busy": true,
+                "shown": overlay.model.showForAllActions,
+                "summary": overlay.model.showForAllActions
+                    ? "holding the overlay up until `busy off`"
+                    : "noted — the overlay only shows when 'show for every action' is on",
+            ]
+        case "off":
+            overlay.endHold()
+            return ["ok": true, "busy": false, "summary": "released the overlay hold"]
+        default:
+            return ["ok": false, "error": "unknown busy action '\(action)' — use on or off"]
+        }
+    }
+
     private func demo(_ request: Request) -> [String: Any] {
         switch request.action {
         case "hide":

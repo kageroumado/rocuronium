@@ -18,7 +18,7 @@ struct DocsConsistencyTests {
         "status", "diag", "request-capture", "find", "read", "apps", "windows",
         "type", "click", "scroll", "shortcut", "menu", "key", "move", "drag",
         "wait", "launch", "activate", "display", "park", "resize", "screenshot", "statusitem",
-        "activity", "demo", "plan",
+        "activity", "demo", "plan", "busy",
     ]
 
     /// Commands with no MCP tool, and why. `request-capture` fires the Screen Recording

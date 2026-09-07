@@ -25,6 +25,10 @@ final class PresenceOverlayController {
     private let consentKeys = ConsentHotkeys()
     private var consentContinuation: CheckedContinuation<Bool, Never>?
     private var lingerTask: Task<Void, Never>?
+    /// True between `beginHold` and `endHold`: the agent has declared a work bracket, so the
+    /// chrome stays up through the thinking and waiting between commands — not just for the
+    /// 15 s after one. Each command renews a `holdSafety` window instead of the short linger.
+    private var holdActive = false
 
     private enum Constants {
         /// The chrome eases in over this once the action actually begins — brisk, so the
@@ -35,6 +39,10 @@ final class PresenceOverlayController {
         static let linger: TimeInterval = 15
         /// After a cursor-taking action the user saw what happened — fade sooner.
         static let shortLinger: TimeInterval = 3
+        /// While the agent holds a `busy` bracket, how long the chrome may outlive the last
+        /// command before the safety fade assumes the agent is gone. Long enough to cover a
+        /// think between tool calls; short enough that a crashed agent does not strand the cue.
+        static let holdSafety: TimeInterval = 90
         /// The charge-up ring's wind-up — the visible interrupt window before each click.
         static let charge: TimeInterval = 0.6
         /// How long a consent prompt waits for the human before it cancels itself — well
@@ -90,6 +98,37 @@ final class PresenceOverlayController {
             model.settleInPlace = cursorTaking
         }
         restartLinger(seconds: cursorTaking ? Constants.shortLinger : Constants.linger)
+    }
+
+    // MARK: - Agent work bracket
+
+    /// The agent declares it is actively working — acting, waiting on a result, or thinking
+    /// mid-chain — so the chrome should stay up until it says otherwise. Only ever shown when
+    /// the human asked to watch every action; the bracket is a cue, not a safety gate.
+    ///
+    /// Renewable: calling it again refreshes the safety window and the note. Every acting
+    /// command also renews the window (through `restartLinger`), so a steady stream of work
+    /// keeps the creature lit through the gaps; a single call carries a lone think across them.
+    func beginHold(note: String) {
+        guard model.showForAllActions else { return }
+        holdActive = true
+        if model.sessionStart == nil { model.sessionStart = Date() }
+        appearForAction()
+        model.phase = .thinking
+        model.settleStart = nil
+        if !note.isEmpty { model.narration = note }
+        model.lastEngagement = Date()
+        restartLinger()
+    }
+
+    /// The agent is done: drop the bracket and let the chrome settle away on the short linger,
+    /// so "creature gone" means "nothing is coming". A no-op when no bracket is held.
+    func endHold() {
+        guard holdActive else { return }
+        holdActive = false
+        model.settleStart = Date()
+        model.settleInPlace = false
+        restartLinger(seconds: Constants.shortLinger)
     }
 
     /// One line of evidence-verdict language for the bezel.
@@ -276,6 +315,7 @@ final class PresenceOverlayController {
     /// ⌃⌥⇧⎋: halt the engine, then just stop and quietly remove the chrome — no ceremony.
     private func emergencyStop() {
         EmergencyStop.halt(reason: "⌃⌥⇧⎋ pressed while the overlay was visible")
+        holdActive = false
         lingerTask?.cancel()
         hotkey.unregister()
         model.phase = .hidden
@@ -318,6 +358,9 @@ final class PresenceOverlayController {
 
     private func fadeOutAndHide() {
         hotkey.unregister()
+        // The safety window may be what fired this — the agent went quiet without releasing.
+        // Clear the bracket so the next command starts from a clean idle, not a stale hold.
+        holdActive = false
         model.phase = .hidden
         model.sessionStart = nil
         model.chargeRing = nil
@@ -342,8 +385,12 @@ final class PresenceOverlayController {
 
     private func restartLinger(seconds: TimeInterval = Constants.linger) {
         lingerTask?.cancel()
+        // A held bracket owns the timer: any command renews the long safety window rather than
+        // the short per-command linger, so the chrome does not fade between two commands while
+        // the agent is still working. `endHold` is what clears the hold and hands the timer back.
+        let delay = holdActive ? Constants.holdSafety : seconds
         lingerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             self?.fadeOutAndHide()
         }
