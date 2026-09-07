@@ -64,6 +64,7 @@ rocuronium status                          # is the daemon running, what can I s
 rocuronium read --app TextEdit             # dump the app's text via accessibility
 rocuronium click --app Safari --label Done # click a button without touching the cursor
 rocuronium type --app Notes --text "hello" # type into the focused field
+rocuronium shortcut --app Notes --keys cmd+c  # copy the selection (real clipboard, with a verdict)
 rocuronium screenshot --app Finder         # capture a window (occlusion-proof)
 
 rocuronium mcp                             # start the MCP server (stdio)

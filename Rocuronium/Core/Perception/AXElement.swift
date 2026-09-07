@@ -223,6 +223,11 @@ nonisolated struct AXElement {
     /// act on selection (Select All and friends), which otherwise have no readable effect.
     var selectedText: String? { string(kAXSelectedTextAttribute) }
 
+    /// How many characters the text element holds — the length `select all` selects to.
+    var characterCount: Int? {
+        (attribute(kAXNumberOfCharactersAttribute) as? NSNumber)?.intValue
+    }
+
     /// The value as a number — scroll bars report their position this way, 0 to 1.
     var numberValue: Double? {
         (attribute(kAXValueAttribute) as? NSNumber)?.doubleValue
@@ -298,6 +303,24 @@ nonisolated struct AXElement {
     @discardableResult
     func perform(_ action: String = kAXPressAction) -> AXError {
         mutate { AXUIElementPerformAction(raw, action as CFString) }
+    }
+
+    /// Selects a character range — how `select all` is delivered without a menu press:
+    /// `setSelectedRange(location: 0, length: characterCount)`. Same rule as every write, the
+    /// return code is not evidence; callers read `selectedText` back.
+    @discardableResult
+    func setSelectedRange(location: Int, length: Int) -> AXError {
+        var range = CFRange(location: location, length: length)
+        guard let value = AXValueCreate(.cfRange, &range) else { return .failure }
+        return mutate { AXUIElementSetAttributeValue(raw, kAXSelectedTextRangeAttribute as CFString, value) }
+    }
+
+    /// Replaces the current selection with `text` — how a paste inserts and a cut deletes
+    /// (paste sets the clipboard string, cut sets the empty string), through accessibility
+    /// rather than a posted ⌘V that a background app never sees. Read the value back to verify.
+    @discardableResult
+    func setSelectedText(_ text: String) -> AXError {
+        mutate { AXUIElementSetAttributeValue(raw, kAXSelectedTextAttribute as CFString, text as CFString) }
     }
 
     /// Chromium builds its accessibility tree lazily. Setting this asks it to build the full

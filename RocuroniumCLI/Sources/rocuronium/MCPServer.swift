@@ -226,9 +226,16 @@ enum MCPServer {
         tool(
             "shortcut",
             """
-            Deliver a keyboard shortcut (e.g. 'cmd+a') by pressing the menu item that carries it — \
+            Deliver a keyboard shortcut (e.g. 'cmd+shift+e') by pressing the menu item that carries it — \
             works on Chromium, which ignores synthetic keycodes. Dependable on the frontmost app, \
-            best-effort in the background; trust the verdict, not the return.
+            best-effort in the background; trust the verdict, not the return. \
+            The four editing chords are special: cmd+a/cmd+c/cmd+x/cmd+v do select-all/copy/cut/paste \
+            as a direct accessibility edit on the focused text element (copy/cut write NSPasteboard, \
+            paste writes it back), NOT a menu press — so they work in the background and report a real \
+            verdict ('copied N characters', or noEffect when nothing is selected). Pressing Edit>Copy \
+            through the menu does not populate the clipboard even when the app is frontmost, which is \
+            why these route around it. If there is no focused text element the reply says so — click \
+            into the field first. \
             HAZARD: every app's menu bar includes the Apple menu, so session-wide items are reachable \
             from any target — cmd+shift+q resolves to Log Out. Items that end the session or destroy \
             data are refused unless `confirm` is true. Use `resolveOnly` to see which menu item a \

@@ -34,7 +34,8 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
   click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>) [--observe]
              [--button left|right] [--count 2] [--modifiers cmd,shift] [--foreground]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
-  shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item
+  shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item;
+             cmd+a/c/x/v do select-all/copy/cut/paste via accessibility + clipboard, with a verdict
   menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
   scroll     --app <a> (--label <t> | --to <0..1> | --dy <px> [--dx <px>]
                         | --until-text <s> [--dy <±1>])

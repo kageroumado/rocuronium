@@ -821,6 +821,86 @@ actor Engine {
     /// item path, the pre-press enabled report, and the hazard classification if any.
     typealias MenuPressResult = (evidence: Evidence?, menuPath: String, itemReportedEnabled: Bool, hazard: String?)
 
+    enum EditOp: String { case selectAll, copy, cut, paste }
+
+    struct EditResult {
+        let verdict: Evidence.Verdict
+        let summary: String
+        let readback: String?
+        var ok: Bool { verdict == .confirmed }
+    }
+
+    /// Clipboard and select-all as accessibility writes, not menu presses. `AXPress` on Edit▸Copy
+    /// does not populate the pasteboard, and every Edit menu is dead while its app is in the
+    /// background — so `shortcut cmd+c|x|v|a` routes here. Each op reads its effect back and
+    /// reports a verdict, closing the evidence gap the menu path left open. No cursor, no focus
+    /// change: the write lands on the app's own focused element wherever it is.
+    func editText(pid: pid_t, op: EditOp) throws -> EditResult {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let field = AXElement(pid: pid).focused else {
+            return EditResult(
+                verdict: .unverifiable,
+                summary: "no focused text element — click into the field first, then retry",
+                readback: nil)
+        }
+        switch op {
+        case .selectAll:
+            let count = field.characterCount ?? field.value?.count ?? 0
+            guard count > 0 else {
+                return EditResult(verdict: .noEffect, summary: "the field is empty — nothing to select", readback: nil)
+            }
+            field.setSelectedRange(location: 0, length: count)
+            let selected = field.selectedText?.count ?? 0
+            return selected >= count
+                ? EditResult(verdict: .confirmed, summary: "selected \(count) character\(count == 1 ? "" : "s")", readback: nil)
+                : EditResult(verdict: .unverifiable, summary: "select-all did not read back (\(selected)/\(count) selected)", readback: nil)
+        case .copy:
+            guard let text = field.selectedText, !text.isEmpty else {
+                return EditResult(verdict: .noEffect, summary: "nothing is selected to copy", readback: nil)
+            }
+            let wrote = Self.writePasteboard(text)
+            return EditResult(
+                verdict: wrote ? .confirmed : .unverifiable,
+                summary: wrote ? "copied \(text.count) character\(text.count == 1 ? "" : "s") to the clipboard" : "the clipboard did not accept the copy",
+                readback: String(text.prefix(200)))
+        case .cut:
+            guard let text = field.selectedText, !text.isEmpty else {
+                return EditResult(verdict: .noEffect, summary: "nothing is selected to cut", readback: nil)
+            }
+            let wrote = Self.writePasteboard(text)
+            let before = field.value?.count ?? 0
+            field.setSelectedText("")
+            let after = field.value?.count ?? 0
+            let deleted = after < before
+            return EditResult(
+                verdict: wrote && deleted ? .confirmed : .unverifiable,
+                summary: deleted ? "cut \(text.count) character\(text.count == 1 ? "" : "s") to the clipboard" : "copied, but the selection did not clear",
+                readback: String(text.prefix(200)))
+        case .paste:
+            guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+                return EditResult(verdict: .noEffect, summary: "the clipboard holds no text to paste", readback: nil)
+            }
+            let before = field.value ?? ""
+            field.setSelectedText(text)
+            let after = field.value ?? ""
+            let confirmed = after != before && after.contains(text)
+            return EditResult(
+                verdict: confirmed ? .confirmed : .unverifiable,
+                summary: confirmed ? "pasted \(text.count) character\(text.count == 1 ? "" : "s")" : "paste did not read back — the field may not accept an accessibility write",
+                readback: String(text.prefix(200)))
+        }
+    }
+
+    /// Writes a string to the general pasteboard and confirms the write took by the change
+    /// count advancing — the evidence `shortcut cmd+c` never had.
+    private static func writePasteboard(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        let before = pasteboard.changeCount
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        return pasteboard.changeCount != before
+    }
+
     func pressShortcut(
         pid: pid_t,
         keys: String,

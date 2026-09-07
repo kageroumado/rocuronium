@@ -162,6 +162,12 @@ nonisolated struct GhostReach {
                 action, element, pid, &attempts,
                 cursorBefore, frontBefore, focusBefore, refetch,
             ) {
+                // Ping the overlay where an AX press landed, the same as the posted path does —
+                // most ghost clicks resolve here at tentacle 1, so without this the escort would
+                // almost never learn where a cursor-free click struck.
+                if case .click = action, let frame = element.frame, frame.width >= 1, frame.height >= 1 {
+                    PresenceRelay.ghostImpact(CGPoint(x: frame.midX, y: frame.midY))
+                }
                 return await foldingVisual(evidence)
             }
 

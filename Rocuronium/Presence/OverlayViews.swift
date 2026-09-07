@@ -176,6 +176,10 @@ enum JellyfishArt {
 /// The escort reads `NSEvent.mouseLocation` per frame — zero engine coupling: the overlay
 /// watches the same cursor the human does, whoever is moving it.
 struct OverlayEffectsView: View {
+    /// How long, in seconds, an action's landing point keeps drawing the escort after it lands —
+    /// long enough to glide there and be seen attending, short enough to release the pointer back.
+    static let focusHold: TimeInterval = 1.1
+
     let model: OverlayModel
     @State private var follow = EscortState()
     @State private var hidden = false
@@ -202,14 +206,24 @@ struct OverlayEffectsView: View {
                 // there before the chrome fades — the work happened here, so this is where the
                 // creature comes to rest. Every other end drifts home to the perch.
                 let holdInPlace = !escorting && model.settleInPlace && model.settleStart != nil
-                let target: CGPoint = if escorting {
+                // Where an action just landed pulls the creature to it — the pointer stays put
+                // for a ghost action, so without this the jellyfish would attend to the wrong
+                // place (the untouched pointer, or the perch) while the click struck elsewhere.
+                let anchor: CGPoint? = model.focusAt.map { now - $0.timeIntervalSinceReferenceDate < Self.focusHold } == true
+                    ? model.focusPoint : nil
+                let target: CGPoint = if let anchor {
+                    CGPoint(x: anchor.x - 44, y: anchor.y - 62)
+                } else if escorting {
                     CGPoint(x: cursor.x - 44, y: cursor.y - 62)
                 } else if holdInPlace {
                     follow.position
                 } else {
                     perch
                 }
-                follow.update(now: now, cursor: cursor, target: target, escorting: escorting)
+                // A settled action anchor moves the creature like an escort would, so the glide
+                // to the click reads as attention rather than a teleport.
+                let attending = escorting || anchor != nil
+                follow.update(now: now, cursor: cursor, target: target, escorting: attending)
 
                 for dot in follow.trail {
                     let age = now - dot.time

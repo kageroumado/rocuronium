@@ -256,6 +256,7 @@ final class PresenceOverlayController {
         model.phase = .acting
         model.settleStart = nil
         model.chargeRing = OverlayModel.ChargeRing(point: point, start: Date(), duration: duration)
+        model.focus(at: point)
         model.lastEngagement = Date()
     }
 
@@ -263,6 +264,7 @@ final class PresenceOverlayController {
         appearForAction()
         model.chargeRing = nil
         model.addRipple(at: point)
+        model.focus(at: point)
         model.lastEngagement = Date()
     }
 
@@ -272,6 +274,7 @@ final class PresenceOverlayController {
     func showGhostPing(at point: CGPoint) {
         appearForAction()
         model.addRipple(at: point)
+        model.focus(at: point)
         model.lastEngagement = Date()
     }
 

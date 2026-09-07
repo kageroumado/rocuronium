@@ -1109,6 +1109,26 @@ final class CommandRouter {
             ]
         }
         let pid = try resolve(request)
+
+        // The clipboard and select-all chords do not go through a menu press: Edit menus are
+        // dead while their app is in the background, and `AXPress` on Edit▸Copy does not touch
+        // the pasteboard even when live (measured). They route to a real accessibility edit that
+        // reads its effect back — so `shortcut cmd+c` actually copies, and says whether it did.
+        if let op = Self.clipboardOp(for: keys) {
+            isDriving = true
+            defer { isDriving = false }
+            let result = try await engine.editText(pid: pid, op: op)
+            return [
+                "ok": result.ok,
+                "verdict": result.verdict.rawValue,
+                "tentacle": "accessibility",
+                "summary": result.summary,
+                "readback": result.readback ?? "",
+                "cursorMovedByUs": false,
+                "presence": presenceBlock(),
+            ]
+        }
+
         let mode: Engine.ShortcutMode = if request.resolveOnly == true {
             .resolveOnly
         } else if request.confirm == true {
@@ -1121,6 +1141,21 @@ final class CommandRouter {
         defer { isDriving = false }
         let result = try await engine.pressShortcut(pid: pid, keys: keys, mode: mode, observe: request.observe ?? false)
         return menuPressReply(result, resolving: "'\(keys)'")
+    }
+
+    /// The four chords that route to `Engine.editText` instead of a menu press. Normalizes case
+    /// and the `⌘`/`cmd` spellings; a bare `cmd+a`/`cmd+c`/`cmd+x`/`cmd+v` is the whole set.
+    private static func clipboardOp(for keys: String) -> Engine.EditOp? {
+        let normalized = keys.lowercased()
+            .replacingOccurrences(of: "⌘", with: "cmd+")
+            .replacingOccurrences(of: " ", with: "")
+        switch normalized {
+        case "cmd+a": return .selectAll
+        case "cmd+c": return .copy
+        case "cmd+x": return .cut
+        case "cmd+v": return .paste
+        default: return nil
+        }
     }
 
     /// Presses an arbitrary menu item by title path — the way to reach everything that has no

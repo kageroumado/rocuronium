@@ -48,6 +48,19 @@ final class OverlayModel {
     var chargeRing: ChargeRing?
     var ripples: [Ripple] = []
 
+    /// Where the most recent action actually landed, and when. The escort glides here rather
+    /// than to the pointer, so a *ghost* action — which never moves the cursor — still draws the
+    /// creature to where it struck, instead of leaving it hovering over the untouched pointer or
+    /// snapping home to the perch. Stale after a beat; the escort falls back to the pointer then.
+    var focusPoint: CGPoint?
+    var focusAt: Date?
+
+    /// Marks where an action landed, for the escort to attend to.
+    func focus(at point: CGPoint) {
+        focusPoint = point
+        focusAt = Date()
+    }
+
     /// A disruptive action is waiting on the human at the machine. Rather than refuse with
     /// "pass --confirm" — a decision the caller has to guess — the overlay asks, and the
     /// socket call blocks on the answer. `nil` when nothing is pending.
