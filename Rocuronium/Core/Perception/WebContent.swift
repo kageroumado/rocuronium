@@ -4,8 +4,8 @@ import ApplicationServices
 /// Recognizes the one surface the ghost reach cannot reach — web page content — and names
 /// the channel that can.
 ///
-/// Measured in `Experiments/ghost-input/RESULTS.md`: WebKit web content refuses accessibility
-/// writes *and* posted keys, and returns `.success` from the write while changing nothing.
+/// Measured: WebKit web content refuses accessibility writes *and* posted keys, and returns
+/// `.success` from the write while changing nothing.
 /// Chromium honors posted unicode keys once focus is right, so Electron composers usually
 /// succeed on tentacle 2 and never reach this code. When a web-content target does exhaust the
 /// tentacles, no OS-level input path exists at all — so tentacle 3 is a **referral, not an adapter**:

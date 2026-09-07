@@ -45,8 +45,8 @@ enum AuroraArt {
         let sagY = sag * 1.15
         let rimX = w * 0.94
 
-        // A wide shallow parasol. The first outline put both control points at the far
-        // corners, which gives a flat top and hard shoulders: a lid, not a bell.
+        // A wide shallow parasol: the control points pull in from the corners so the top
+        // rounds rather than flattening into a lid.
         let hem = [
             CGPoint(x: rimX, y: 0), CGPoint(x: w * 0.58, y: sagY),
             CGPoint(x: -w * 0.58, y: sagY), CGPoint(x: -rimX, y: 0),
@@ -117,9 +117,8 @@ enum AuroraArt {
             let x = JellyKit.lerp(-w * 0.92, w * 0.92, t)
             let bw = span / Double(bands) * 1.25
             let ph = time * spd * 1.05 + t * 4.0
-            // Height barely varies; the shimmer is carried by `intensity` instead. Letting
-            // height do the work meant the short bands left the top of the bell empty, and a
-            // half-empty bell is what made her look like the small one of the four.
+            // Height barely varies; the shimmer is carried by `intensity` instead, so the
+            // bands still fill the top of the bell rather than leaving it empty glass.
             //
             // Capped at 1.56 bell-heights so the fade completes *inside* the bell: past the
             // crown the gradient is cut off mid-curve, leaving a flat bright bar at the top
@@ -137,9 +136,8 @@ enum AuroraArt {
                     .init(color: P.alarm.opacity(0), location: 1),
                 ]
             } else {
-                // The body of the curtain sits high. Weighting green a quarter of the way up
-                // left the top two thirds as empty glass with a green stripe under it — an
-                // aurora is mostly aurora, not mostly sky.
+                // The body of the curtain sits high, so most of the bell is aurora rather
+                // than empty sky above a low green stripe.
                 [
                     .init(color: P.fringe.opacity(0.30 * intensity), location: 0),
                     .init(color: P.fringe.opacity(0.95 * intensity), location: 0.06),
@@ -168,8 +166,7 @@ enum AuroraArt {
 
         // the rim, the one hard line on it — a bell needs one edge or it stops being glass
         ctx.stroke(bell, with: .color(P.rim.opacity(0.50)), lineWidth: 0.42)
-        // Big eyes and a blush, like the rest of the cast. She had neither, which was the
-        // other half of why she read as the small one — not size, seriousness.
+        // Big eyes and a blush, like the rest of the cast.
         JellyKit.face(
             in: &ctx, time: time, phase: phase, at: CGPoint(x: 0, y: -h * 0.40),
             spread: w * 0.28, r: 1.16,

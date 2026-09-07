@@ -74,7 +74,7 @@ nonisolated enum MenuQuery {
         /// Whether pressing this would do something no read-back could undo.
         ///
         /// The need is concrete and was measured: **every** app's menu bar carries the Apple
-        /// menu, so `shortcut --app TextEdit --keys cmd+shift+q` resolves to "Log Out Kirie…"
+        /// menu, so `shortcut --app TextEdit --keys cmd+shift+q` resolves to "Log Out <user>…"
         /// and `cmd+opt+shift+q` to the variant that logs out *without* a confirmation dialog.
         /// An agent reaching for a text shortcut can end the user's session from any target.
         /// `type` already refuses a bare newline for the same reason — a verb that can send or

@@ -109,11 +109,6 @@ nonisolated struct Evidence: Codable, Sendable {
     /// test is whether the *target* came forward, not merely that something did.
     var focusTakenByUs: Bool { frontmostChanged && frontmostBecameTarget }
 
-    /// Folds a visual measurement into an existing verdict.
-    ///
-    /// Only ever *upgrades* `unverifiable`: a read-back that already confirmed or refuted the
-    /// action is stronger evidence than pixels, and must not be overridden by an unrelated
-    /// animation somewhere in the same rectangle.
     /// Names the hardware path for a gesture-only target the ghost tentacles cannot reach.
     ///
     /// A SwiftUI `.onTapGesture` inside a ScrollView exposes no accessibility action and swallows
@@ -129,8 +124,18 @@ nonisolated struct Evidence: Codable, Sendable {
         return copy
     }
 
-    func addingVisualEvidence(delta: Double?) -> Evidence {
-        guard verdict != .confirmed, let delta else { return self }
+    /// Folds a visual measurement into an existing verdict.
+    ///
+    /// `fault` carries the reason the capture produced no measurement — a broken Screen
+    /// Recording grant is the usual cause. When there is no delta to fold, it is surfaced as an
+    /// attempt so the reader sees *why* there is no pixel witness rather than a bare
+    /// `unverifiable`.
+    func addingVisualEvidence(delta: Double?, fault: String? = nil) -> Evidence {
+        guard verdict != .confirmed else { return self }
+        guard let delta else {
+            guard let fault else { return self }
+            return appendingAttempt("visual verification unavailable — \(fault)")
+        }
         // `.noEffect` participates too, and it must: the reach's fall-through paths assert
         // no-effect while holding a capture, which is exactly where the pixels are the only
         // signal left. A guard that admitted only `.unverifiable` would let those call sites
@@ -154,6 +159,20 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
+        )
+    }
+
+    /// A copy carrying one more attempt, verdict and everything else untouched. For notes that
+    /// explain the evidence (a capture that could not run) rather than change what it says.
+    private func appendingAttempt(_ outcome: String) -> Evidence {
+        Evidence(
+            action: action, target: target, tentacle: tentacle,
+            verdict: verdict, readback: readback, pixelDelta: pixelDelta,
+            focusBefore: focusBefore, focusAfter: focusAfter,
+            cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
+            frontmostBecameTarget: frontmostBecameTarget,
+            attempts: attempts + [.init(tentacle: tentacle, outcome: outcome)],
+            referral: referral, groundedBy: groundedBy,
         )
     }
 

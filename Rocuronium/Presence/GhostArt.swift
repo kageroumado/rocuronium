@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Koko, the ghost. Not a jellyfish, and that is deliberate — it was one for a while, with oral
-/// arms and marginal tentacles and a gonad ring showing through the bell, and all of it was
-/// anatomically earned and none of it was wanted.
+/// Koko, the ghost. Not a jellyfish, and that is deliberate — in a cast otherwise built from
+/// bells and tentacles, this one is a spirit.
 ///
 /// What survives from the medusa is the hem: five lobes that billow. Everything else is a
 /// round head, two big lit eyes and a blush. The eyes matter more than the shape does — an
@@ -102,8 +101,8 @@ enum GhostArt {
         }
         body.closeSubpath()
 
-        // Pearl, not steel. The first ramp ran white into a cold blue-grey, which is the
-        // colour of a thing that has been dead a while.
+        // Pearl, not steel: the ramp runs white into a warm tint, never a cold blue-grey —
+        // the colour of a thing that has been dead a while.
         ctx.fill(
             body,
             with: .linearGradient(

@@ -115,7 +115,7 @@ enum ClassicArt {
         }
 
         // The bell, squashing-and-stretching toward the target while acting (the propel —
-        // the pre-action telegraph the design replaced the ghost's glancing eyes with).
+        // the pre-action telegraph).
         var bell = body
         if pulsing {
             let t = (time / 1.25).truncatingRemainder(dividingBy: 1)

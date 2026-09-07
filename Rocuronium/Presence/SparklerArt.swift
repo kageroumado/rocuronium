@@ -51,10 +51,9 @@ enum SparklerArt {
         let strobe = phase == .needsHuman ? (sin(time * 2 * .pi * 1.5) > -0.2 ? 1.0 : 0.13) : 1.0
 
         // The standard jelly cap: chubby, wider than tall, widest a little above the rim so
-        // the margin tucks under the way a real bell's does. Three cleverer silhouettes were
-        // thrown away getting here and each failed the same way — by having a feature where
-        // a jellyfish has none. A pinched bud (a point). A crown built from a radius
-        // modulated over angle (a nub, dead centre). A tall waisted bell (a helmet).
+        // the margin tucks under the way a real bell's does. Never give it a feature a
+        // jellyfish has none of: a pinched bud makes a point, a radius modulated over angle
+        // makes a nub dead centre, a tall waisted bell makes a helmet.
         //
         // The apex sits level with both neighbouring control points, so the crown holds a
         // horizontal tangent and cannot grow a tip.

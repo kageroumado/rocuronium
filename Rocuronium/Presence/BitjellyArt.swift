@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The pixel mascot: a 14×18 sprite in four frames, ported from
-/// `Prototypes/overlay/bitjelly.html` with the repairs that prototype's testing pass found.
+/// `Prototypes/overlay/bitjelly.html`.
 ///
 /// Drawn into the same 64×84 design space as `JellyfishArt`, and handed a context that has
 /// already had the shared glow, the whole-body motion and the escort lean applied — so the
@@ -10,7 +10,7 @@ import SwiftUI
 /// Every cell group is accumulated into one `Path` and filled once. Filling cell-by-cell
 /// leaves a hairline seam wherever two rectangles abut, because each edge antialiases
 /// against the background separately; one path is one coverage calculation, so a flat bell
-/// comes out flat. That was the single worst artefact in the HTML prototype.
+/// comes out flat.
 @MainActor
 enum BitjellyArt {
     // MARK: - The sprite
