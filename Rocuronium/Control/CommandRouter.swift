@@ -115,6 +115,11 @@ final class CommandRouter {
         var y: Double?
         /// Opt-in to the cursor-stealing tentacle. Absent means no.
         var allowHardwareInput: Bool?
+        /// For `click`: skip the ghost tentacles and deliver a real activation + hardware click,
+        /// so the press is a genuine user gesture that can raise a system permission prompt (TCC,
+        /// notifications). Implies `allowHardwareInput`; presence-gated like `activate`. Absent
+        /// means no — the ghost-first ladder is the default.
+        var foreground: Bool?
         /// Opt-in to sending control characters (Return, Tab). Absent means no: a newline in a
         /// composer submits, and "type" must not be able to send a message by accident.
         var submit: Bool?
@@ -340,7 +345,7 @@ final class CommandRouter {
         // else only when the "show for all actions" toggle is on. Ghost tentacles are invisible
         // by design; the toggle is for watching, not for safety.
         if Self.actingVerbs.contains(request.command),
-           request.allowHardwareInput == true
+           request.allowHardwareInput == true || request.foreground == true
            || request.command == "move" || request.command == "drag"
            || overlay.model.showForAllActions {
             overlay.begin(action: "\(request.command) \(Self.target(of: request))…")
@@ -888,11 +893,41 @@ final class CommandRouter {
         if let count = request.count { clickOptions.count = min(max(Int(count), 1), 3) }
         clickOptions.modifiers = Self.parseModifiers(request.modifiers)
 
+        // The foreground path takes the real cursor and focus to make the click a genuine
+        // gesture, so it is gated exactly like `activate`/`move`/`drag`: refused while the lock
+        // owns the console, and put to the human for consent when one is present.
+        let foreground = request.foreground == true
+        if foreground {
+            let presence = UserPresence.read()
+            guard !presence.lockBlocksHardware else {
+                return [
+                    "ok": false,
+                    "error": "the screen is locked — a foreground click would land on the login window",
+                    "presence": presenceBlock(),
+                ]
+            }
+            guard await consented(
+                prompt: "Click \(Self.target(of: request)) with the real cursor to raise a system prompt",
+                detail: "\(Self.target(of: request)) · click --foreground",
+                away: presence.state == .away, confirm: request.confirm == true,
+            ) else {
+                return declinedReply("The foreground click")
+            }
+            // Bring the target forward first: a system permission prompt is only offered to an
+            // app the user is interacting with, and the hardware click below must land on a
+            // window that is already key rather than spend itself activating one.
+            if let application = NSRunningApplication(processIdentifier: pid) {
+                application.activate()
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+        }
+
         isDriving = true
         defer { isDriving = false }
         let evidence = try await engine.act(
             pid: pid, locator: locator, action: action,
             allowHardwareInput: request.allowHardwareInput ?? false,
+            foreground: foreground,
             observe: request.observe ?? false,
             clickOptions: clickOptions,
         )

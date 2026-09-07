@@ -1680,6 +1680,7 @@ actor Engine {
         locator: Locator,
         action: GhostReach.Action,
         allowHardwareInput: Bool,
+        foreground: Bool = false,
         observe: Bool = false,
         clickOptions: GhostReach.ClickOptions = .init()
     ) async throws -> Evidence {
@@ -1761,7 +1762,9 @@ actor Engine {
         // The tree-delta channel's before-walk, same timing and same reason.
         let treeBaseline = wantsPress ? treeEvidenceBaseline(pid: pid, observe: observe, window: window) : nil
 
-        let reach = GhostReach(allowHardwareInput: allowHardwareInput, clickOptions: clickOptions)
+        let reach = GhostReach(
+            allowHardwareInput: allowHardwareInput, foreground: foreground, clickOptions: clickOptions,
+        )
         var evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
         // The interface just changed; anything cached about this process is now suspect.
         cache.invalidate(pid: pid)

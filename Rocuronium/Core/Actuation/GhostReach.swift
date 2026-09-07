@@ -45,9 +45,25 @@ nonisolated struct GhostReach {
     /// How a `.click` is delivered. Ignored by `.press` and `.setText`.
     let clickOptions: ClickOptions
 
-    init(allowHardwareInput: Bool = false, accessibilityOnly: Bool = false, clickOptions: ClickOptions = .init()) {
-        self.allowHardwareInput = allowHardwareInput
+    /// Skip the ghost tentacles and deliver a real activation + hardware click, so the action
+    /// is a genuine user gesture.
+    ///
+    /// A `postToPid` click and an `AXPress` both actuate a control, but neither activates the app
+    /// nor moves the cursor, and the system therefore treats them as not-a-real-user-gesture:
+    /// `UNUserNotificationCenter.requestAuthorization` and the other TCC/consent prompts stay
+    /// unshown under them, though the same button raises the prompt under a foreground click. When
+    /// the caller needs the prompt to appear, this forces the one delivery the system honors as
+    /// real. It implies hardware input, so it is presence-gated and only reached with the caller's
+    /// consent.
+    let foreground: Bool
+
+    init(
+        allowHardwareInput: Bool = false, accessibilityOnly: Bool = false,
+        foreground: Bool = false, clickOptions: ClickOptions = .init()
+    ) {
+        self.allowHardwareInput = allowHardwareInput || foreground
         self.accessibilityOnly = accessibilityOnly
+        self.foreground = foreground && !accessibilityOnly
         self.clickOptions = clickOptions
     }
 
@@ -105,77 +121,113 @@ nonisolated struct GhostReach {
         let hold = DisplayWake.Hold(reason: "Rocuronium is driving the interface")
         defer { hold?.release() }
 
-        // Tentacle 1 — accessibility, then read back. A success code proves nothing.
-        if let evidence = await tryAccessibility(
-            action, element, pid, &attempts,
-            cursorBefore, frontBefore, focusBefore, refetch,
-        ) {
-            return await evidence.addingVisualEvidence(
-                delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
-            )
-        }
+        // A gesture-only target: it exposes no `AXPress`/`AXShowMenu`, so no accessibility
+        // tentacle can actuate it and a posted click at its point is swallowed by the enclosing
+        // scroll view. Measured on SwiftUI `.onTapGesture` inside a ScrollView. This is the
+        // signature that decides the escalation and the suggestion below.
+        let liveForActions = element.isValid ? element : (refetch() ?? element)
+        let gestureOnly: Bool = {
+            if case .setText = action { return false }
+            return !accessibilityOnly && liveForActions.pressishAction == nil
+        }()
 
-        // Menu items stop here: everything below aims at a rectangle that means nothing while
-        // the menu is closed. Tentacle 1's own verdict is the answer.
-        if accessibilityOnly {
+        // A referral is a signpost, not an adapter: web page content is the one surface OS input
+        // cannot reach at all, and the channel that can (refrax-ctl, CDP, Safari's own scripting)
+        // belongs to the calling agent, which holds the task context and the launch flags.
+        var referral: Evidence.Referral?
+
+        // The foreground path skips every ghost tentacle: `AXPress` and a posted click both
+        // actuate the control without a real gesture, and the whole reason the caller asked for
+        // foreground is that those do not raise the system prompt this action must surface. Go
+        // straight to the sting, which activates the app and clicks with the real cursor.
+        if !foreground {
+            // Tentacle 1 — accessibility, then read back. A success code proves nothing.
+            if let evidence = await tryAccessibility(
+                action, element, pid, &attempts,
+                cursorBefore, frontBefore, focusBefore, refetch,
+            ) {
+                return await evidence.addingVisualEvidence(
+                    delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
+                )
+            }
+
+            // Menu items stop here: everything below aims at a rectangle that means nothing while
+            // the menu is closed. Tentacle 1's own verdict is the answer.
+            if accessibilityOnly {
+                attempts.append(.init(
+                    tentacle: .postedEvent,
+                    outcome: "not attempted: this target is only meaningfully actuated through accessibility",
+                ))
+                return await finish(
+                    action, element, .accessibility, .unverifiable, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid,
+                )
+            }
+
+            // Tentacle 2 — posted events, delivered to this process only.
+            if let evidence = await tryPostedEvents(
+                action, element, pid, &attempts,
+                cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
+            ) {
+                let seen = await evidence.addingVisualEvidence(
+                    delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
+                )
+                // A posted click that moved neither focus nor pixels has demonstrably not landed,
+                // which is precisely the precondition the sting exists for. Without this the sting
+                // was unreachable for clicks: the posted branch returns evidence whenever the
+                // element has a frame, so `allowHardwareInput` was accepted and then never acted
+                // on. Measured case: SwiftUI `.onTapGesture` targets inside a ScrollView expose a
+                // frame, accept the posted event, and do nothing with it.
+                //
+                // A gesture-only target also escalates on `unverifiable`: without Screen Recording
+                // there is no pixel witness, so a swallowed tap reads unverifiable rather than
+                // noEffect, and a control that exposes no readable value can never do better. A
+                // retried click is at worst a second click, so escalating is safe. Text is excluded
+                // on purpose — a retried write lands the payload twice, and `contains` would then
+                // confirm the doubled text; the posted branch already declines to retry text.
+                let isText: Bool = if case .setText = action { true } else { false }
+                let escalate = seen.verdict == .noEffect
+                    || (gestureOnly && seen.verdict == .unverifiable)
+                guard allowHardwareInput, !isText, escalate else {
+                    return gestureOnly ? seen.suggestingHardware() : seen
+                }
+                attempts.append(.init(
+                    tentacle: .postedEvent,
+                    outcome: gestureOnly
+                        ? "gesture-only target: posted click swallowed by the scroll view — escalating to the sting"
+                        : "posted, but neither focus nor pixels moved — escalating to the sting",
+                ))
+            }
+
+            // Tentacle 3 — the referral signpost.
+            referral = WebContent.referral(for: element, pid: pid)
             attempts.append(.init(
-                tentacle: .postedEvent,
-                outcome: "not attempted: this target is only meaningfully actuated through accessibility",
+                tentacle: .appAutomation,
+                outcome: referral.map { "unreachable by OS input — refer to \($0.channel)" }
+                    ?? "no adapter for this target",
             ))
-            return await finish(
-                action, element, .accessibility, .unverifiable, nil, nil,
-                focusBefore, ElementQuery.focused(pid: pid)?.signature,
-                cursorBefore, frontBefore, attempts, pid,
-            )
-        }
-
-        // Tentacle 2 — posted events, delivered to this process only.
-        if let evidence = await tryPostedEvents(
-            action, element, pid, &attempts,
-            cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
-        ) {
-            let seen = await evidence.addingVisualEvidence(
-                delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
-            )
-            // A posted click that moved neither focus nor pixels has demonstrably not landed,
-            // which is precisely the precondition the sting exists for. Without this the sting
-            // was unreachable for clicks: the posted branch returns evidence whenever the element
-            // has a frame, so `allowHardwareInput` was accepted and then never acted on.
-            // Measured case: SwiftUI `.onTapGesture` targets inside a ScrollView expose a frame,
-            // accept the posted event, and do nothing with it.
-            //
-            // Text is excluded on purpose. A retried click is at worst a second click, but a
-            // retried write lands the payload twice, and `contains` would then confirm the
-            // doubled text — the posted branch already declines to retry text for that reason.
-            let isText: Bool = if case .setText = action { true } else { false }
-            guard allowHardwareInput, !isText, seen.verdict == .noEffect else { return seen }
+        } else {
             attempts.append(.init(
-                tentacle: .postedEvent,
-                outcome: "posted, but neither focus nor pixels moved — escalating to the sting",
+                tentacle: .hardwareInput,
+                outcome: "foreground requested — skipping the ghost tentacles so a real activation + hardware click can raise system prompts",
             ))
         }
-
-        // Tentacle 3 — a referral, not an adapter. Web page content is the one surface OS input
-        // cannot reach at all, and the channel that can (refrax-ctl, CDP, Safari's own
-        // scripting) belongs to the calling agent, which holds the task context and the
-        // launch flags. The honest move is structured evidence naming that channel.
-        let referral = WebContent.referral(for: element, pid: pid)
-        attempts.append(.init(
-            tentacle: .appAutomation,
-            outcome: referral.map { "unreachable by OS input — refer to \($0.channel)" }
-                ?? "no adapter for this target",
-        ))
 
         // The sting — the cursor-stealing path. Never silent, never implicit.
         guard allowHardwareInput else {
             attempts.append(.init(tentacle: .hardwareInput, outcome: "declined: not permitted by caller"))
             // The one verdict the design calls most important deserves the evidence we already
             // captured: pixels are the only signal left once every tentacle has declined.
-            return await finish(
+            let declined = await finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
             ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            // A gesture-only target left with no ghost tentacle to reach it: name the diagnosis
+            // and the one path that lands, so the caller retries deliberately rather than reading
+            // a bare noEffect as a mystery.
+            return gestureOnly ? declined.suggestingHardware() : declined
         }
         // A cancelled request must not go on to take the cursor: by this point the socket has
         // already told the caller the action timed out.
