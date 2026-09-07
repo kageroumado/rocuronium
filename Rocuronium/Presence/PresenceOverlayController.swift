@@ -27,7 +27,9 @@ final class PresenceOverlayController {
     private var lingerTask: Task<Void, Never>?
 
     private enum Constants {
-        static let fadeIn: TimeInterval = 1.0
+        /// The chrome eases in over this once the action actually begins — brisk, so the
+        /// creature is present for the click that summoned it rather than still arriving.
+        static let fadeIn: TimeInterval = 0.3
         static let fadeOut: TimeInterval = 0.8
         /// How long the session chrome outlives the last command before fading.
         static let linger: TimeInterval = 15
@@ -51,13 +53,21 @@ final class PresenceOverlayController {
 
     // MARK: - Session lifecycle (called by the router)
 
-    /// A visible command is starting: show the chrome and narrate the intent.
-    func begin(action: String) {
-        show()
+    /// A visible command is starting: prime the intent and narrate it.
+    ///
+    /// `deferAppearance` holds the chrome back until the action actually happens. A cursor-taking
+    /// verb moves the pointer seconds after the call enters the router, and a creature that
+    /// surfaces on router entry idles on-screen for that whole gap — a premature cue; there the
+    /// charge ring and impact ping surface it on the motion itself. A ghost verb only ever being
+    /// *watched* (the show-for-all-actions toggle) has no such cursor to be early about, and some
+    /// of those verbs raise no effect to hook, so the bezel comes up now to narrate the work.
+    func begin(action: String, deferAppearance: Bool) {
         if model.sessionStart == nil { model.sessionStart = Date() }
         model.phase = .thinking
         model.narration = action
+        model.settleStart = nil
         model.lastEngagement = Date()
+        if !deferAppearance { appearForAction() }
         restartLinger()
     }
 
@@ -71,6 +81,14 @@ final class PresenceOverlayController {
         model.narration = Self.narration(for: reply)
         model.lastEngagement = Date()
         let cursorTaking = reply["cursorMovedByUs"] as? Bool == true
+        // The settle beat: a deliberate finish rather than a silent flip to idle. A cursor
+        // action holds where it last escorted and settles there; everything else eases home
+        // to the perch. Only when the chrome is actually on screen — a session primed but
+        // never surfaced has nothing to settle.
+        if isSessionVisible {
+            model.settleStart = Date()
+            model.settleInPlace = cursorTaking
+        }
         restartLinger(seconds: cursorTaking ? Constants.shortLinger : Constants.linger)
     }
 
@@ -98,7 +116,7 @@ final class PresenceOverlayController {
         // the new one — a stale continuation must never be abandoned unresumed.
         if consentContinuation != nil { resolveConsent(false) }
 
-        show()
+        appearForAction()
         model.phase = .needsHuman
         model.narration = prompt
         model.consent = OverlayModel.ConsentRequest(prompt: prompt, detail: detail)
@@ -195,13 +213,25 @@ final class PresenceOverlayController {
     // MARK: - Effects (called through the relay)
 
     func showChargeRing(at point: CGPoint, duration: TimeInterval) {
+        appearForAction()
         model.phase = .acting
+        model.settleStart = nil
         model.chargeRing = OverlayModel.ChargeRing(point: point, start: Date(), duration: duration)
         model.lastEngagement = Date()
     }
 
     func showRipple(at point: CGPoint) {
+        appearForAction()
         model.chargeRing = nil
+        model.addRipple(at: point)
+        model.lastEngagement = Date()
+    }
+
+    /// A ghost (cursor-free) action landed at `point` and the human is here to see it: surface
+    /// the chrome and ripple at the click, so where an invisible action struck is visible
+    /// without any cursor-take. The action stays a ghost — only this effect appears.
+    func showGhostPing(at point: CGPoint) {
+        appearForAction()
         model.addRipple(at: point)
         model.lastEngagement = Date()
     }
@@ -226,6 +256,19 @@ final class PresenceOverlayController {
                 }
             }
         }
+        PresenceRelay.ghostImpact = { point in
+            // A ghost click is invisible by design. It gets a ping only when the human asked to
+            // watch every action (`showForAllActions`) and is actually here to see it — never
+            // over a locked or sleeping screen, where there is no viewer and no cursor to spare.
+            let presence = UserPresence.read()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let overlay = shared, overlay.model.showForAllActions,
+                          presence.state != .away, presence.canSee else { return }
+                    overlay.showGhostPing(at: point)
+                }
+            }
+        }
     }
 
     // MARK: - The emergency stop
@@ -238,6 +281,7 @@ final class PresenceOverlayController {
         model.phase = .hidden
         model.sessionStart = nil
         model.chargeRing = nil
+        model.settleStart = nil
         for panel in [window, bezelWindow] {
             panel?.orderOut(nil)
             panel?.alphaValue = 0
@@ -247,7 +291,11 @@ final class PresenceOverlayController {
 
     // MARK: - Window
 
-    private func show() {
+    /// Surface the chrome for the action that is happening now — idempotent, so the charge
+    /// ring, the impact ping, and a consent prompt all call it and only the first fades
+    /// anything in. Kept off `begin` on purpose: the overlay belongs to the action, not to
+    /// the router entry that precedes it by seconds.
+    private func appearForAction() {
         if window == nil { window = makeWindow() }
         if bezelWindow == nil { bezelWindow = makeBezelWindow() }
         for panel in [window, bezelWindow] {
@@ -273,6 +321,7 @@ final class PresenceOverlayController {
         model.phase = .hidden
         model.sessionStart = nil
         model.chargeRing = nil
+        model.settleStart = nil
         for panel in [window, bezelWindow] {
             guard let panel else { continue }
             NSAnimationContext.runAnimationGroup({ context in

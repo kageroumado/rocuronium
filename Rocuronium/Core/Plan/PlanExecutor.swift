@@ -56,6 +56,7 @@ final class PlanExecutor {
         if plan.profile == .visible {
             overlay?.begin(
                 action: "Plan: \(plan.steps.count) step\(plan.steps.count == 1 ? "" : "s")",
+                deferAppearance: true,
             )
         }
 
@@ -68,6 +69,7 @@ final class PlanExecutor {
             if plan.profile == .visible {
                 overlay?.begin(
                     action: "Step \(index + 1)/\(plan.steps.count): \(step.intent)",
+                    deferAppearance: true,
                 )
             }
 
@@ -209,7 +211,7 @@ final class PlanExecutor {
 
     private func pauseForHuman(reason: String) async {
         EmergencyStop.halt(reason: "Plan paused: \(reason) — resume from the Rocuronium menu bar")
-        overlay?.begin(action: reason)
+        overlay?.begin(action: reason, deferAppearance: false)
         await withCheckedContinuation { continuation in
             pauseContinuation = continuation
         }

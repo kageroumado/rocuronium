@@ -324,11 +324,16 @@ final class CommandRouter {
         // and the path verbs, which take the real cursor by construction — and everything
         // else only when the "show for all actions" toggle is on. Ghost tentacles are invisible
         // by design; the toggle is for watching, not for safety.
-        if Self.actingVerbs.contains(request.command),
-           request.allowHardwareInput == true
-           || request.command == "move" || request.command == "drag"
-           || overlay.model.showForAllActions {
-            overlay.begin(action: "\(request.command) \(Self.target(of: request))…")
+        let cursorTaking = request.allowHardwareInput == true
+            || request.command == "move" || request.command == "drag"
+        if Self.actingVerbs.contains(request.command), cursorTaking || overlay.model.showForAllActions {
+            // Cursor-taking work surfaces the chrome on the motion itself (the charge ring),
+            // not on router entry seconds earlier; a ghost verb merely being watched surfaces
+            // now, since the bezel is the only cue some of those raise.
+            overlay.begin(
+                action: "\(request.command) \(Self.target(of: request))…",
+                deferAppearance: cursorTaking,
+            )
         }
         if request.command == "plan" {
             return try await plan(request)
@@ -854,6 +859,13 @@ final class CommandRouter {
 
     private func act(_ request: Request, action: GhostReach.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
+        // The visible/hardware click raises its own target: a real click lands on whatever window
+        // is topmost at the point, so the target must be forward first. The daemon does it here —
+        // no caller round-trip of "activate, then click" — presence-gated like `activate`.
+        if request.allowHardwareInput == true,
+           let refusal = await raiseTargetForVisibleClick(pid: pid, request: request) {
+            return refusal
+        }
         // A coordinate is answered by a hit-test and a label by a search; neither falls back to
         // the other, so the caller always knows which mechanism replied.
         let locator: Engine.Locator = if let x = request.x, let y = request.y {
@@ -878,6 +890,33 @@ final class CommandRouter {
             clickOptions: clickOptions,
         )
         return evidenceReply(evidence)
+    }
+
+    /// Before a cursor-taking click, bring the target app forward so the click cannot land on
+    /// whatever is covering it — the occlusion guard, folded into the act path instead of bounced
+    /// back to the caller. Returns a reply to send in place of clicking (consent declined), or
+    /// `nil` to proceed. Only the visible/hardware path calls this; a ghost click reaches the
+    /// process through any occlusion and must never move a window. The raise is presence-gated
+    /// exactly like `activate`: with a human here it goes through the consent hold. Verification
+    /// that the target actually came forward is left to the reach's own occlusion check, which
+    /// tests the exact aim point and is strictly more precise than a frontmost-app comparison.
+    private func raiseTargetForVisibleClick(pid: pid_t, request: Request) async -> [String: Any]? {
+        let (targetBundle, frontBundle) = await MainActor.run {
+            (NSRunningApplication(processIdentifier: pid)?.bundleIdentifier, EventPoster.frontmostBundleID)
+        }
+        guard let targetBundle, frontBundle != targetBundle else { return nil }
+
+        let presence = UserPresence.read()
+        guard await consented(
+            prompt: "Bring \(Self.target(of: request)) to the front to click it",
+            detail: "\(Self.target(of: request)) · activate",
+            away: presence.state == .away, confirm: request.confirm == true,
+        ) else {
+            return declinedReply("Bringing \(Self.target(of: request)) forward to click it")
+        }
+        await MainActor.run { NSRunningApplication(processIdentifier: pid)?.activate() }
+        try? await Task.sleep(for: .milliseconds(500))
+        return nil
     }
 
     /// Scrolls a scroll area: `to` positions absolutely via the scroll bar (read back as
