@@ -548,11 +548,15 @@ nonisolated struct GhostReach {
                 return nil
             }
             let click: GhostReach.ClickOptions = if case .click = action { clickOptions } else { .init() }
+            let aim = CGPoint(x: frame.midX, y: frame.midY)
             await EventPoster.click(
-                at: CGPoint(x: frame.midX, y: frame.midY), pid: pid,
+                at: aim, pid: pid,
                 button: click.button == .right ? .right : .left,
                 count: click.count, modifiers: click.modifiers,
             )
+            // Ping the overlay where the ghost click landed — gated in the hook on the human
+            // being present and watching. The click itself moved no cursor; only the effect shows.
+            PresenceRelay.ghostImpact(aim)
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
             // A focus change is weak but real evidence that the click was received — unless a
