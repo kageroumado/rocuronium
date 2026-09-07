@@ -114,6 +114,21 @@ nonisolated struct Evidence: Codable, Sendable {
     /// Only ever *upgrades* `unverifiable`: a read-back that already confirmed or refuted the
     /// action is stronger evidence than pixels, and must not be overridden by an unrelated
     /// animation somewhere in the same rectangle.
+    /// Names the hardware path for a gesture-only target the ghost tentacles cannot reach.
+    ///
+    /// A SwiftUI `.onTapGesture` inside a ScrollView exposes no accessibility action and swallows
+    /// a posted click in the scroll view, so the only delivery its gesture recognizer observes is
+    /// a real HID click. The suggestion turns a bare noEffect into an actionable retry. A
+    /// suggestion already present (the sting's park hint) is not overwritten.
+    func suggestingHardware() -> Evidence {
+        guard suggestion == nil else { return self }
+        var copy = self
+        copy.suggestion = "click --allow-hardware-input (or --foreground): this looks like a "
+            + "SwiftUI gesture-only view — it exposes no accessibility action and ignored the "
+            + "posted click, so only a real hardware click reaches its gesture recognizer"
+        return copy
+    }
+
     func addingVisualEvidence(delta: Double?) -> Evidence {
         guard verdict != .confirmed, let delta else { return self }
         // `.noEffect` participates too, and it must: the reach's fall-through paths assert

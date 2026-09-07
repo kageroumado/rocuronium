@@ -32,7 +32,7 @@ Observe
 Act — ghost first; every reply carries verdict, tentacle, attempts
   type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
   click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>) [--observe]
-             [--button left|right] [--count 2] [--modifiers cmd,shift]
+             [--button left|right] [--count 2] [--modifiers cmd,shift] [--foreground]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
   shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item
   menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
@@ -66,6 +66,10 @@ Options
   --window <title substr>   scope to one window (find/read/click/type/wait/screenshot/
                             move/drag/park); ambiguity is refused with the titles listed
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
+  --foreground              on click, skip the ghost tentacles: activate the app and click with
+                            the real cursor so the press is a genuine gesture that can raise a
+                            system permission prompt (TCC, notifications). Implies
+                            --allow-hardware-input; refused while a human is present unless --confirm
   --observe                 on click/shortcut/menu, diff the window's AX tree across the
                             action and report what changed (walks a large tree it would skip)
   --ocr                     on read/find, read the window's pixels instead of the AX tree —
@@ -191,6 +195,7 @@ for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "
     payload[flag] = number
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
+if arguments.contains("--foreground") { payload["foreground"] = true }
 if arguments.contains("--submit") { payload["submit"] = true }
 if arguments.contains("--gone") { payload["gone"] = true }
 if arguments.contains("--press") { payload["press"] = true }

@@ -317,6 +317,23 @@ and is delivered as a posted (or, with `--allow-hardware-input`, hardware) event
 the button, count, and flags — verified by pixels, tree, and window count, not a press
 read-back.
 
+A **SwiftUI gesture-only view** — an `.onTapGesture` handler inside a `ScrollView` —
+exposes no accessibility action, and a posted click at its point is swallowed by the
+enclosing scroll view. With `--allow-hardware-input` the ladder escalates to a real click,
+which the gesture recognizer does observe (a swallowed posted click escalates on
+`unverifiable` too here, since without Screen Recording there is no pixel witness); without
+it, the reply's `suggestion` names the gesture-only diagnosis and the hardware path rather
+than a bare `noEffect`.
+
+`--foreground` is for the click that must **raise a system permission prompt** (TCC,
+notifications). A ghost press — `AXPress` or a posted click — actuates the control but
+neither activates the app nor moves the cursor, so the system treats it as not-a-real-user
+gesture and withholds the prompt, though the same button raises it under a foreground
+click. `--foreground` skips the ghost tentacles: it activates the target app and clicks
+with the real cursor, so the gesture is genuine. It implies `--allow-hardware-input` and is
+presence-gated exactly like `activate` — refused while the screen is locked, and put to the
+human for consent when one is present unless `--confirm` carries their authority.
+
 **`key --app X --keys K [--allow-hardware-input] [--confirm]`** — a bare named key with
 optional modifiers: `escape`, `return`, `enter`, `tab`, `space`, `delete`,
 `forwarddelete`, `left/right/up/down`, `home`, `end`, `pageup`, `pagedown`;
@@ -517,9 +534,9 @@ HID idle time, lock state, and display power. **Unknown is treated as present**,
 cautious reading. `mayTakeCursor` is true only when `away`; `advice` is one sentence on
 what is acceptable right now. What gates on it:
 
-- `activate`, `move`, `drag`, `key --allow-hardware-input`: refused unless `away` or
-  `--confirm`, and refused outright while the screen is locked or the aim point is
-  covered by another app's window.
+- `activate`, `move`, `drag`, `key --allow-hardware-input`, `click --foreground`: refused
+  unless `away` or `--confirm`, and refused outright while the screen is locked or the aim
+  point is covered by another app's window.
 - `launch`: refused while the frontmost app is fullscreen unless `--confirm`.
 - Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor
   and never change the frontmost app, so they are fine while a human is typing.

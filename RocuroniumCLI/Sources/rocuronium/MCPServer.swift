@@ -197,7 +197,14 @@ enum MCPServer {
             element exposes it, else a posted right-click — a menu appearing is the window it \
             watches for); `count:2` double-clicks; `modifiers` ("cmd,shift") are held during \
             the click. A non-plain click has no AXPress equivalent, so it is delivered as a \
-            posted event and verified by pixels/tree/window-count rather than a press read-back.
+            posted event and verified by pixels/tree/window-count rather than a press read-back. \
+            A SwiftUI gesture-only view (an `.onTapGesture` inside a ScrollView) exposes no \
+            accessibility action and swallows the posted click; with `allowHardwareInput` the \
+            reach escalates to a real click, and without it the reply suggests that path. Set \
+            `foreground` when the click must raise a system permission prompt (TCC, \
+            notifications): a ghost press does not activate the app or move the cursor, so the \
+            system withholds the prompt — foreground activates the app and clicks with the real \
+            cursor so the gesture is genuine.
             """,
             properties: [
                 "app": ["type": "string"],
@@ -209,6 +216,7 @@ enum MCPServer {
                 "count": ["type": "number", "description": "Clicks: 1 (default) or 2 for a double-click"],
                 "modifiers": ["type": "string", "description": "Held modifiers, comma-separated: cmd,shift,option,control,fn"],
                 "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
+                "foreground": ["type": "boolean", "description": "Skip the ghost tentacles: activate the app and click with the real cursor so the press is a genuine gesture that can raise a system permission prompt (TCC, notifications). Implies allowHardwareInput; presence-gated like activate"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app"],
         ),
