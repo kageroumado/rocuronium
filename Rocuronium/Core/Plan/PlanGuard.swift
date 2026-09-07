@@ -62,6 +62,17 @@ enum PlanGuard: Decodable, Sendable {
         }
     }
 
+    /// Whether this guard reads live UI state (the AX tree, the window list) rather than only the
+    /// step's own reply. The plan path's perception pre-check skips evaluation for these when the
+    /// display is asleep, so a degenerate tree cannot fabricate a pass/fail verdict; the
+    /// reply-only guards (verdict, readback) stay meaningful and are always evaluated.
+    var needsLivePerception: Bool {
+        switch self {
+        case .verdict, .readbackContains: false
+        case .windowAppears, .windowVanishes, .textVisible, .textVanishes, .quiet, .tokenChanged: true
+        }
+    }
+
     /// Evaluates the guard against the step's reply and, when needed, the live AX state.
     func evaluate(reply: [String: Any], pid: pid_t?, engine: Engine) async -> Result {
         switch self {
@@ -88,60 +99,84 @@ enum PlanGuard: Decodable, Sendable {
             guard let pid else {
                 return Result(passed: false, reason: "no pid resolved — cannot check windows")
             }
-            let found = await windowExists(title: title, pid: pid, engine: engine)
-            return Result(
-                passed: found,
-                reason: found
-                    ? "window '\(title)' appeared"
-                    : "window '\(title)' not found",
-            )
+            do {
+                let found = try await windowExists(title: title, pid: pid, engine: engine)
+                return Result(
+                    passed: found,
+                    reason: found
+                        ? "window '\(title)' appeared"
+                        : "window '\(title)' not found",
+                )
+            } catch {
+                // A thrown error is "could not look", not "not present" — surfacing it as absence
+                // would let an asleep display read as "the window never appeared".
+                return Result(passed: false, reason: "could not check whether '\(title)' appeared: \(failureReason(error))")
+            }
 
         case let .windowVanishes(title):
             guard let pid else {
-                return Result(passed: true, reason: "no pid resolved — assuming vanished")
+                // A mistyped --app resolves to no pid; assuming "vanished" would let that typo
+                // silently pass a vanish guard. Fail with a reason that names the real cause.
+                return Result(passed: false, reason: "target app never resolved — cannot confirm window '\(title)' vanished (a mistyped --app must not pass a vanish guard)")
             }
-            let found = await windowExists(title: title, pid: pid, engine: engine)
-            return Result(
-                passed: !found,
-                reason: found
-                    ? "window '\(title)' still exists"
-                    : "window '\(title)' is gone",
-            )
+            do {
+                let found = try await windowExists(title: title, pid: pid, engine: engine)
+                return Result(
+                    passed: !found,
+                    reason: found
+                        ? "window '\(title)' still exists"
+                        : "window '\(title)' is gone",
+                )
+            } catch {
+                // Cannot see is not the same as gone: a swallowed error here would confirm a
+                // vanish that was never observed.
+                return Result(passed: false, reason: "could not check whether '\(title)' vanished: \(failureReason(error))")
+            }
 
         case let .textVisible(label):
             guard let pid else {
                 return Result(passed: false, reason: "no pid resolved — cannot search")
             }
-            let found = await elementExists(label: label, pid: pid, engine: engine)
-            return Result(
-                passed: found,
-                reason: found
-                    ? "text '\(label)' found"
-                    : "text '\(label)' not found in the AX tree",
-            )
+            do {
+                let found = try await elementExists(label: label, pid: pid, engine: engine)
+                return Result(
+                    passed: found,
+                    reason: found
+                        ? "text '\(label)' found"
+                        : "text '\(label)' not found in the AX tree",
+                )
+            } catch {
+                return Result(passed: false, reason: "could not check whether '\(label)' is visible: \(failureReason(error))")
+            }
 
         case let .textVanishes(label):
             guard let pid else {
-                return Result(passed: true, reason: "no pid resolved — assuming vanished")
+                return Result(passed: false, reason: "target app never resolved — cannot confirm text '\(label)' vanished (a mistyped --app must not pass a vanish guard)")
             }
-            let found = await elementExists(label: label, pid: pid, engine: engine)
-            return Result(
-                passed: !found,
-                reason: found
-                    ? "text '\(label)' still present"
-                    : "text '\(label)' gone from the AX tree",
-            )
+            do {
+                let found = try await elementExists(label: label, pid: pid, engine: engine)
+                return Result(
+                    passed: !found,
+                    reason: found
+                        ? "text '\(label)' still present"
+                        : "text '\(label)' gone from the AX tree",
+                )
+            } catch {
+                return Result(passed: false, reason: "could not check whether '\(label)' vanished: \(failureReason(error))")
+            }
 
         case let .quiet(ms):
             guard let pid else {
                 return Result(passed: false, reason: "no pid resolved — cannot watch the tree")
             }
-            let settled = await engine.treeIsQuiet(pid: pid, over: .milliseconds(ms))
+            let outcome = await engine.treeIsQuiet(pid: pid, over: .milliseconds(ms))
             return Result(
-                passed: settled,
-                reason: settled
+                passed: outcome.settled,
+                reason: outcome.settled
                     ? "the window's tree held still for \(ms)ms"
-                    : "the window's tree is still changing",
+                    // The honest reason when quiet could not be confirmed for a structural
+                    // reason, and only "still changing" when the tree genuinely kept mutating.
+                    : outcome.unconfirmedReason ?? "the window's tree is still changing",
             )
 
         case let .tokenChanged(token):
@@ -160,14 +195,24 @@ enum PlanGuard: Decodable, Sendable {
         }
     }
 
-    private func windowExists(title: String, pid: pid_t, engine: Engine) async -> Bool {
-        guard let windows = try? await engine.windowList(pid: pid) else { return false }
+    /// Rethrows the engine error rather than swallowing it: the engine throws `.cannotSee` when
+    /// perception is unreliable (an asleep display), and that must reach the caller as "could not
+    /// check", never collapse into a genuinely empty tree's "not present". A `false` here means the
+    /// tree answered and held no such window.
+    private func windowExists(title: String, pid: pid_t, engine: Engine) async throws -> Bool {
+        let windows = try await engine.windowList(pid: pid)
         return windows.contains { $0.title.localizedCaseInsensitiveContains(title) }
     }
 
-    private func elementExists(label: String, pid: pid_t, engine: Engine) async -> Bool {
-        guard let outcome = try? await engine.find(pid: pid, query: label) else { return false }
+    private func elementExists(label: String, pid: pid_t, engine: Engine) async throws -> Bool {
+        let outcome = try await engine.find(pid: pid, query: label)
         return !outcome.elements.isEmpty
+    }
+
+    /// The human-readable reason a perception check could not run — the engine's own
+    /// `.cannotSee` prose ("The display is asleep …") when it threw that, otherwise the raw error.
+    private func failureReason(_ error: any Error) -> String {
+        (error as? any LocalizedError)?.errorDescription ?? "\(error)"
     }
 }
 

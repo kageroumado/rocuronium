@@ -278,7 +278,13 @@ final class ControlServer {
     }
 
     private nonisolated static func handle(client: Int32, router: CommandRouter) {
-        guard let request = readRequest(from: client) else { return }
+        guard let request = readRequest(from: client) else {
+            // A client that connected and sent nothing (EOF, or the read timeout above) would
+            // otherwise get a bare close — indistinguishable from a crash. Answer with the same
+            // JSON error shape as the reply-timeout path, so the caller learns why.
+            writeAll(Data(#"{"ok":false,"error":"no request received before the read timeout"}"#.utf8) + [0x0A], to: client)
+            return
+        }
 
         // The engine is main-actor bound; this is a socket thread. Hand the work over and wait
         // for the reply rather than touching any engine state from here.

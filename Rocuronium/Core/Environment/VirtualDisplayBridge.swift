@@ -52,11 +52,21 @@ final class VirtualDisplayBridge {
         let expiresAt: ContinuousClock.Instant
     }
 
+    /// A window a sweep failed to move home: it is still on the invisible display, the exact
+    /// harm the lease model exists to prevent, so the release reply must be able to name it.
+    struct StrandedWindow: Sendable {
+        let pid: pid_t
+        let title: String
+    }
+
     /// What a release did, for the reply that reports it.
     struct ReleaseOutcome: Sendable {
         var holdersRemaining: Int
         var sweptParked: Int
         var sweptStrays: Int
+        /// Windows a sweep could not move off the virtual display — under-counting these as
+        /// merely "not swept" would hide that they are stranded where no one can see them.
+        var stranded: [StrandedWindow]
         var tornDown: Bool
     }
 
@@ -152,16 +162,22 @@ final class VirtualDisplayBridge {
     /// only when the last holder lets go.
     func release(_ lease: Lease) async -> ReleaseOutcome {
         guard leases.removeValue(forKey: lease.id) != nil else {
-            return ReleaseOutcome(holdersRemaining: leases.count, sweptParked: 0, sweptStrays: 0, tornDown: false)
+            return ReleaseOutcome(holdersRemaining: leases.count, sweptParked: 0, sweptStrays: 0, stranded: [], tornDown: false)
         }
         expiryTasks.removeValue(forKey: lease.id)?.cancel()
 
-        var swept = await sweep(entries: ledger.removeAll(under: lease.id))
+        let firstSweep = await sweep(entries: ledger.removeAll(under: lease.id))
+        var swept = firstSweep.swept
+        var stranded = firstSweep.stranded
         var sweptStrays = 0
         var tornDown = false
         if leases.isEmpty {
-            swept += await sweep(entries: ledger.removeAll())
-            sweptStrays = await sweepStrays()
+            let finalSweep = await sweep(entries: ledger.removeAll())
+            swept += finalSweep.swept
+            stranded += finalSweep.stranded
+            let strayResult = await sweepStrays()
+            sweptStrays = strayResult.swept
+            stranded += strayResult.stranded
             tornDown = teardown()
         }
         await refreshStrayCount()
@@ -169,6 +185,7 @@ final class VirtualDisplayBridge {
             holdersRemaining: leases.count,
             sweptParked: swept,
             sweptStrays: sweptStrays,
+            stranded: stranded,
             tornDown: tornDown,
         )
     }
@@ -308,30 +325,36 @@ final class VirtualDisplayBridge {
     /// Moves swept entries back to their recorded `before` origins — or, when there is none
     /// (or the recorded home is on a display that has since gone), to a fixed main-screen
     /// point. Returns how many windows were actually asked to move.
-    private func sweep(entries: [ParkLedger.Entry]) async -> Int {
+    private func sweep(entries: [ParkLedger.Entry]) async -> (swept: Int, stranded: [StrandedWindow]) {
         var swept = 0
+        var stranded: [StrandedWindow] = []
         for entry in entries {
             let destination = sweepDestination(for: entry.before?.origin)
             guard (try? await engine.moveWindow(
                 pid: entry.window.pid, title: entry.window.title, to: destination,
-            )) != nil else { continue }
-            swept += 1
-        }
-        return swept
-    }
-
-    /// Sweeps stray windows to the main screen before the display goes.
-    private func sweepStrays() async -> Int {
-        let strays = await strays()
-        var swept = 0
-        for stray in strays {
-            let destination = sweepDestination(for: nil)
-            guard (try? await engine.moveWindow(pid: stray.pid, title: stray.title, to: destination)) != nil else {
+            )) != nil else {
+                stranded.append(StrandedWindow(pid: entry.window.pid, title: entry.window.title))
                 continue
             }
             swept += 1
         }
-        return swept
+        return (swept, stranded)
+    }
+
+    /// Sweeps stray windows to the main screen before the display goes.
+    private func sweepStrays() async -> (swept: Int, stranded: [StrandedWindow]) {
+        let strays = await strays()
+        var swept = 0
+        var stranded: [StrandedWindow] = []
+        for stray in strays {
+            let destination = sweepDestination(for: nil)
+            guard (try? await engine.moveWindow(pid: stray.pid, title: stray.title, to: destination)) != nil else {
+                stranded.append(StrandedWindow(pid: stray.pid, title: stray.title))
+                continue
+            }
+            swept += 1
+        }
+        return (swept, stranded)
     }
 
     /// Where a swept window goes: its recorded origin when that still lands on a current

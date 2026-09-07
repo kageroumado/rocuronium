@@ -93,11 +93,12 @@ actor Engine {
     struct ElementDescriptor: Codable, Sendable {
         let role: String
         /// The element's own name only — title, description, or placeholder — empty when it
-        /// has none. Never the role description, which now has its own field: an agent must be
-        /// able to tell an unlabelled control from one titled with a word like "button".
+        /// has none. Never the role description, which has its own field (`roleDescription`): an
+        /// agent must be able to tell an unlabelled control from one titled with a word like
+        /// "button".
         let label: String
-        /// The system's phrase for the kind ("button", "close button"). Fills the gap `label`
-        /// used to paper over.
+        /// The system's phrase for the kind ("button", "close button") — the control's type,
+        /// distinct from the name in `label`.
         let roleDescription: String?
         /// Tooltip text (`AXHelp`), when the app exposes one — an icon button's name without a
         /// hover.
@@ -139,6 +140,10 @@ actor Engine {
         /// silent surprise. `elements.count` is what this page shows.
         let total: Int
         let offset: Int
+        /// Why the walk stopped short when `truncated`, the same way `read` reports it. Sourced
+        /// from `ElementQuery.Results.truncationReason` — nil until that field is wired by the
+        /// actuation work, and surfaced through the `find` reply whenever it is set.
+        var truncationReason: String?
     }
 
     /// The evidence for a window move: where it was asked to go, where it was, and where it
@@ -275,6 +280,7 @@ actor Engine {
             cacheMisses: statistics.misses,
             total: results.matches.count,
             offset: start,
+            truncationReason: results.truncationReason,
         )
     }
 
@@ -523,17 +529,37 @@ actor Engine {
         }
     }
 
+    /// The result of a `quiet` check: whether the tree settled, and — when it did not — whether
+    /// that was a genuine "still changing" or a case where quiet simply could not be confirmed
+    /// (no primary window, a truncated walk). The distinction is the whole point: a truncated
+    /// Electron walk must not read as "still changing forever".
+    struct QuietOutcome: Sendable {
+        let settled: Bool
+        /// Nil when `settled`, and nil when the tree genuinely kept mutating (the honest
+        /// "still changing"). Set only when quiet was unverifiable for a structural reason, so the
+        /// guard can report that instead of a fabricated motion verdict.
+        let unconfirmedReason: String?
+    }
+
     /// Whether the primary window's tree holds still across `interval`: two walks that agree.
     /// The `quiet` guard's mechanism — a view that is still mutating has not finished loading.
-    func treeIsQuiet(pid: pid_t, over interval: Duration) async -> Bool {
-        guard let window = primaryWindow(of: AXElement(pid: pid)) else { return false }
+    func treeIsQuiet(pid: pid_t, over interval: Duration) async -> QuietOutcome {
+        guard let window = primaryWindow(of: AXElement(pid: pid)) else {
+            return QuietOutcome(settled: false, unconfirmedReason: "no primary window to watch for pid \(pid)")
+        }
         let first = TextDump.dump(root: window)
-        guard !first.truncated else { return false }
+        guard !first.truncated else {
+            return QuietOutcome(settled: false, unconfirmedReason: "the tree walk was truncated, so stillness cannot be confirmed — the window is too large to compare whole")
+        }
         try? await Task.sleep(for: interval)
-        guard let again = primaryWindow(of: AXElement(pid: pid)) else { return false }
+        guard let again = primaryWindow(of: AXElement(pid: pid)) else {
+            return QuietOutcome(settled: false, unconfirmedReason: "the primary window went away mid-check for pid \(pid)")
+        }
         let second = TextDump.dump(root: again)
-        guard !second.truncated else { return false }
-        return TreeDelta.compute(from: first.nodes, to: second.nodes).isEmpty
+        guard !second.truncated else {
+            return QuietOutcome(settled: false, unconfirmedReason: "the second tree walk was truncated, so stillness cannot be confirmed")
+        }
+        return QuietOutcome(settled: TreeDelta.compute(from: first.nodes, to: second.nodes).isEmpty, unconfirmedReason: nil)
     }
 
     /// Whether the primary window's tree now differs from the walk `token` recorded — the
@@ -1405,7 +1431,13 @@ actor Engine {
                 attempts.append(.init(tentacle: .accessibility, outcome: "could not capture the window to OCR"))
                 break
             }
-            let sightings = TextSighting.sight(in: capture.image)
+            let sightings: [TextSighting.Sighting]
+            do {
+                sightings = try TextSighting.sightOrThrow(in: capture.image)
+            } catch {
+                attempts.append(.init(tentacle: .accessibility, outcome: "OCR failed to run: \(error.localizedDescription)"))
+                break
+            }
             let inArea = sightings.filter { sighting in
                 guard let areaFrame else { return true }
                 return TextSighting.screenRect(of: sighting, in: capture.windowFrame)
@@ -1837,7 +1869,7 @@ actor Engine {
         let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
 
         struct Sighted { let text: String; let frame: CGRect }
-        let sighted = TextSighting.sight(in: capture.image).map { sighting in
+        let sighted = try TextSighting.sightOrThrow(in: capture.image).map { sighting in
             Sighted(text: sighting.text, frame: TextSighting.screenRect(of: sighting, in: capture.windowFrame))
         }
         let boxes = try detector.detect(in: capture.image).map { box in

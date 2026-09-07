@@ -4,7 +4,7 @@ import Foundation
 /// A safe wrapper over `AXUIElement`.
 ///
 /// Every accessor here exists because the raw API misbehaves in a way that was measured rather
-/// than assumed; see `Experiments/ghost-input/RESULTS.md`. The two rules this type enforces:
+/// than assumed. The two rules this type enforces:
 /// a messaging timeout on every element (a hung app must never hang the engine), and no
 /// interpretation of a returned `AXError` as proof that anything happened.
 nonisolated struct AXElement {
@@ -33,6 +33,24 @@ nonisolated struct AXElement {
         return out
     }
 
+    /// The `AXError` from reading an attribute, or `nil` on success. `attribute` collapses every
+    /// failure to a nil value, which erases the one distinction a walk needs at its root:
+    /// `.cannotComplete` (the app did not answer within the messaging timeout — it is busy or
+    /// wedged) versus `.noValue` (the attribute is legitimately absent).
+    func attributeError(_ name: String) -> AXError? {
+        var out: CFTypeRef?
+        let code = AXUIElementCopyAttributeValue(raw, name as CFString, &out)
+        return code == .success ? nil : code
+    }
+
+    /// Whether the app answers accessibility queries at all. A single probe of the app-level
+    /// element: `.cannotComplete` is the timeout a wedged-but-awake app produces, and every other
+    /// outcome — `.noValue` and success included — means the app responded. Walk entry checks this
+    /// so an app that never answered is reported as busy rather than as an empty tree.
+    var isResponding: Bool {
+        attributeError(kAXRoleAttribute) != .cannotComplete
+    }
+
     func string(_ name: String) -> String? { attribute(name) as? String }
 
     var role: String { string(kAXRoleAttribute) ?? "?" }
@@ -41,7 +59,7 @@ nonisolated struct AXElement {
     /// The most human-meaningful name available, in descending order of trustworthiness.
     /// Labels are frequently absent or wrong, so callers must treat this as a hint.
     /// Short-circuits: every attribute read is an IPC round trip, and building the full array
-    /// fetched all four even when the title answered. Over a 5,000-element tree that is
+    /// would fetch all four even when the title answers. Over a 5,000-element tree that is
     /// thousands of avoidable round trips.
     var label: String {
         for name in [

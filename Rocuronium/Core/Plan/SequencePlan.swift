@@ -50,6 +50,23 @@ struct SequencePlan: Decodable, Sendable {
         let resolveOnly: Bool?
         let allowHardwareInput: Bool?
         let confirm: Bool?
+        /// The real-activation click path, and the window-scoping trio — a plan step aimed at one
+        /// of an app's several windows needs these as much as a top-level call does.
+        let foreground: Bool?
+        let window: String?
+        let windowIndex: Double?
+        let windowAt: String?
+        /// Click shaping: modifier keys and click count.
+        let modifiers: String?
+        let count: Double?
+        /// The move/drag dwell, and the perception opt-ins a step may carry.
+        let dwell: Double?
+        let observe: Bool?
+        let ocr: Bool?
+        let all: Bool?
+        /// find paging.
+        let limit: Double?
+        let offset: Double?
 
         let expect: PlanGuard?
         let onFail: FailurePolicy?
@@ -82,6 +99,12 @@ struct SequencePlan: Decodable, Sendable {
             set("button", button); set("restore", restore)
             set("resolveOnly", resolveOnly)
             set("confirm", confirm)
+            set("foreground", foreground)
+            set("window", window); set("windowIndex", windowIndex); set("windowAt", windowAt)
+            set("modifiers", modifiers); set("count", count)
+            set("dwell", dwell)
+            set("observe", observe); set("ocr", ocr); set("all", all)
+            set("limit", limit); set("offset", offset)
             if profile == .ghost, allowHardwareInput == nil {
                 dict["allowHardwareInput"] = false
             } else {

@@ -19,17 +19,43 @@ nonisolated enum TextSighting {
         let box: CGRect
     }
 
-    /// Every line of text Vision can see in the image, with where it sits.
-    static func sight(in image: CGImage) -> [Sighting] {
+    /// A Vision request that never ran, as opposed to one that ran and saw nothing. The
+    /// "hidden, not blank" guarantee of the read/find/scroll-until-text paths depends on the
+    /// caller being able to tell these apart: an empty result means the text is genuinely
+    /// absent, a throw means OCR could not answer the question at all.
+    enum SightingError: LocalizedError {
+        case ocrFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .ocrFailed(reason): "OCR failed to run: \(reason)"
+            }
+        }
+    }
+
+    /// Every line of text Vision can see in the image, with where it sits. A Vision failure
+    /// throws rather than reading as an empty frame — use this wherever "no text found" and
+    /// "OCR never ran" must not be conflated.
+    static func sightOrThrow(in image: CGImage) throws -> [Sighting] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .fast
         request.usesLanguageCorrection = false
         let handler = VNImageRequestHandler(cgImage: image)
-        guard (try? handler.perform([request])) != nil else { return [] }
+        do {
+            try handler.perform([request])
+        } catch {
+            throw SightingError.ocrFailed(error.localizedDescription)
+        }
         return (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
             return Sighting(text: candidate.string, box: observation.boundingBox)
         }
+    }
+
+    /// Every line of text Vision can see in the image, with where it sits. A Vision failure
+    /// reads as an empty frame; when that distinction matters, use `sightOrThrow`.
+    static func sight(in image: CGImage) -> [Sighting] {
+        (try? sightOrThrow(in: image)) ?? []
     }
 
     /// The first sighted line containing `needle`, case-insensitively.

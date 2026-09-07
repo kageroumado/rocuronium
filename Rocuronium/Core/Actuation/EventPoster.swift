@@ -34,11 +34,18 @@ nonisolated enum EventPoster {
     /// The payload matters: **Chromium reads the unicode string, not the keycode.** Events
     /// carrying only a virtual keycode are silently ignored by Electron apps, which is why
     /// `sendKey` cannot be used for editing operations there — see `GhostReach`.
-    static func type(_ text: String, pid: pid_t) async {
+    ///
+    /// Returns how much of `text` was actually posted, like `HardwareInput.type`: an event that
+    /// fails to construct is skipped, and a run cut short should be reportable rather than
+    /// silently assumed complete.
+    @discardableResult
+    static func type(_ text: String, pid: pid_t) async -> String {
         // Our own events reset HIDIdleTime; record them so presence is not fooled by us.
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
-        for var units in utf16Payloads(of: text) {
+        var delivered = ""
+        let scalars = Array(text.unicodeScalars)
+        for (index, var units) in utf16Payloads(of: text).enumerated() {
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
             else { continue }
@@ -46,8 +53,10 @@ nonisolated enum EventPoster {
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.postToPid(pid)
             up.postToPid(pid)
+            delivered.unicodeScalars.append(scalars[index])
             try? await Task.sleep(for: Constants.perCharacterDelay)
         }
+        return delivered
     }
 
     /// A bare keystroke for the `key` verb: a named key plus modifier flags.

@@ -36,6 +36,10 @@ nonisolated enum ElementQuery {
         /// True when the budget or depth limit cut the search short. Callers must surface this:
         /// "nothing found" and "stopped looking" are different answers.
         let truncated: Bool
+        /// Which limit cut the walk short, when one did — mirroring `TextDump.truncationReason`.
+        /// "You halted me", "too many elements — narrow", and "the app is slow" are different
+        /// answers, and a truncated `find` is only actionable when the caller can tell them apart.
+        let truncationReason: String?
     }
 
     // MARK: - Cheap strategies
@@ -59,20 +63,6 @@ nonisolated enum ElementQuery {
 
     // MARK: - Full traversal
 
-    /// Walks an app's tree, collecting elements that satisfy `predicate`.
-    ///
-    /// Seeded from `AXWindows` plus the non-window `AXChildren` (the two sets differ between
-    /// apps). Nested elements claiming the `AXApplication` role are not descended into: an app
-    /// listing itself as its own child is a cycle that consumes the entire traversal budget
-    /// before reaching any window.
-    ///
-    /// The **menu bar is deliberately not walked**. Menu items are the right match for
-    /// nothing except `menu`/`shortcut`, which have their own resolution (`MenuQuery`) — and
-    /// a closed menu item reports a meaningless 0×0 frame at the screen corner, so acting on
-    /// one through `click`/`scroll` aims at geometry that does not exist. Measured
-    /// 2026-08-09: `wait --label References` on Safari matched a History-menu entry whose
-    /// *title* contained "references", a false positive that then poisoned a scroll probe
-    /// (its "scroll area" ascended from the menu item).
     /// The windows a `WindowSelector` names, among the real window roles — the seed set for a
     /// window-scoped search. A title substring filters by title (case-insensitive); `at`
     /// keeps only windows whose frame contains the point; `index` then picks one by 0-based
@@ -95,6 +85,20 @@ nonisolated enum ElementQuery {
         return candidates
     }
 
+    /// Walks an app's tree, collecting elements that satisfy `predicate`.
+    ///
+    /// Seeded from `AXWindows` plus the non-window `AXChildren` (the two sets differ between
+    /// apps). Nested elements claiming the `AXApplication` role are not descended into: an app
+    /// listing itself as its own child is a cycle that consumes the entire traversal budget
+    /// before reaching any window.
+    ///
+    /// The **menu bar is deliberately not walked**. Menu items are the right match for
+    /// nothing except `menu`/`shortcut`, which have their own resolution (`MenuQuery`) — and
+    /// a closed menu item reports a meaningless 0×0 frame at the screen corner, so acting on
+    /// one through `click`/`scroll` aims at geometry that does not exist. Measured
+    /// 2026-08-09: `wait --label References` on Safari matched a History-menu entry whose
+    /// *title* contained "references", a false positive that then poisoned a scroll probe
+    /// (its "scroll area" ascended from the menu item).
     static func search(
         pid: pid_t,
         window: WindowSelector = .init(),
@@ -103,31 +107,60 @@ nonisolated enum ElementQuery {
         where predicate: (AXElement) -> Bool
     ) -> Results {
         let root = AXElement(pid: pid)
+        // A wedged-but-awake app answers no AX query, and every read below would time out to nil,
+        // producing an empty, untruncated result indistinguishable from an app that genuinely
+        // exposes nothing. Probe the root once and say which it is.
+        guard root.isResponding else {
+            return Results(
+                matches: [], elementsVisited: 0, truncated: true,
+                truncationReason: "the app did not answer accessibility queries (2s timeout) — it may be busy or wedged",
+            )
+        }
         var matches: [Match] = []
         var visited = 0
         var seenSignatures = Set<String>()
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Constants.timeBudget)
         var outOfTime = false
+        var truncationReason: String?
 
         func visit(_ element: AXElement, depth: Int) {
-            guard visited < budget, depth <= maxDepth, !outOfTime else { return }
-            // Both stops matter and they are different: the deadline keeps this walk inside
-            // the socket's reply window, and the cancellation check stops a walk whose caller
-            // has already been told "timed out" — without it the walk keeps burning the
-            // engine actor, and every queued request behind it times out too (measured: two
-            // abandoned Finder walks poisoned the socket for a full minute).
+            guard !outOfTime else { return }
+            // These stops are different answers and the caller acts on which one fired: the
+            // deadline keeps this walk inside the socket's reply window, and the cancellation
+            // check stops a walk whose caller has already been told "timed out" — without it
+            // the walk keeps burning the engine actor, and every queued request behind it
+            // times out too (measured: two abandoned Finder walks poisoned the socket for a
+            // full minute).
             if Task.isCancelled || EmergencyStop.isHalted || clock.now >= deadline {
+                if truncationReason == nil {
+                    truncationReason = EmergencyStop.isHalted
+                        ? "halted by the human (⌃⌥⇧⎋)"
+                        : (Task.isCancelled ? "the request was cancelled" : "time budget reached")
+                }
                 outOfTime = true
                 return
             }
+            guard visited < budget else {
+                truncationReason = truncationReason ?? "element budget (\(budget)) reached — narrow the search"
+                outOfTime = true
+                return
+            }
+            guard depth <= maxDepth else { return }
             visited += 1
             if predicate(element), seenSignatures.insert(element.signature).inserted {
                 matches.append(Match(element: element, depth: depth))
             }
-            guard depth < maxDepth else { return }
+            guard depth < maxDepth else {
+                // Whether anything was hidden below is one extra read and worth it: this is the
+                // silent-depth-cap trap the depth-23 measurement exposed.
+                if truncationReason == nil, !element.children.isEmpty {
+                    truncationReason = "depth cap (\(maxDepth)) reached with children below"
+                }
+                return
+            }
             for child in element.children {
-                guard visited < budget, !outOfTime else { return }
+                guard !outOfTime else { return }
                 guard child.role != "AXApplication" else { continue }
                 visit(child, depth: depth + 1)
             }
@@ -155,7 +188,8 @@ nonisolated enum ElementQuery {
         return Results(
             matches: matches,
             elementsVisited: visited,
-            truncated: visited >= budget || outOfTime,
+            truncated: truncationReason != nil,
+            truncationReason: truncationReason,
         )
     }
 
@@ -194,6 +228,7 @@ nonisolated enum ElementQuery {
             matches: labelTier.isEmpty ? results.matches : labelTier,
             elementsVisited: results.elementsVisited,
             truncated: results.truncated,
+            truncationReason: results.truncationReason,
         )
     }
 

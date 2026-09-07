@@ -132,6 +132,17 @@ nonisolated enum TextDump {
             }
         }
 
+        // A wedged-but-awake app answers no AX query: every read below would time out to empty,
+        // producing lines: [] with truncated: false — indistinguishable from an app with no text.
+        // Probe once and report the busy app instead.
+        guard root.isResponding else {
+            return Results(
+                lines: [], elementsVisited: 0, characters: 0, truncated: true,
+                truncationReason: "the app did not answer accessibility queries (2s timeout) — it may be busy or wedged",
+                silentWebArea: nil, nodes: [],
+            )
+        }
+
         visit(root, depth: 0)
         return Results(
             lines: lines,

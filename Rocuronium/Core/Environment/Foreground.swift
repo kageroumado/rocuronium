@@ -8,8 +8,8 @@ import CoreGraphics
 /// that does that yanks a human out of a fullscreen game:
 ///   - `launch` — the new app's first *window* lands on another Space and moves the human there,
 ///     even though `activates = false` keeps the launch itself ghost-safe. This is the one
-///     measured 2026-08-26: driving a freshly launched test app pulled Kiri out of fullscreen
-///     Subnautica while nothing in the ghost tentacles had touched the cursor.
+///     measured 2026-08-26: driving a freshly launched test app pulled the user out of a
+///     fullscreen game while nothing in the ghost tentacles had touched the cursor.
 ///   - `activate` — `NSRunningApplication.activate()` *is* the Space switch, promoting another
 ///     app over the fullscreen one.
 ///   - `move`/`drag` — hardware cursor paths, which raise their target app first when it is not
@@ -30,9 +30,13 @@ nonisolated enum Foreground {
         guard let front = NSWorkspace.shared.frontmostApplication else { return false }
         let pid = front.processIdentifier
 
+        // An unreadable window list is treated as possibly-fullscreen: the gate this feeds guards
+        // against yanking a human out of a fullscreen game, so when we cannot prove the screen is
+        // safe we assume it is not. A missing frontmost app above stays false — there is genuinely
+        // nothing to disturb — but a nil window list is an anomaly we refuse to read as "clear".
         guard let windows = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
-        ) as? [[String: Any]] else { return false }
+        ) as? [[String: Any]] else { return true }
 
         var displayCount: UInt32 = 0
         CGGetActiveDisplayList(0, nil, &displayCount)

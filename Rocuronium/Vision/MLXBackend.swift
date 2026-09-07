@@ -49,7 +49,14 @@ actor MLXBackend: GroundingBackend {
 
         touchTimer()
 
-        guard let (nx, ny) = parseNormalized(output) else { return [] }
+        guard let (nx, ny) = parseNormalized(output) else {
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Empty output is "the model saw nothing to click" — a legitimate empty result. Text
+            // that named no coordinates is a parse miss worth surfacing, with a snippet, rather
+            // than silently reading as "nothing there".
+            if trimmed.isEmpty { return [] }
+            throw GroundingError.unparsableOutput(String(trimmed.prefix(200)))
+        }
         let absX = nx / 1000.0 * Double(image.width)
         let absY = ny / 1000.0 * Double(image.height)
         let rect = CGRect(x: absX - 5, y: absY - 5, width: 10, height: 10)
@@ -222,12 +229,14 @@ enum GroundingError: LocalizedError {
     case modelNotInstalled(String)
     case imagePreprocessingFailed
     case screenRecordingRequired
+    case unparsableOutput(String)
 
     var errorDescription: String? {
         switch self {
         case let .modelNotInstalled(message): message
         case .imagePreprocessingFailed: "Failed to preprocess the image for the VLM."
         case .screenRecordingRequired: "Screen Recording permission is required for vision grounding."
+        case let .unparsableOutput(snippet): "The VLM returned output that named no coordinates: \"\(snippet)\""
         }
     }
 }

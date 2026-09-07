@@ -278,25 +278,35 @@ final class CommandRouter {
             }
             return encode(reply)
         } catch {
-            // Interpolating a Swift error enum prints its case name ("notInstalled"), which
-            // tells the caller nothing; the description written for humans is the reply.
-            let description = (error as? any LocalizedError)?.errorDescription ?? "\(error)"
-            var reply: [String: Any] = ["ok": false, "error": description]
-            // The occlusion refusal carries a machine-readable next move alongside the prose.
-            if case let Engine.EngineError.occludedTarget(_, suggestion) = error {
-                reply["suggestion"] = suggestion
-            }
-            // An ambiguous window carries the candidates as structured rows, so the caller can
-            // choose with --window-index/--window-at without a second `windows` round-trip.
-            if case let Engine.EngineError.ambiguousWindow(_, candidates) = error {
-                reply["windowCandidates"] = candidates.map { choice -> [String: Any] in
-                    var row: [String: Any] = ["index": choice.index, "title": choice.title, "main": choice.isMain]
-                    if let frame = choice.frame { row["frame"] = block(for: frame) }
-                    return row
-                }
-            }
-            return encode(reply)
+            return encode(Self.errorReply(from: error))
         }
+    }
+
+    /// Turns a thrown engine error into the structured reply the socket protocol speaks: the
+    /// human-readable description, plus the machine-readable next move each actionable error
+    /// carries. Shared with `PlanExecutor`, so a plan step that fails on an occluded or ambiguous
+    /// target keeps the same `suggestion`/`windowCandidates` fields a top-level call would.
+    static func errorReply(from error: any Error) -> [String: Any] {
+        // Interpolating a Swift error enum prints its case name ("notInstalled"), which tells the
+        // caller nothing; the description written for humans is the reply.
+        let description = (error as? any LocalizedError)?.errorDescription ?? "\(error)"
+        var reply: [String: Any] = ["ok": false, "error": description]
+        // The occlusion refusal carries a machine-readable next move alongside the prose.
+        if case let Engine.EngineError.occludedTarget(_, suggestion) = error {
+            reply["suggestion"] = suggestion
+        }
+        // An ambiguous window carries the candidates as structured rows, so the caller can
+        // choose with --window-index/--window-at without a second `windows` round-trip.
+        if case let Engine.EngineError.ambiguousWindow(_, candidates) = error {
+            reply["windowCandidates"] = candidates.map { choice -> [String: Any] in
+                var row: [String: Any] = ["index": choice.index, "title": choice.title, "main": choice.isMain]
+                if let frame = choice.frame {
+                    row["frame"] = ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
+                }
+                return row
+            }
+        }
+        return reply
     }
 
     // MARK: - Commands
@@ -618,8 +628,8 @@ final class CommandRouter {
 
     /// The wire shape of one element: `label` is the element's own name (empty when it has
     /// none), with `roleDescription`, `help`, `identifier`, `subrole`, and `near` filling the
-    /// gaps that a bare "button" label used to hide. Empty fields are omitted so a labelled
-    /// control's row stays as terse as it was.
+    /// gaps a bare "button" label leaves. Empty fields are omitted so a labelled control's row
+    /// stays terse.
     private func elementRow(_ element: Engine.ElementDescriptor) -> [String: Any] {
         var row: [String: Any] = [
             "role": element.role,
@@ -657,7 +667,7 @@ final class CommandRouter {
            let fallback = try? await visionFindReply(pid: pid, query: request.label, window: selector) {
             return fallback
         }
-        return [
+        var reply: [String: Any] = [
             "ok": true,
             "matches": outcome.elements.map(elementRow),
             "truncated": outcome.truncated,
@@ -670,6 +680,10 @@ final class CommandRouter {
             "cache": ["hits": outcome.cacheHits, "misses": outcome.cacheMisses],
             "presence": presenceBlock(),
         ]
+        // Why the walk stopped short, the same way `read` surfaces it — so a truncated find says
+        // why rather than leaving the caller to guess whether more walking would help.
+        if let reason = outcome.truncationReason { reply["truncationReason"] = reason }
+        return reply
     }
 
     /// `find` over vision rows: OCR text lines plus, when the detector model is installed,
@@ -1728,6 +1742,10 @@ final class CommandRouter {
             if outcome.sweptStrays > 0 {
                 pieces.append("WARNING: \(outcome.sweptStrays) stray window(s) nobody parked were on the display — swept to the main screen")
             }
+            if !outcome.stranded.isEmpty {
+                let named = outcome.stranded.map { "'\($0.title)' (pid \($0.pid))" }.joined(separator: ", ")
+                pieces.append("WARNING: \(outcome.stranded.count) window(s) could NOT be swept home and remain on the virtual display, unreachable: \(named)")
+            }
             var reply: [String: Any] = [
                 "ok": true,
                 "leasesRemaining": outcome.holdersRemaining,
@@ -1735,6 +1753,9 @@ final class CommandRouter {
                 "summary": pieces.joined(separator: " · "),
             ]
             if outcome.sweptStrays > 0 { reply["sweptStrays"] = outcome.sweptStrays }
+            if !outcome.stranded.isEmpty {
+                reply["stranded"] = outcome.stranded.map { ["pid": $0.pid, "title": $0.title] }
+            }
             return reply
 
         case "status", nil:
@@ -1806,16 +1827,6 @@ final class CommandRouter {
         return await executor.execute(plan)
     }
 
-    /// Moves an app's primary window — onto the virtual display by default, or to an explicit
-    /// point (which is also how a caller puts a window back where it found it: `park` replies
-    /// carry the window's previous position).
-    ///
-    /// Parking with no lease in force takes an **auto** lease (reason filled from the
-    /// command, id in the reply, visible in `display status`), which releases itself when
-    /// its last parked window is returned or closes. Attach needs no presence gate:
-    /// creating a `CGVirtualDisplay` is visually silent on the real screen (measured
-    /// 2026-08-24 with a present observer — no flash, no reflow), and the lease is
-    /// already traceable through its recorded reason, `display status`, and the menu bar.
     /// Sets a window's size (and, with `--x/--y`, its position) through accessibility — a ghost
     /// AX write, no cursor. The answer to the apps whose posted clicks read `noEffect` and whose
     /// AX name forces `--pid`: a Wine window will not accept a synthetic drag on its resize
@@ -1879,6 +1890,16 @@ final class CommandRouter {
         return reply
     }
 
+    /// Moves an app's primary window — onto the virtual display by default, or to an explicit
+    /// point (which is also how a caller puts a window back where it found it: `park` replies
+    /// carry the window's previous position).
+    ///
+    /// Parking with no lease in force takes an **auto** lease (reason filled from the
+    /// command, id in the reply, visible in `display status`), which releases itself when
+    /// its last parked window is returned or closes. Attach needs no presence gate:
+    /// creating a `CGVirtualDisplay` is visually silent on the real screen (measured
+    /// 2026-08-24 with a present observer — no flash, no reflow), and the lease is
+    /// already traceable through its recorded reason, `display status`, and the menu bar.
     private func park(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
         let selector = try windowSelector(request)
@@ -2488,7 +2509,19 @@ final class CommandRouter {
     }
 
     private func encode(_ payload: [String: Any]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: payload)) ?? Data(#"{"ok":false}"#.utf8)
+        do {
+            return try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            // JSONSerialization throws on a non-finite Double (NaN/Infinity), which an AX-read
+            // frame can carry into a reply. A bare {"ok":false} would erase the whole answer and
+            // tell the agent nothing; name the reason so it can retry differently instead. Re-encode
+            // the reason through JSONSerialization so its own escaping stays correct; a plain-string
+            // payload cannot itself throw, but fall back to a hardcoded line if it somehow does.
+            let reason = (error as NSError).localizedDescription
+            let fallback: [String: Any] = ["ok": false, "error": "reply could not be serialized: \(reason)"]
+            return (try? JSONSerialization.data(withJSONObject: fallback))
+                ?? Data(#"{"ok":false,"error":"reply could not be serialized"}"#.utf8)
+        }
     }
 
     enum RouterError: LocalizedError {

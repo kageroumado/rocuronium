@@ -21,6 +21,20 @@ nonisolated struct DetectorBackend: GroundingBackend {
         let confidence: Double
     }
 
+    /// The detector weights are on disk but Core ML could not compile or load them — a broken
+    /// install, distinct from no install at all. Named so the reply tells the agent to reinstall
+    /// rather than implying the window simply held no controls.
+    enum LoadError: LocalizedError {
+        case modelLoadFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .modelLoadFailed(reason):
+                "UI Detector model is installed but failed to load (\(reason)); using OCR only."
+            }
+        }
+    }
+
     /// Every control box the detector proposes for a window, unfiltered — the "parse the
     /// window" primitive behind detector rows. Empty when no model is installed. The model is
     /// single-class (`UIElement`), so the box carries a frame and a confidence; the caller
@@ -46,7 +60,7 @@ nonisolated struct DetectorBackend: GroundingBackend {
     }
 
     func locate(_ description: String, in image: CGImage) async throws -> [GroundingCandidate] {
-        let sightings = TextSighting.sight(in: image)
+        let sightings = try TextSighting.sightOrThrow(in: image)
         let needle = description.lowercased()
 
         if hasYOLO {
@@ -124,9 +138,20 @@ nonisolated struct DetectorBackend: GroundingBackend {
         config.computeUnits = .cpuAndNeuralEngine
 
         let modelURL = Self.modelPath
-        guard let compiledURL = try? MLModel.compileModel(at: modelURL) else { return [] }
-        guard let model = try? MLModel(contentsOf: compiledURL, configuration: config) else { return [] }
+        let compiledURL: URL
+        do {
+            compiledURL = try MLModel.compileModel(at: modelURL)
+        } catch {
+            throw LoadError.modelLoadFailed(error.localizedDescription)
+        }
         defer { try? FileManager.default.removeItem(at: compiledURL) }
+
+        let model: MLModel
+        do {
+            model = try MLModel(contentsOf: compiledURL, configuration: config)
+        } catch {
+            throw LoadError.modelLoadFailed(error.localizedDescription)
+        }
 
         let request = VNCoreMLRequest(model: try VNCoreMLModel(for: model))
         request.imageCropAndScaleOption = .scaleFill

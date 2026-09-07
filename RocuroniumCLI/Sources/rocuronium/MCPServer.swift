@@ -516,7 +516,7 @@ enum MCPServer {
 
     /// The verbs that accept `--window` to scope to one of an app's windows. Added to their
     /// schemas centrally so the argument filter accepts it without repeating the property in
-    /// nine definitions.
+    /// each definition.
     private static let windowScopedTools: Set<String> = [
         "find", "read", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize",
     ]
@@ -573,10 +573,19 @@ enum MCPServer {
     static func run(forward: ([String: Any]) -> [String: Any]?) -> Never {
         while let line = readLine(strippingNewline: true) {
             guard !line.isEmpty else { continue }
-            guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
-                  let method = message["method"] as? String
-            else { continue }
+            guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+                // A line that is not a JSON object carries no id we can echo, so the error id is
+                // null per JSON-RPC — without it a conforming client waits forever for a reply.
+                replyError(NSNull(), code: -32700, message: "parse error: line is not a JSON object")
+                continue
+            }
             let id = message["id"]
+            guard let method = message["method"] as? String else {
+                // A request (it has an id) with no method is invalid; a notification (no id) with
+                // no method is a stray we can drop without leaving anyone waiting.
+                if let id { replyError(id, code: -32600, message: "invalid request: no 'method'") }
+                continue
+            }
 
             switch method {
             case "initialize":

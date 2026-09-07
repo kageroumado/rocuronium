@@ -112,9 +112,25 @@ nonisolated struct GhostReach {
 
         // A baseline for visual verification, taken after the wake so it depicts a screen
         // that is actually on. Absent when Screen Recording was never granted, in which case
-        // actions without a read-back stay honestly unverifiable.
+        // actions without a read-back stay honestly unverifiable. A *thrown* capture is the
+        // grant-invalidated case, and it is named in the evidence rather than swallowed.
         let baselineRect = element.frame
-        let baseline = await baselineImage(of: element)
+        let (baseline, baselineError) = await baselineImage(of: element)
+        if let baselineError {
+            attempts.append(.init(
+                tentacle: .displayWake,
+                outcome: "visual verification unavailable — \(baselineError)",
+            ))
+        }
+        // Records why a later pixel capture found no witness, folded into the verdict by
+        // `foldingVisual` below.
+        let visualFault = VisualFault()
+        func foldingVisual(_ evidence: Evidence) async -> Evidence {
+            let delta = await pixelDelta(
+                from: baseline, at: baselineRect, of: element, into: visualFault, refetch,
+            )
+            return evidence.addingVisualEvidence(delta: delta, fault: visualFault.reason)
+        }
 
         // Hold the panel awake for the whole action, not just past the initial wake: a long
         // sequence can outlive the wake and take every accessibility tree down with it.
@@ -146,9 +162,7 @@ nonisolated struct GhostReach {
                 action, element, pid, &attempts,
                 cursorBefore, frontBefore, focusBefore, refetch,
             ) {
-                return await evidence.addingVisualEvidence(
-                    delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
-                )
+                return await foldingVisual(evidence)
             }
 
             // Menu items stop here: everything below aims at a rectangle that means nothing while
@@ -170,9 +184,7 @@ nonisolated struct GhostReach {
                 action, element, pid, &attempts,
                 cursorBefore, frontBefore, focusBefore, focusDeltaIsUsable, refetch,
             ) {
-                let seen = await evidence.addingVisualEvidence(
-                    delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch),
-                )
+                let seen = await foldingVisual(evidence)
                 // A posted click that moved neither focus nor pixels has demonstrably not landed,
                 // which is precisely the precondition the sting exists for. Without this the sting
                 // was unreachable for clicks: the posted branch returns evidence whenever the
@@ -219,11 +231,11 @@ nonisolated struct GhostReach {
             attempts.append(.init(tentacle: .hardwareInput, outcome: "declined: not permitted by caller"))
             // The one verdict the design calls most important deserves the evidence we already
             // captured: pixels are the only signal left once every tentacle has declined.
-            let declined = await finish(
+            let declined = await foldingVisual(finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            ))
             // A gesture-only target left with no ghost tentacle to reach it: name the diagnosis
             // and the one path that lands, so the caller retries deliberately rather than reading
             // a bare noEffect as a mystery.
@@ -246,11 +258,11 @@ nonisolated struct GhostReach {
                 tentacle: .hardwareInput,
                 outcome: "refused: the screen is locked and hardware input would type into the lock screen",
             ))
-            return await finish(
+            return await foldingVisual(finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            ))
         }
 
         let live = element.isValid ? element : (refetch() ?? element)
@@ -286,11 +298,11 @@ nonisolated struct GhostReach {
                 tentacle: .hardwareInput,
                 outcome: "refused: '\(occluder)' covers the target at (\(Int(aim.x)), \(Int(aim.y))) — a real click there would hit it, not us",
             ))
-            var evidence = await finish(
+            var evidence = await foldingVisual(finish(
                 action, element, .postedEvent, .noEffect, nil, nil,
                 focusBefore, ElementQuery.focused(pid: pid)?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            ))
             // A suggestion, never an auto-park: moving a visible window off-screen as a side
             // effect of a failed click is the caller's decision — often the occluder is the
             // thing to handle, and only the agent has that context.
@@ -364,11 +376,11 @@ nonisolated struct GhostReach {
                 tentacle: .hardwareInput,
                 outcome: arrived ? "confirmed by read-back" : (landed == nil ? "typed; target exposes no value to read back" : "typed, did not land in target"),
             ))
-            return await finish(
+            return await foldingVisual(finish(
                 action, element, .hardwareInput, verdict, landed, nil,
                 focusBefore, focused?.signature,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            ))
 
         case .click, .press:
             await PresenceRelay.telegraph(aim)
@@ -394,15 +406,33 @@ nonisolated struct GhostReach {
             let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
                 ? .confirmed : .unverifiable
             attempts.append(.init(tentacle: .hardwareInput, outcome: "clicked with the real cursor"))
-            return await finish(
+            return await foldingVisual(finish(
                 action, element, .hardwareInput, verdict, nil, nil,
                 focusBefore, focusAfter,
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
-            ).addingVisualEvidence(delta: pixelDelta(from: baseline, at: baselineRect, of: element, refetch))
+            ))
         }
     }
 
     // MARK: - Tentacles
+
+    /// Turns a leaked `AXError` code into a sentence the model can act on. A bare int (the raw
+    /// value the accessibility API returns) tells the reader nothing about what to do next; the
+    /// common codes each imply a different response, so they are named. The raw value stays as a
+    /// suffix because a code outside this map must still be reportable.
+    static func phrase(for code: AXError) -> String {
+        let reason: String = switch code {
+        case .cannotComplete: "the app did not complete the request (it may be busy)"
+        case .actionUnsupported: "the element does not support that action"
+        case .attributeUnsupported: "the element does not expose that attribute"
+        case .noValue: "the element has no value to set"
+        case .notImplemented: "the app does not implement accessibility for this request"
+        case .invalidUIElement: "the element handle is stale — the UI changed underneath it"
+        case .illegalArgument: "the value was rejected as invalid for this element"
+        default: "accessibility rejected the request"
+        }
+        return "\(reason) (AXError \(code.rawValue))"
+    }
 
     private func tryAccessibility(
         _ action: Action, _ element: AXElement, _ pid: pid_t,
@@ -415,7 +445,7 @@ nonisolated struct GhostReach {
             let before = element.value
             let code = element.setValue(text)
             guard code == .success else {
-                attempts.append(.init(tentacle: .accessibility, outcome: "setValue failed (\(code.rawValue))"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "setValue failed: \(Self.phrase(for: code))"))
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
@@ -486,7 +516,7 @@ nonisolated struct GhostReach {
                 if clickOptions.button == .right, let showMenu = element.showMenuAction {
                     let code = element.perform(showMenu)
                     guard code == .success else {
-                        attempts.append(.init(tentacle: .accessibility, outcome: "\(showMenu) failed (\(code.rawValue))"))
+                        attempts.append(.init(tentacle: .accessibility, outcome: "\(showMenu) failed: \(Self.phrase(for: code))"))
                         return nil
                     }
                     try? await Task.sleep(for: .milliseconds(250))
@@ -508,7 +538,7 @@ nonisolated struct GhostReach {
             }
             let code = element.perform(pressish)
             guard code == .success else {
-                attempts.append(.init(tentacle: .accessibility, outcome: "\(pressish) failed (\(code.rawValue))"))
+                attempts.append(.init(tentacle: .accessibility, outcome: "\(pressish) failed: \(Self.phrase(for: code))"))
                 return nil
             }
             try? await Task.sleep(for: .milliseconds(250))
@@ -625,10 +655,28 @@ nonisolated struct GhostReach {
 
     // MARK: - Visual verification
 
+    /// A place for a visual capture to record why it produced no witness, so a Screen Recording
+    /// grant that was never granted-and-then-invalidated (`SCShareableContent` blocks rather than
+    /// failing) reaches the evidence instead of vanishing into a `try?`. One reference is shared
+    /// across the baseline and every pixel-delta capture within a single `perform`.
+    private final class VisualFault: @unchecked Sendable {
+        var reason: String?
+    }
+
     /// Captures the target's rectangle before acting, when that is possible at all.
-    private func baselineImage(of element: AXElement) async -> CGImage? {
-        guard ScreenCapture.isPermitted, let frame = element.frame else { return nil }
-        return try? await ScreenCapture.image(of: frame)
+    ///
+    /// A thrown `ScreenCapture.CaptureError` is returned as text, not dropped: it is precisely
+    /// the "grant invalidated / `SCShareableContent` blocks" diagnosis the caller must see, and
+    /// a swallowed throw here leaves every downstream verdict a bare `unverifiable` with no
+    /// reason. A missing preflight grant stays silent — that path is honestly unverifiable by
+    /// design, not a fault.
+    private func baselineImage(of element: AXElement) async -> (image: CGImage?, error: String?) {
+        guard ScreenCapture.isPermitted, let frame = element.frame else { return (nil, nil) }
+        do {
+            return (try await ScreenCapture.image(of: frame), nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
     }
 
     /// Re-captures the same rectangle and reports how much of it moved. The element is
@@ -636,9 +684,12 @@ nonisolated struct GhostReach {
     /// did, the rectangles no longer match and the diff correctly declines to answer.
     /// A dead handle reports no frame at all, which would silently drop the one signal left
     /// on the no-effect path — so it is re-resolved first, like every other read.
+    ///
+    /// A capture that throws mid-action (the grant revoked between baseline and now) records its
+    /// reason into `fault` rather than being lost to a `try?`.
     private func pixelDelta(
         from baseline: CGImage?, at baselineRect: CGRect?, of element: AXElement,
-        _ refetch: () -> AXElement?
+        into fault: VisualFault, _ refetch: () -> AXElement?
     ) async -> Double? {
         guard let baseline, let baselineRect else { return nil }
         let source = element.isValid ? element : (refetch() ?? element)
@@ -647,7 +698,14 @@ nonisolated struct GhostReach {
         // change, yields two equally-sized captures of *different* regions — which diff as a
         // large delta and would read as a confident confirmation.
         guard frame == baselineRect else { return nil }
-        guard let after = try? await ScreenCapture.image(of: frame) else { return nil }
+        let after: CGImage?
+        do {
+            after = try await ScreenCapture.image(of: frame)
+        } catch {
+            fault.reason = error.localizedDescription
+            return nil
+        }
+        guard let after else { return nil }
         return ScreenDiff.changedFraction(from: baseline, to: after)
     }
 

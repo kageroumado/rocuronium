@@ -79,9 +79,19 @@ final class PlanExecutor {
             var guardResult: PlanGuard.Result?
             if let expect = step.expect {
                 try? await Task.sleep(for: .milliseconds(150))
-                guardResult = await expect.evaluate(
-                    reply: reply, pid: resolvedPid, engine: engine,
-                )
+                // Mirror Engine.waitForGuard: an asleep display makes every AX tree degenerate, so
+                // a state guard would abort/continue/pause on a fabricated verdict. Fail it
+                // honestly instead of evaluating; reply-only guards stay meaningful and run.
+                if expect.needsLivePerception, !DisplayWake.perceptionIsReliable {
+                    guardResult = PlanGuard.Result(
+                        passed: false,
+                        reason: "could not evaluate the guard: the display is asleep, so every accessibility tree is degenerate and any verdict would be fabricated",
+                    )
+                } else {
+                    guardResult = await expect.evaluate(
+                        reply: reply, pid: resolvedPid, engine: engine,
+                    )
+                }
             }
 
             let passed = guardResult?.passed ?? true
@@ -101,9 +111,10 @@ final class PlanExecutor {
                         reply: reply, guardResult: guardResult,
                         policy: "abort", fallbackReply: nil,
                     )
-                    results.append(result)
+                    // No append here: the common append below records this step exactly once, and
+                    // `abortReason != nil` then breaks the loop. Appending in the switch too would
+                    // list the aborted step twice and inflate stepsCompleted.
                     abortReason = "guard failed on step \(index + 1): \(guardResult?.reason ?? "unknown")"
-                    break
 
                 case .continue:
                     result = StepResult(
@@ -182,7 +193,10 @@ final class PlanExecutor {
             let reply = try await dispatch(request)
             return (reply, resolvePid(request))
         } catch {
-            return (["ok": false, "error": error.localizedDescription], nil)
+            // Route the error through the same extraction `route()` uses, so a step that fails on
+            // an occluded target keeps its `suggestion` and an ambiguous window keeps its
+            // `windowCandidates` — the actionable next move a bare localizedDescription would drop.
+            return (CommandRouter.errorReply(from: error), nil)
         }
     }
 
