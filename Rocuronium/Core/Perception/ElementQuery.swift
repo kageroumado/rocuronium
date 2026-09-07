@@ -73,21 +73,31 @@ nonisolated enum ElementQuery {
     /// 2026-08-09: `wait --label References` on Safari matched a History-menu entry whose
     /// *title* contained "references", a false positive that then poisoned a scroll probe
     /// (its "scroll area" ascended from the menu item).
-    /// Windows whose title contains `substring` (case-insensitive), among the real window
-    /// roles — the seed set for a window-scoped search. Empty when nothing matches, so the
-    /// caller can tell "no such window" from "the app has no windows".
-    static func windows(pid: pid_t, titled substring: String) -> [AXElement] {
+    /// The windows a `WindowSelector` names, among the real window roles — the seed set for a
+    /// window-scoped search. A title substring filters by title (case-insensitive); `at`
+    /// keeps only windows whose frame contains the point; `index` then picks one by 0-based
+    /// position in what remains. Empty when nothing matches, so the caller can tell "no such
+    /// window" from "the app has no windows".
+    static func windows(pid: pid_t, selector: WindowSelector) -> [AXElement] {
         let windowRoles = ["AXWindow", "AXSheet", "AXDialog", "AXDrawer"]
-        let needle = substring.lowercased()
-        return AXElement(pid: pid).windows.filter {
-            windowRoles.contains($0.role)
-                && ($0.string(kAXTitleAttribute) ?? "").lowercased().contains(needle)
+        var candidates = AXElement(pid: pid).windows.filter { windowRoles.contains($0.role) }
+        if let needle = selector.title?.lowercased() {
+            candidates = candidates.filter {
+                ($0.string(kAXTitleAttribute) ?? "").lowercased().contains(needle)
+            }
         }
+        if let point = selector.at {
+            candidates = candidates.filter { $0.frame?.contains(point) == true }
+        }
+        if let index = selector.index {
+            candidates = (index >= 0 && index < candidates.count) ? [candidates[index]] : []
+        }
+        return candidates
     }
 
     static func search(
         pid: pid_t,
-        windowTitle: String? = nil,
+        window: WindowSelector = .init(),
         maxDepth: Int = Constants.maxDepth,
         budget: Int = Constants.elementBudget,
         where predicate: (AXElement) -> Bool
@@ -126,9 +136,9 @@ nonisolated enum ElementQuery {
         // Window scope, when asked: seed from only the matching windows, and skip the
         // non-window children entirely — a `--window` query means "inside this window", not
         // "this window plus whatever floats beside it".
-        if let windowTitle {
-            for window in windows(pid: pid, titled: windowTitle) {
-                visit(window, depth: 1)
+        if window.isSpecified {
+            for windowElement in windows(pid: pid, selector: window) {
+                visit(windowElement, depth: 1)
             }
         } else {
             for window in root.windows {
@@ -150,8 +160,8 @@ nonisolated enum ElementQuery {
     }
 
     /// Every editable field in an app, or in one window when scoped.
-    static func editables(pid: pid_t, windowTitle: String? = nil) -> Results {
-        search(pid: pid, windowTitle: windowTitle) { $0.isEditable }
+    static func editables(pid: pid_t, window: WindowSelector = .init()) -> Results {
+        search(pid: pid, window: window) { $0.isEditable }
     }
 
     /// Resolves a loose human description to candidate elements. Deliberately dumb: exact and
@@ -167,13 +177,13 @@ nonisolated enum ElementQuery {
     /// `role` narrows by element role when several roles share a label (a button and a menu
     /// item both titled "Restart to update" — measured on Refrax). "button" and "AXButton"
     /// both work; matching is case-insensitive.
-    static func named(_ query: String, role: String? = nil, pid: pid_t, windowTitle: String? = nil) -> Results {
+    static func named(_ query: String, role: String? = nil, pid: pid_t, window: WindowSelector = .init()) -> Results {
         let needle = query.lowercased()
         func labelMatches(_ element: AXElement) -> Bool {
             let label = element.label.lowercased()
             return !label.isEmpty && (label == needle || label.contains(needle))
         }
-        let results = search(pid: pid, windowTitle: windowTitle) { element in
+        let results = search(pid: pid, window: window) { element in
             guard roleMatches(element.role, wanted: role) else { return false }
             return labelMatches(element) || element.value?.lowercased().contains(needle) == true
         }

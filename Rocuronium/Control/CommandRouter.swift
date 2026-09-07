@@ -192,8 +192,14 @@ final class CommandRouter {
         var expect: PlanGuard?
         /// A window title substring, to scope a verb to one of an app's windows rather than
         /// its primary window: `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`,
-        /// `drag`, `park`. Ambiguity is refused with the titles listed.
+        /// `drag`, `park`, `resize`. Ambiguity is refused with each candidate's index and frame.
         var window: String?
+        /// Picks among same-titled windows by 0-based position in the app's window list — the
+        /// order `windows` prints and the ambiguous-window error enumerates.
+        var windowIndex: Double?
+        /// Picks the window whose frame contains this "x,y" screen point — the disambiguator
+        /// when two windows share a title but sit in different places.
+        var windowAt: String?
         /// For `move`/`drag`: milliseconds to hold at the destination before reading what the
         /// gesture revealed — long enough for a tooltip (AppKit shows them after ~1 s).
         var dwell: Double?
@@ -275,6 +281,15 @@ final class CommandRouter {
             if case let Engine.EngineError.occludedTarget(_, suggestion) = error {
                 reply["suggestion"] = suggestion
             }
+            // An ambiguous window carries the candidates as structured rows, so the caller can
+            // choose with --window-index/--window-at without a second `windows` round-trip.
+            if case let Engine.EngineError.ambiguousWindow(_, candidates) = error {
+                reply["windowCandidates"] = candidates.map { choice -> [String: Any] in
+                    var row: [String: Any] = ["index": choice.index, "title": choice.title, "main": choice.isMain]
+                    if let frame = choice.frame { row["frame"] = block(for: frame) }
+                    return row
+                }
+            }
             return encode(reply)
         }
     }
@@ -285,7 +300,7 @@ final class CommandRouter {
     /// overlay narrates, and the ⌃⌥⇧⎋ halt refuses.
     private static let actingVerbs: Set<String> = [
         "type", "click", "scroll", "shortcut", "menu", "key",
-        "move", "drag", "launch", "activate", "park", "statusitem",
+        "move", "drag", "launch", "activate", "park", "resize", "statusitem",
     ]
 
     /// One phrase for the bezel and the log: what the command aimed at.
@@ -360,6 +375,7 @@ final class CommandRouter {
         case "activate": try await activate(request)
         case "display": try await display(request)
         case "park": try await park(request)
+        case "resize": try await resize(request)
         case "screenshot": try await screenshot(request)
         case "statusitem": try await statusItem(request)
         case "activity": activity()
@@ -614,20 +630,21 @@ final class CommandRouter {
 
     private func find(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        let selector = try windowSelector(request)
         // Explicit --ocr skips the tree; otherwise walk it, and fall back to OCR only when the
         // walk found nothing and Screen Recording can supply an answer — an AX-dead app then
         // reads instead of returning an empty list.
         if request.ocr == true {
-            return try await visionFindReply(pid: pid, query: request.label, window: request.window)
+            return try await visionFindReply(pid: pid, query: request.label, window: selector)
         }
         let outcome = try await engine.find(
-            pid: pid, query: request.label, role: request.role, windowTitle: request.window,
+            pid: pid, query: request.label, role: request.role, window: selector,
             all: request.all == true,
             limit: request.limit.map { max(Int($0), 0) } ?? 20,
             offset: request.offset.map { max(Int($0), 0) } ?? 0,
         )
         if outcome.elements.isEmpty, request.all != true, ScreenCapture.isPermitted,
-           let fallback = try? await visionFindReply(pid: pid, query: request.label, window: request.window) {
+           let fallback = try? await visionFindReply(pid: pid, query: request.label, window: selector) {
             return fallback
         }
         return [
@@ -651,8 +668,8 @@ final class CommandRouter {
     /// text (an icon button) still appears, with an empty label and a real frame, so it is
     /// addressable. Filtered by the query substring against the label when one is given
     /// (icon-only controls have no text to match), capped at 20 like the tree find.
-    private func visionFindReply(pid: pid_t, query: String?, window: String? = nil) async throws -> [String: Any] {
-        var rows = try await engine.visionRows(pid: pid, windowTitle: window)
+    private func visionFindReply(pid: pid_t, query: String?, window: WindowSelector = .init()) async throws -> [String: Any] {
+        var rows = try await engine.visionRows(pid: pid, window: window)
         if let needle = query?.lowercased(), !needle.isEmpty {
             rows = rows.filter { $0.label.lowercased().contains(needle) }
         }
@@ -689,19 +706,20 @@ final class CommandRouter {
     /// caller pays for the change, not the window.
     private func read(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        let selector = try windowSelector(request)
         if request.ocr == true {
-            return try await visionReadReply(pid: pid, window: request.window)
+            return try await visionReadReply(pid: pid, window: selector)
         }
         let outcome = try await engine.read(
             pid: pid, label: request.label, role: request.role, since: request.since,
-            windowTitle: request.window,
+            window: selector,
         )
         // An empty walk on an app that exposes no tree is exactly where OCR earns its place —
         // fall back rather than reply "nothing here" about a window full of text. Only for the
         // whole-window read, and never when a diff was requested (a `--since` diff of a full
         // window against nothing is not what OCR answers).
         if outcome.delta == nil, outcome.lines.isEmpty, request.label == nil, request.since == nil,
-           ScreenCapture.isPermitted, let fallback = try? await visionReadReply(pid: pid, window: request.window) {
+           ScreenCapture.isPermitted, let fallback = try? await visionReadReply(pid: pid, window: selector) {
             return fallback
         }
         // A usable diff replaces the lines wholesale — sending both would defeat the verb.
@@ -751,13 +769,13 @@ final class CommandRouter {
     /// boxes when the detector model is installed, each line stamped with its own `groundedBy`
     /// (`ocr` or `detector`). The answer for a window whose accessibility tree is empty or
     /// lying — no token or delta, because there is no tree walk to diff against.
-    private func visionReadReply(pid: pid_t, window: String? = nil) async throws -> [String: Any] {
-        let rows = try await engine.visionRows(pid: pid, windowTitle: window)
+    private func visionReadReply(pid: pid_t, window: WindowSelector = .init()) async throws -> [String: Any] {
+        let rows = try await engine.visionRows(pid: pid, window: window)
         let usedDetector = rows.contains { $0.groundedBy == "detector" }
         let channel = usedDetector ? "vision" : "OCR"
         return [
             "ok": true,
-            "scope": window.map { "window '\($0)' (\(channel))" } ?? "window (\(channel))",
+            "scope": window.isSpecified ? "window \(window.describe) (\(channel))" : "window (\(channel))",
             "groundedBy": usedDetector ? "vision" : "ocr",
             "lines": rows.map { row -> [String: Any] in
                 var line: [String: Any] = [
@@ -854,12 +872,13 @@ final class CommandRouter {
 
     private func act(_ request: Request, action: GhostReach.Action) async throws -> [String: Any] {
         let pid = try resolve(request)
+        let selector = try windowSelector(request)
         // A coordinate is answered by a hit-test and a label by a search; neither falls back to
         // the other, so the caller always knows which mechanism replied.
         let locator: Engine.Locator = if let x = request.x, let y = request.y {
             .point(x: x, y: y)
         } else if let label = request.label {
-            .named(label, role: request.role, window: request.window)
+            .named(label, role: request.role, window: selector)
         } else {
             .focused
         }
@@ -1200,7 +1219,7 @@ final class CommandRouter {
             easing: easing,
             button: button,
             restoreCursor: request.restore == true,
-            windowTitle: request.window,
+            window: try windowSelector(request),
             // Clamped: the socket cancels at 30 s, and a tooltip needs at most a second or two.
             dwell: request.dwell.map { .milliseconds(min(max(Int($0), 0), 5000)) },
         )
@@ -1353,7 +1372,7 @@ final class CommandRouter {
         let gone = request.gone == true
         let outcome = try await engine.waitFor(
             pid: pid, label: label, role: request.role, gone: gone, timeout: .seconds(seconds),
-            windowTitle: request.window,
+            window: try windowSelector(request),
         )
         return [
             // ok mirrors the condition so scripts can branch on the exit code directly.
@@ -1669,8 +1688,72 @@ final class CommandRouter {
     /// creating a `CGVirtualDisplay` is visually silent on the real screen (measured
     /// 2026-08-24 with a present observer — no flash, no reflow), and the lease is
     /// already traceable through its recorded reason, `display status`, and the menu bar.
+    /// Sets a window's size (and, with `--x/--y`, its position) through accessibility — a ghost
+    /// AX write, no cursor. The answer to the apps whose posted clicks read `noEffect` and whose
+    /// AX name forces `--pid`: a Wine window will not accept a synthetic drag on its resize
+    /// corner, but it will accept a size written to `kAXSizeAttribute`. The resulting frame is
+    /// read back as evidence — a resize a fixed-size window clamped or refused is `noEffect` or
+    /// `unverifiable`, never a lie. Presence-gated exactly like `activate`, since it visibly
+    /// moves a window a person may be watching.
+    private func resize(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let selector = try windowSelector(request)
+        guard let width = request.w, let height = request.h else {
+            return [
+                "ok": false,
+                "error": "'resize' requires --width and --height (points)",
+                "presence": presenceBlock(),
+            ]
+        }
+        guard width >= 1, height >= 1 else {
+            return ["ok": false, "error": "--width and --height must be at least 1 point", "presence": presenceBlock()]
+        }
+        // Position is optional and all-or-nothing: a lone --x (or --y) would move the window on
+        // one axis to a coordinate the caller never fully specified.
+        let origin: CGPoint?
+        switch (request.x, request.y) {
+        case let (x?, y?): origin = CGPoint(x: x, y: y)
+        case (nil, nil): origin = nil
+        default:
+            return ["ok": false, "error": "pass both --x and --y to reposition, or neither", "presence": presenceBlock()]
+        }
+
+        let presence = UserPresence.read()
+        guard await consented(
+            prompt: "Resize \(Self.target(of: request)) to \(Int(width))×\(Int(height))",
+            detail: "\(Self.target(of: request)) · resize",
+            away: presence.state == .away, confirm: request.confirm == true,
+        ) else {
+            return declinedReply("The resize")
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.resizeWindow(
+            pid: pid, window: selector, size: CGSize(width: width, height: height), origin: origin,
+        )
+        let verdict = result.landed ? "confirmed" : (result.changed ? "unverifiable" : "noEffect")
+        var reply: [String: Any] = [
+            "ok": result.landed,
+            "verdict": verdict,
+            "window": result.window,
+            "requested": ["w": result.requestedWidth, "h": result.requestedHeight],
+            "summary": result.landed
+                ? "resized '\(result.window)' to \(Int(result.requestedWidth))×\(Int(result.requestedHeight))"
+                    + (origin != nil ? " at (\(Int(origin!.x)), \(Int(origin!.y)))" : "")
+                : (result.changed
+                    ? "the window changed but not to the requested frame — the window manager clamped it (fixed or bounded size)"
+                    : "the window did not change — it may have a fixed size, or ignored the write"),
+            "presence": presenceBlock(),
+        ]
+        if let before = result.before { reply["before"] = block(for: before) }
+        if let after = result.after { reply["after"] = block(for: after) }
+        return reply
+    }
+
     private func park(_ request: Request) async throws -> [String: Any] {
         let pid = try resolve(request)
+        let selector = try windowSelector(request)
         if let x = request.x, let y = request.y {
             // A window sent where no display reaches is findable only by reading the `before`
             // block out of this reply — recoverable, but only if someone kept it. Refuse
@@ -1692,7 +1775,7 @@ final class CommandRouter {
             }
             isDriving = true
             defer { isDriving = false }
-            let move = try await engine.moveWindow(pid: pid, windowTitle: request.window, to: point)
+            let move = try await engine.moveWindow(pid: pid, window: selector, to: point)
             var reply = parkReply(for: move)
             // Moving a parked window back off the virtual display is the un-park: it
             // decrements the auto-lease that parked it, which self-releases when drained.
@@ -1732,7 +1815,7 @@ final class CommandRouter {
 
         isDriving = true
         defer { isDriving = false }
-        let move = try await engine.moveWindow(pid: pid, windowTitle: request.window, to: destination)
+        let move = try await engine.moveWindow(pid: pid, window: selector, to: destination)
         var reply = parkReply(for: move)
         if move.landed {
             virtualDisplay.recordPark(
@@ -1833,16 +1916,38 @@ final class CommandRouter {
         // Any of `app`, `pid`, or `window` names a target: a bare `--pid` (or `--window`) must
         // scope the same way `--app` does, never fall through to a full-display grab. A
         // `--window` with no process resolves through `resolve`, which asks for `--app`/`--pid`.
-        if request.app != nil || request.pid != nil || request.window != nil {
+        let selector = try windowSelector(request)
+        if request.app != nil || request.pid != nil || selector.isSpecified {
             let pid = try resolve(request)
             // A named window that cannot be resolved refuses here rather than widening to the
             // primary window or the whole display — the measured hazard was a screenshot
             // silently capturing a bystander's windows.
-            let frame = try await engine.windowFrame(pid: pid, title: request.window)
-            let capture = try await ScreenCapture.windowImage(
-                ownedBy: pid,
-                near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
-            )
+            let target = try await engine.titledWindowFrame(pid: pid, window: selector)
+            let frame = target.frame
+            let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+
+            // A window parked on the virtual display is not composited by the window-filter
+            // path — that resolves the real displays first and falls through to the whole main
+            // display. A raw region capture at the parked frame is the answer, and it captures
+            // exactly what the person would see if the window were on the real screen.
+            if let virtual = virtualDisplay.virtualScreenBounds,
+               virtual.contains(CGPoint(x: rect.midX, y: rect.midY)) {
+                guard let image = try await ScreenCapture.image(of: rect) else {
+                    return ["ok": false, "error": "the parked window's frame \(rect) is degenerate"]
+                }
+                return try await captureReply(
+                    image: image,
+                    key: "app:\(pid)",
+                    rect: rect,
+                    scale: rect.width > 0 ? Double(image.width) / Double(rect.width) : 2,
+                    since: request.since,
+                    destination: destination,
+                    described: "parked window '\(target.title)'",
+                    extra: ["window": target.title, "parked": true],
+                )
+            }
+
+            let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
             let scale = capture.windowFrame.width > 0
                 ? Double(capture.image.width) / Double(capture.windowFrame.width)
                 : 2
@@ -2164,6 +2269,28 @@ final class CommandRouter {
         return match.processIdentifier
     }
 
+    /// Builds the window selector every window-scoped verb passes to the engine, from
+    /// `--window`, `--window-index`, and `--window-at`. Throws on a malformed `--window-at`
+    /// point rather than silently ignoring it — a caller who asked to pick a window by location
+    /// must not have that request quietly dropped and act on the wrong window.
+    private func windowSelector(_ request: Request) throws -> WindowSelector {
+        var at: CGPoint?
+        if let text = request.windowAt {
+            let parts = text.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 2, let x = parts[0], let y = parts[1],
+                  Self.finite(x, limit: Bounds.coordinate) != nil,
+                  Self.finite(y, limit: Bounds.coordinate) != nil else {
+                throw RouterError.badWindowAt(text)
+            }
+            at = CGPoint(x: x, y: y)
+        }
+        return WindowSelector(
+            title: request.window,
+            index: request.windowIndex.map { Int($0) },
+            at: at,
+        )
+    }
+
     /// One running instance, spelled out enough to pick the right one: pid, bundle id, when
     /// it launched, and where it lives on disk. Picking the wrong pid from a bare list killed
     /// a live app once (trial log 2026-08-31); the start time and path are what disambiguate
@@ -2245,6 +2372,7 @@ final class CommandRouter {
         case captureNotPNG(String)
         case captureExists(String)
         case captureOutsidePermittedDirectory(String)
+        case badWindowAt(String)
 
         var errorDescription: String? {
             switch self {
@@ -2262,6 +2390,8 @@ final class CommandRouter {
                 "\(path) already exists. Captures never overwrite; delete it first or choose another name."
             case let .captureOutsidePermittedDirectory(path):
                 "\(path) is outside the directories captures may be written to (Desktop, Downloads, Pictures, /tmp, or the app's own captures folder)."
+            case let .badWindowAt(text):
+                "'--window-at' must be a finite \"x,y\" screen point, got '\(text)'."
             }
         }
     }

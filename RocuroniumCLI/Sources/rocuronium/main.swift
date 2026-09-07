@@ -51,7 +51,8 @@ Cursor paths — take the real cursor; refused while a human is present unless -
   drag       --from <x,y> --to <x,y> [--via …] [--button <left|right>] [--app <a>]
              [--duration <s>] [--dwell <ms>] [--easing <e>] [--restore] [--confirm]
 
-Isolation
+Windows
+  resize     --app <a> --width <w> --height <h> [--x <px> --y <py>]   ghost AX resize/move
   display    <acquire|release|status> [--reason <t>] [--minutes <n>] [--lease <id>]
   park       --app <a> [--x <n> --y <n>]   onto the virtual display, or back to a point
 
@@ -64,7 +65,11 @@ Meta
 Options
   --pid <n>                 target a process directly; overrides --app
   --window <title substr>   scope to one window (find/read/click/type/wait/screenshot/
-                            move/drag/park); ambiguity is refused with the titles listed
+                            move/drag/park/resize); ambiguity is refused with each
+                            candidate's index and frame
+  --window-index <n>        pick among same-titled windows by 0-based position (the order
+                            `windows` prints and the ambiguity error lists)
+  --window-at <x,y>         pick the window whose frame contains this screen point
   --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
   --observe                 on click/shortcut/menu, diff the window's AX tree across the
                             action and report what changed (walks a large tree it would skip)
@@ -161,6 +166,7 @@ for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", 
 }
 // Kebab-case on the command line, camelCase on the wire.
 if let found = value(for: "until-text") { payload["untilText"] = found }
+if let found = value(for: "window-at") { payload["windowAt"] = found }
 // `wait --for` carries a JSON guard object, forwarded as `expect` — the same grammar a
 // plan step's `expect` uses.
 if let guardJSON = value(for: "for") {
@@ -189,6 +195,16 @@ for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "
         exit(2)
     }
     payload[flag] = number
+}
+// Kebab-case numeric aliases: `resize` reads --width/--height (mapped to w/h), and
+// --window-index picks among same-titled windows.
+for (flag, key) in [("width", "w"), ("height", "h"), ("window-index", "windowIndex")] {
+    guard let found = value(for: flag) else { continue }
+    guard let number = Double(found), number.isFinite else {
+        FileHandle.standardError.write(Data("rocuronium: --\(flag) must be a finite number, got '\(found)'\n".utf8))
+        exit(2)
+    }
+    payload[key] = number
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--submit") { payload["submit"] = true }
@@ -404,6 +420,19 @@ case "display":
     if let screen = reply["screen"] as? [String: Any] {
         print("screen @(\(Int(screen["x"] as? Double ?? 0)),\(Int(screen["y"] as? Double ?? 0))) "
             + "\(Int(screen["w"] as? Double ?? 0))x\(Int(screen["h"] as? Double ?? 0)) pt")
+    }
+
+case "resize":
+    print(reply["summary"] as? String ?? "done")
+    // before → after frames are the evidence: the AX return code is not trustworthy, the
+    // read-back frame is.
+    func frameText(_ key: String) -> String? {
+        guard let f = reply[key] as? [String: Any] else { return nil }
+        return "@(\(Int(f["x"] as? Double ?? 0)),\(Int(f["y"] as? Double ?? 0))) "
+            + "\(Int(f["w"] as? Double ?? 0))x\(Int(f["h"] as? Double ?? 0))"
+    }
+    if let before = frameText("before"), let after = frameText("after") {
+        print("\(before)  →  \(after)")
     }
 
 case "park":

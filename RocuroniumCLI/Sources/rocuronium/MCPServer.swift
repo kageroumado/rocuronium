@@ -401,6 +401,29 @@ enum MCPServer {
             ], required: ["app"],
         ),
         tool(
+            "resize",
+            """
+            Set a window's size (and, with x/y, its position) through accessibility — a ghost \
+            AX write to kAXSizeAttribute/kAXPositionAttribute, no cursor and no focus change. \
+            The answer for apps whose posted clicks read noEffect and whose AX name forces \
+            --pid (a Wine window will not accept a synthetic drag on its resize corner but will \
+            accept a size written directly). Width/height are in points. The resulting frame is \
+            read back as evidence: verdict 'confirmed' when the frame landed within 2 pt, \
+            'unverifiable' when it changed but was clamped (a fixed- or bounded-size window), \
+            'noEffect' when nothing moved — never a lie. Presence-gated like activate, since it \
+            visibly moves a window a person may be watching; refused while someone is present \
+            unless confirm is true. Pass both x and y to reposition as well, or neither.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "w": ["type": "number", "description": "New width in points (at least 1)"],
+                "h": ["type": "number", "description": "New height in points (at least 1)"],
+                "x": ["type": "number", "description": "Reposition to this screen x as well (with y); omit both to resize in place"],
+                "y": ["type": "number", "description": "Reposition to this screen y, paired with x"],
+                "confirm": ["type": "boolean", "description": "Resize even though someone is at the Mac"],
+            ], required: ["app", "w", "h"],
+        ),
+        tool(
             "plan",
             """
             Execute a sequence of commands with postcondition guards and failure policies. \
@@ -482,7 +505,7 @@ enum MCPServer {
     /// schemas centrally so the argument filter accepts it without repeating the property in
     /// nine definitions.
     private static let windowScopedTools: Set<String> = [
-        "find", "read", "click", "type", "wait", "screenshot", "move", "drag", "park",
+        "find", "read", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize",
     ]
 
     private static func tool(
@@ -508,7 +531,15 @@ enum MCPServer {
         if windowScopedTools.contains(name), properties["window"] == nil {
             properties["window"] = [
                 "type": "string",
-                "description": "Scope to the app window whose title contains this substring; ambiguity is refused with the titles listed",
+                "description": "Scope to the app window whose title contains this substring; ambiguity is refused with each candidate's 0-based index and frame",
+            ]
+            properties["windowIndex"] = [
+                "type": "number",
+                "description": "Disambiguate same-titled windows by 0-based position in the window list (the order 'windows' prints and the ambiguity error enumerates)",
+            ]
+            properties["windowAt"] = [
+                "type": "string",
+                "description": "Disambiguate by location: pick the window whose frame contains this \"x,y\" screen point",
             ]
         }
         return [

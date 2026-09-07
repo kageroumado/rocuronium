@@ -1,6 +1,47 @@
 import AppKit
 import ApplicationServices
 
+/// How a caller picks one of an app's windows to scope a verb to.
+///
+/// A title substring is the everyday handle. When several windows share a title (two
+/// "Untitled" documents), `index` disambiguates by position in the app's window list — the
+/// same order `windows` prints — and `at` picks the window whose frame contains a screen
+/// point. Both narrow the title-matched set (or the whole window list, when no title is
+/// given), so `--window-at` alone means "whichever window is under this point".
+///
+/// **Index is 0-based**, matching array indexing and `find`'s `offset`: the first window an
+/// ambiguity error lists as `[0]` is `--window-index 0`.
+nonisolated struct WindowSelector: Sendable, Equatable {
+    var title: String?
+    /// 0-based position in the title-matched window list.
+    var index: Int?
+    /// A screen point (top-left origin) the chosen window must contain.
+    var at: CGPoint?
+
+    /// Whether the caller named a window at all. When false, verbs fall back to the app's
+    /// primary window rather than resolving through the selector.
+    var isSpecified: Bool { title != nil || index != nil || at != nil }
+
+    /// A stable, collision-free string for cache keys — distinct per distinct selection.
+    var cacheToken: String {
+        guard isSpecified else { return "*" }
+        var parts: [String] = []
+        if let title { parts.append("t:\(title)") }
+        if let index { parts.append("i:\(index)") }
+        if let at { parts.append("@\(Int(at.x)),\(Int(at.y))") }
+        return parts.joined(separator: "|")
+    }
+
+    /// A human phrase for error messages: "'Untitled'", "index 1", "at (900, 200)".
+    var describe: String {
+        var parts: [String] = []
+        if let title { parts.append("'\(title)'") }
+        if let index { parts.append("index \(index)") }
+        if let at { parts.append("at (\(Int(at.x)), \(Int(at.y)))") }
+        return parts.isEmpty ? "a window" : parts.joined(separator: " ")
+    }
+}
+
 /// Everything that touches accessibility, on its own executor.
 ///
 /// **Why this type exists.** `CommandRouter` is `@MainActor`, and under SE-0461 a `nonisolated
@@ -84,7 +125,7 @@ actor Engine {
     /// coordinates.
     enum Locator: Sendable {
         case focused
-        case named(String, role: String?, window: String?)
+        case named(String, role: String?, window: WindowSelector)
         case point(x: Double, y: Double)
     }
 
@@ -127,7 +168,7 @@ actor Engine {
         case cannotSee
         case notFound(String)
         case ambiguous(String, [String])
-        case ambiguousWindow(String, [String])
+        case ambiguousWindow(query: String, candidates: [WindowChoice])
         case unparseableShortcut(String)
         case unparseableKey(String)
         case hazardousShortcut(String, String)
@@ -154,8 +195,10 @@ actor Engine {
                 "No element matched \(what)."
             case let .ambiguous(query, candidates):
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
-            case let .ambiguousWindow(query, titles):
-                "'\(query)' matched \(titles.count) windows: \(titles.map { "'\($0)'" }.joined(separator: ", ")). Name a more specific --window substring."
+            case let .ambiguousWindow(query, candidates):
+                "\(query) matched \(candidates.count) windows: "
+                    + candidates.map { $0.summary }.joined(separator: ", ")
+                    + ". Pick one with --window-index <n> (0-based) or --window-at <x,y>."
             case let .unparseableShortcut(keys):
                 "Could not parse '\(keys)' — use forms like cmd+a, cmd+shift+z, cmd+left."
             case let .unparseableKey(keys):
@@ -191,13 +234,13 @@ actor Engine {
     // MARK: - Perception
 
     func find(
-        pid: pid_t, query: String?, role: String? = nil, windowTitle: String? = nil,
+        pid: pid_t, query: String?, role: String? = nil, window: WindowSelector = .init(),
         all: Bool = false, limit: Int = 20, offset: Int = 0
     ) throws -> FindOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         // A named window that does not exist is an error, not an empty result — resolve it
         // first so the caller hears "no such window", never a silent whole-app search.
-        if let windowTitle { _ = try windowElement(pid: pid, titled: windowTitle) }
+        if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
 
         // Chromium builds its tree lazily; ask once, cheap and harmless elsewhere.
         AXElement(pid: pid).enableManualAccessibility()
@@ -205,20 +248,20 @@ actor Engine {
 
         // `all` is its own cache key (a distinct predicate) but the page — limit/offset — is
         // applied after, over the cached full match set, so paging never re-walks.
-        let key = cacheKey(all ? "@all" : query, role: role, window: windowTitle)
+        let key = cacheKey(all ? "@all" : query, role: role, window: window)
         let results = cache.results(for: pid, key: key) {
             if all {
                 // Everything the walk can see and aim at: every element carrying a frame.
-                ElementQuery.search(pid: pid, windowTitle: windowTitle) {
+                ElementQuery.search(pid: pid, window: window) {
                     ElementQuery.roleMatches($0.role, wanted: role) && $0.frame != nil
                 }
             } else if let query {
-                ElementQuery.named(query, role: role, pid: pid, windowTitle: windowTitle)
+                ElementQuery.named(query, role: role, pid: pid, window: window)
             } else if let role {
                 // A bare role query is a legitimate question ("list the buttons").
-                ElementQuery.search(pid: pid, windowTitle: windowTitle) { ElementQuery.roleMatches($0.role, wanted: role) }
+                ElementQuery.search(pid: pid, window: window) { ElementQuery.roleMatches($0.role, wanted: role) }
             } else {
-                ElementQuery.editables(pid: pid, windowTitle: windowTitle)
+                ElementQuery.editables(pid: pid, window: window)
             }
         }
         let statistics = cache.statistics
@@ -279,7 +322,7 @@ actor Engine {
     /// Anything that would make that diff a lie — evicted token, another process, a
     /// different scope or window, a truncated walk on either side, or wholesale change —
     /// degrades to the full read with `diffNote` naming the reason.
-    func read(pid: pid_t, label: String?, role: String? = nil, since: String? = nil, windowTitle: String? = nil) throws -> ReadOutcome {
+    func read(pid: pid_t, label: String?, role: String? = nil, since: String? = nil, window: WindowSelector = .init()) throws -> ReadOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
@@ -289,22 +332,22 @@ actor Engine {
         let scope: String
         if let label {
             // Same cache key as `find`, so a find-then-read pair costs one walk, not two.
-            let element = try resolveNamed(pid: pid, label: label, role: role, windowTitle: windowTitle)
+            let element = try resolveNamed(pid: pid, label: label, role: role, window: window)
             root = element
             scope = "\(element.role) '\(element.label)'"
         } else {
-            guard let window = try windowTitle.map({ try windowElement(pid: pid, titled: $0) })
+            guard let target = try (window.isSpecified ? windowElement(pid: pid, selector: window) : nil)
                 ?? primaryWindow(of: AXElement(pid: pid)) else {
                 throw EngineError.notFound("a window for pid \(pid)")
             }
-            root = window
-            scope = "window '\(window.string(kAXTitleAttribute) ?? "")'"
+            root = target
+            scope = "window '\(target.string(kAXTitleAttribute) ?? "")'"
         }
 
         let dump = TextDump.dump(root: root)
         // The window is part of the scope key: a `--since` diff must never compare a walk of
         // one window against a token from another with the same label.
-        let scopeKey = "\(windowTitle.map { "win:\($0)|" } ?? "")\(label ?? "@window")|\(role ?? "*")"
+        let scopeKey = "\(window.isSpecified ? "win:\(window.cacheToken)|" : "")\(label ?? "@window")|\(role ?? "*")"
         var delta: ReadOutcome.Delta?
         var diffNote: String?
         if let since {
@@ -370,6 +413,25 @@ actor Engine {
         let isMain: Bool
     }
 
+    /// One candidate in an ambiguous-window refusal: its 0-based `--window-index`, title, and
+    /// frame, so the caller can choose without a second `windows` round-trip.
+    struct WindowChoice: Sendable {
+        let index: Int
+        let title: String
+        let frame: ElementDescriptor.Frame?
+        let isMain: Bool
+
+        /// The phrase the error lists: `[0] 'Untitled' @(200,120) 800×600 [main]`.
+        var summary: String {
+            var text = "[\(index)] '\(title)'"
+            if let frame {
+                text += " @(\(Int(frame.x)),\(Int(frame.y))) \(Int(frame.width))×\(Int(frame.height))"
+            }
+            if isMain { text += " [main]" }
+            return text
+        }
+    }
+
     /// Every window the app exposes, with the state an agent needs before aiming anything.
     func windowList(pid: pid_t) throws -> [WindowDescriptor] {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
@@ -397,9 +459,9 @@ actor Engine {
     /// The timeout is the router's problem to bound: the control socket cancels requests at
     /// 30 s, so callers pass at most 25 and loop on a "call again" reply. The poll itself
     /// checks for cancellation so a cancelled request stops burning AX IPC.
-    func waitFor(pid: pid_t, label: String, role: String? = nil, gone: Bool, timeout: Duration, windowTitle: String? = nil) async throws -> WaitOutcome {
+    func waitFor(pid: pid_t, label: String, role: String? = nil, gone: Bool, timeout: Duration, window: WindowSelector = .init()) async throws -> WaitOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        if let windowTitle { _ = try windowElement(pid: pid, titled: windowTitle) }
+        if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
         AXElement(pid: pid).enableManualAccessibility()
         let clock = ContinuousClock()
         let start = clock.now
@@ -407,8 +469,8 @@ actor Engine {
 
         while true {
             polls += 1
-            let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: windowTitle)) {
-                ElementQuery.named(label, role: role, pid: pid, windowTitle: windowTitle)
+            let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window)) {
+                ElementQuery.named(label, role: role, pid: pid, window: window)
             }.matches
             let satisfied = gone ? matches.isEmpty : !matches.isEmpty
             let elapsed = seconds(start.duration(to: clock.now))
@@ -539,37 +601,68 @@ actor Engine {
         return application.windows.first { windowRoles.contains($0.role) }
     }
 
-    /// Resolves one window by a case-insensitive title substring, with the ambiguity rule
-    /// every locator shares: two matches refuse and list the titles, none is notFound with
-    /// the open titles named. The window-scoped verbs seed from this instead of the primary
-    /// window — the answer to two "Untitled" windows, a sheet, or a second document.
-    private func windowElement(pid: pid_t, titled substring: String) throws -> AXElement {
-        let matches = ElementQuery.windows(pid: pid, titled: substring)
+    /// Resolves exactly one window from a `WindowSelector`, with the ambiguity rule every
+    /// locator shares: two matches refuse — listing each candidate's 0-based index and frame so
+    /// the caller can choose with `--window-index`/`--window-at` — and none is notFound with the
+    /// open titles named. The window-scoped verbs seed from this instead of the primary window —
+    /// the answer to two "Untitled" windows, a sheet, or a second document.
+    private func windowElement(pid: pid_t, selector: WindowSelector) throws -> AXElement {
+        let matches = ElementQuery.windows(pid: pid, selector: selector)
         func title(_ window: AXElement) -> String { window.string(kAXTitleAttribute) ?? "" }
-        guard matches.count <= 1 else {
-            throw EngineError.ambiguousWindow(substring, matches.map(title))
-        }
-        guard let window = matches.first else {
-            let open = AXElement(pid: pid).windows
-                .filter { ["AXWindow", "AXSheet", "AXDialog", "AXDrawer"].contains($0.role) }
-                .map { "'\(title($0))'" }
+        if let window = matches.first, matches.count == 1 { return window }
+
+        // The title/at-scoped set without the index pick, so an ambiguity or an out-of-range
+        // index can enumerate the real choices.
+        var scoped = selector
+        scoped.index = nil
+        let candidates = ElementQuery.windows(pid: pid, selector: scoped)
+
+        guard !matches.isEmpty else {
+            if let index = selector.index {
+                throw EngineError.notFound(
+                    "window index \(index) — only \(candidates.count) window(s) match \(scoped.describe) for pid \(pid)")
+            }
+            let open = ElementQuery.windows(pid: pid, selector: .init()).map { "'\(title($0))'" }
             throw EngineError.notFound(
-                "a window titled '\(substring)' for pid \(pid)"
+                "a window matching \(selector.describe) for pid \(pid)"
                     + (open.isEmpty ? "" : " — open windows: \(open.joined(separator: ", "))"))
         }
-        return window
+        throw EngineError.ambiguousWindow(
+            query: selector.describe,
+            candidates: candidates.enumerated().map { index, window in
+                WindowChoice(
+                    index: index,
+                    title: title(window),
+                    frame: window.frame.map {
+                        .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height)
+                    },
+                    isMain: (window.attribute(kAXMainAttribute) as? Bool) ?? false,
+                )
+            },
+        )
     }
 
     /// The frame of a window, for aiming a capture or a move at it: the app's primary window,
-    /// or the one whose title contains `title` when given.
-    func windowFrame(pid: pid_t, title: String? = nil) throws -> ElementDescriptor.Frame {
+    /// or the one the `selector` names when specified.
+    func windowFrame(pid: pid_t, window selector: WindowSelector = .init()) throws -> ElementDescriptor.Frame {
+        try titledWindowFrame(pid: pid, window: selector).frame
+    }
+
+    /// The title and frame of the same window — what the parked-window screenshot path needs to
+    /// both aim its region capture and name the window it captured.
+    func titledWindowFrame(
+        pid: pid_t, window selector: WindowSelector = .init()
+    ) throws -> (title: String, frame: ElementDescriptor.Frame) {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        let window = try title.map { try windowElement(pid: pid, titled: $0) }
+        let window = try (selector.isSpecified ? windowElement(pid: pid, selector: selector) : nil)
             ?? primaryWindow(of: AXElement(pid: pid))
         guard let window, let frame = window.frame else {
-            throw EngineError.notFound("a window with a frame\(title.map { " titled '\($0)'" } ?? "") for pid \(pid)")
+            throw EngineError.notFound("a window with a frame matching \(selector.describe) for pid \(pid)")
         }
-        return .init(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height)
+        return (
+            window.string(kAXTitleAttribute) ?? "",
+            .init(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height),
+        )
     }
 
     // MARK: - Actuation
@@ -577,13 +670,13 @@ actor Engine {
     /// Moves the app's primary window — or, with `title`, the window bearing that exact
     /// title, which is how the un-park sweep returns a specific parked window — and reads
     /// its frame back as evidence.
-    func moveWindow(pid: pid_t, title: String? = nil, windowTitle: String? = nil, to point: CGPoint) async throws -> WindowMove {
+    func moveWindow(pid: pid_t, title: String? = nil, window selector: WindowSelector = .init(), to point: CGPoint) async throws -> WindowMove {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         let application = AXElement(pid: pid)
         let window: AXElement?
-        if let windowTitle {
-            // The user-facing `--window`: a substring with the shared ambiguity rule.
-            window = try windowElement(pid: pid, titled: windowTitle)
+        if selector.isSpecified {
+            // The user-facing `--window`: a substring plus optional index/at, shared ambiguity rule.
+            window = try windowElement(pid: pid, selector: selector)
         } else if let title {
             // The exact-title path the un-park sweep uses to return one specific window.
             window = application.windows.first { $0.string(kAXTitleAttribute) == title }
@@ -609,6 +702,74 @@ actor Engine {
             window: window.label,
             requestedX: point.x,
             requestedY: point.y,
+            before: before.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
+            after: after.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
+        )
+    }
+
+    /// The evidence for a resize: the size (and, when a move was asked for too, the origin)
+    /// requested, and the frame before and after. As with `WindowMove` the AX return code is
+    /// not part of this — a window with a fixed or minimum size clamps or refuses silently, and
+    /// only the read-back frame knows what actually took.
+    struct WindowResize: Sendable {
+        let window: String
+        let requestedWidth: Double
+        let requestedHeight: Double
+        /// The origin, when `--x/--y` asked the window to move as well. `nil` for a pure resize.
+        let requestedOrigin: CGPoint?
+        let before: ElementDescriptor.Frame?
+        let after: ElementDescriptor.Frame?
+
+        /// The size landed within a couple of points of the request (and the origin too, when
+        /// one was asked for). A 2 pt tolerance survives apps that snap their own geometry.
+        var landed: Bool {
+            guard let after else { return false }
+            let sizeLanded = abs(after.width - requestedWidth) <= 2 && abs(after.height - requestedHeight) <= 2
+            guard let origin = requestedOrigin else { return sizeLanded }
+            return sizeLanded && abs(after.x - origin.x) <= 2 && abs(after.y - origin.y) <= 2
+        }
+
+        /// The frame changed at all — told apart from `landed` so a clamp reads as "moved but
+        /// not to the requested extent" rather than "did nothing".
+        var changed: Bool {
+            guard let before, let after else { return false }
+            return before.width != after.width || before.height != after.height
+                || before.x != after.x || before.y != after.y
+        }
+    }
+
+    /// Resizes a window through `kAXSizeAttribute` (and repositions it through
+    /// `kAXPositionAttribute` when `origin` is given) — a ghost AX write, no cursor. Reads the
+    /// frame back as evidence, because the window server is free to clamp to the window's own
+    /// minimum or maximum or to refuse outright.
+    func resizeWindow(
+        pid: pid_t, window selector: WindowSelector = .init(), size: CGSize, origin: CGPoint? = nil
+    ) async throws -> WindowResize {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let window = try (selector.isSpecified ? windowElement(pid: pid, selector: selector) : nil)
+            ?? primaryWindow(of: AXElement(pid: pid))
+        guard let window else {
+            throw EngineError.notFound("a window matching \(selector.describe) for pid \(pid)")
+        }
+
+        let before = window.frame
+        // Position before size: some apps recompute their max size from the target display, so
+        // moving first lets a resize onto a larger screen take its full extent.
+        if let origin { window.setPosition(origin) }
+        window.setSize(size)
+        var after = window.frame
+        // Geometry can apply asynchronously; one short re-read tells "slow" from "refused".
+        if after?.size != size {
+            try? await Task.sleep(for: .milliseconds(150))
+            after = window.frame
+        }
+
+        cache.invalidate(pid: pid)  // every cached frame for this process just changed
+        return WindowResize(
+            window: window.label,
+            requestedWidth: size.width,
+            requestedHeight: size.height,
+            requestedOrigin: origin,
             before: before.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
             after: after.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
         )
@@ -1482,13 +1643,13 @@ actor Engine {
     /// when no diff will be honest — no window, a truncated walk (which would report unwalked
     /// elements as vanished), or a tree too large to walk twice without taxing every press
     /// (unless the caller opted in with `observe`).
-    /// One walk of a window's tree — the primary window, or the one whose title contains
-    /// `windowTitle`. Nil when there is no such window or the walk was truncated (a partial
-    /// tree cannot be diffed honestly). The shared primitive under every tree-delta channel.
-    private func windowNodes(pid: pid_t, windowTitle: String?) -> [TreeSnapshot.Node]? {
+    /// One walk of a window's tree — the primary window, or the one the `selector` names. Nil
+    /// when there is no such window or the walk was truncated (a partial tree cannot be diffed
+    /// honestly). The shared primitive under every tree-delta channel.
+    private func windowNodes(pid: pid_t, window selector: WindowSelector) -> [TreeSnapshot.Node]? {
         let window: AXElement?
-        if let windowTitle {
-            window = try? windowElement(pid: pid, titled: windowTitle)
+        if selector.isSpecified {
+            window = try? windowElement(pid: pid, selector: selector)
         } else {
             window = primaryWindow(of: AXElement(pid: pid))
         }
@@ -1498,8 +1659,8 @@ actor Engine {
         return dump.nodes
     }
 
-    private func treeEvidenceBaseline(pid: pid_t, observe: Bool, windowTitle: String? = nil) -> [TreeSnapshot.Node]? {
-        guard let nodes = windowNodes(pid: pid, windowTitle: windowTitle) else { return nil }
+    private func treeEvidenceBaseline(pid: pid_t, observe: Bool, window: WindowSelector = .init()) -> [TreeSnapshot.Node]? {
+        guard let nodes = windowNodes(pid: pid, window: window) else { return nil }
         guard observe || nodes.count <= Constants.treeEvidenceMaxElements else { return nil }
         return nodes
     }
@@ -1508,9 +1669,9 @@ actor Engine {
     /// missing or truncated after-walk leaves the evidence exactly as it was — this channel
     /// only ever adds signal, never removes it.
     private func foldingTreeEvidence(
-        into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?, windowTitle: String? = nil
+        into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?, window: WindowSelector = .init()
     ) -> Evidence {
-        guard let baseline, let after = windowNodes(pid: pid, windowTitle: windowTitle) else { return evidence }
+        guard let baseline, let after = windowNodes(pid: pid, window: window) else { return evidence }
         return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after))
     }
 
@@ -1568,7 +1729,7 @@ actor Engine {
                 })
             case let .named(label, role, window):
                 {
-                    let matches = ElementQuery.named(label, role: role, pid: pid, windowTitle: window).matches
+                    let matches = ElementQuery.named(label, role: role, pid: pid, window: window).matches
                     return matches.count == 1 ? accept(matches[0].element) : nil
                 }()
             }
@@ -1581,10 +1742,10 @@ actor Engine {
         // control; a window animating on its own cannot testify.
         // When the original locator named a window, evidence is scoped to it: the pixel
         // baseline and the tree walk both aim at that window rather than the primary one.
-        let windowTitle: String? = if case let .named(_, _, window) = locator { window } else { nil }
+        let window: WindowSelector = if case let .named(_, _, selector) = locator { selector } else { .init() }
         var baseline: ScreenCapture.WindowCapture?
         var windowIsStill = false
-        if wantsPress, ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid, title: windowTitle) {
+        if wantsPress, ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid, window: window) {
             let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
             baseline = try? await ScreenCapture.windowImage(ownedBy: pid, near: rect)
             if let baseline,
@@ -1598,7 +1759,7 @@ actor Engine {
         // read-back below compares against the world as it was, not as the press left it.
         let windowsBefore = wantsPress ? onScreenWindowCount(pid) : nil
         // The tree-delta channel's before-walk, same timing and same reason.
-        let treeBaseline = wantsPress ? treeEvidenceBaseline(pid: pid, observe: observe, windowTitle: windowTitle) : nil
+        let treeBaseline = wantsPress ? treeEvidenceBaseline(pid: pid, observe: observe, window: window) : nil
 
         let reach = GhostReach(allowHardwareInput: allowHardwareInput, clickOptions: clickOptions)
         var evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
@@ -1635,7 +1796,7 @@ actor Engine {
         // "what changed" is worth more in the reply than "something changed". Folded even on a
         // confirmed verdict: the diff is free once the baseline was taken, and it is the
         // reply's most legible account of what the press did.
-        evidence = foldingTreeEvidence(into: evidence, pid: pid, baseline: treeBaseline, windowTitle: windowTitle)
+        evidence = foldingTreeEvidence(into: evidence, pid: pid, baseline: treeBaseline, window: window)
         if let grounding = groundingResult {
             evidence.groundedBy = grounding.groundedBy
         }
@@ -1665,10 +1826,10 @@ actor Engine {
     /// text — so an icon toolbar becomes addressable; each box is labeled from the OCR text
     /// whose center falls inside it, and the text so consumed is not repeated as a loose row.
     /// Needs Screen Recording; refuses honestly without it, and while the display sleeps.
-    func visionRows(pid: pid_t, windowTitle: String? = nil) async throws -> [VisionRow] {
+    func visionRows(pid: pid_t, window: WindowSelector = .init()) async throws -> [VisionRow] {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         guard ScreenCapture.isPermitted else { throw GroundingError.screenRecordingRequired }
-        let frame = try windowFrame(pid: pid, title: windowTitle)
+        let frame = try windowFrame(pid: pid, window: window)
         let rect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
         let capture = try await ScreenCapture.windowImage(ownedBy: pid, near: rect)
 
@@ -1820,7 +1981,7 @@ actor Engine {
         easing: PathPlan.Easing,
         button: HardwareInput.MouseButton?,
         restoreCursor: Bool,
-        windowTitle: String? = nil,
+        window: WindowSelector = .init(),
         dwell: Duration? = nil,
     ) async throws -> TraceResult {
         // The tree is only consulted for a labeled endpoint, but an asleep display voids
@@ -1840,7 +2001,7 @@ actor Engine {
             guard let pid else {
                 throw EngineError.pathRefused("A labeled destination needs --app to search in.")
             }
-            let element = try resolveNamed(pid: pid, label: label, role: role, windowTitle: windowTitle)
+            let element = try resolveNamed(pid: pid, label: label, role: role, window: window)
             guard let frame = element.frame, frame.width >= 1, frame.height >= 1 else {
                 throw EngineError.pathRefused("'\(label)' has no on-screen frame to move to.")
             }
@@ -1889,7 +2050,7 @@ actor Engine {
         // What the window's tree looked like before the gesture — so the reply can say what
         // the hover revealed, not just that a window appeared. Taken before the motion, same
         // reason the window count is.
-        let treeBefore = pid.flatMap { windowNodes(pid: $0, windowTitle: windowTitle) }
+        let treeBefore = pid.flatMap { windowNodes(pid: $0, window: window) }
         // The charge-up ring at the point that acts (drag: the button-down point; hover: the
         // destination). When the overlay is visible this waits out the wind-up — the window
         // in which ⌃⌥⇧⎋ lands before any motion starts; the per-sample halt check inside the
@@ -1905,7 +2066,7 @@ actor Engine {
         let windowsAfter = pid.map(onScreenWindowCount)
         var treeChanges: Int?
         var treeDeltaText: String?
-        if let pid, let treeBefore, let treeAfter = windowNodes(pid: pid, windowTitle: windowTitle) {
+        if let pid, let treeBefore, let treeAfter = windowNodes(pid: pid, window: window) {
             let delta = TreeDelta.compute(from: treeBefore, to: treeAfter)
             if !delta.isEmpty {
                 treeChanges = delta.changeCount
@@ -1963,18 +2124,18 @@ actor Engine {
 
     /// One key shape for every label walk, so a find-then-read-then-act chain over the same
     /// query costs one walk however the verbs are mixed.
-    private nonisolated func cacheKey(_ query: String?, role: String?, window: String? = nil) -> String {
-        "find:\(window ?? "*"):\(role ?? "*"):\(query ?? "*")"
+    private nonisolated func cacheKey(_ query: String?, role: String?, window: WindowSelector = .init()) -> String {
+        "find:\(window.cacheToken):\(role ?? "*"):\(query ?? "*")"
     }
 
     /// Label to element, through the cache, with the ambiguity refusal every verb shares:
     /// acting on (or reading) whichever lookalike sorted first would be a coin flip. The
     /// refusal names each candidate's role, so the caller's next move is `role:`, not
     /// coordinates.
-    private func resolveNamed(pid: pid_t, label: String, role: String? = nil, windowTitle: String? = nil) throws -> AXElement {
-        if let windowTitle { _ = try windowElement(pid: pid, titled: windowTitle) }
-        let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: windowTitle)) {
-            ElementQuery.named(label, role: role, pid: pid, windowTitle: windowTitle)
+    private func resolveNamed(pid: pid_t, label: String, role: String? = nil, window: WindowSelector = .init()) throws -> AXElement {
+        if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
+        let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window)) {
+            ElementQuery.named(label, role: role, pid: pid, window: window)
         }.matches
         guard matches.count <= 1 else {
             throw EngineError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
@@ -1998,8 +2159,8 @@ actor Engine {
             return element
 
         case let .named(label, role, window):
-            if let window { _ = try windowElement(pid: pid, titled: window) }
-            let matches = ElementQuery.named(label, role: role, pid: pid, windowTitle: window).matches
+            if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
+            let matches = ElementQuery.named(label, role: role, pid: pid, window: window).matches
             // Matching is by substring, so "delete" can name several controls. Acting on
             // whichever sorted first would be a coin flip on a possibly destructive button.
             guard matches.count <= 1 else {

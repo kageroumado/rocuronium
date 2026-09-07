@@ -267,6 +267,16 @@ nonisolated struct AXElement {
         return mutate { AXUIElementSetAttributeValue(raw, kAXPositionAttribute as CFString, value) }
     }
 
+    /// Resizes an element (in practice: a window) to a size in points. Same rule as
+    /// `setPosition`: the return code is not evidence — the window manager may clamp to the
+    /// window's own minimum or maximum, so callers read the frame back.
+    @discardableResult
+    func setSize(_ size: CGSize) -> AXError {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return .failure }
+        return mutate { AXUIElementSetAttributeValue(raw, kAXSizeAttribute as CFString, value) }
+    }
+
     @discardableResult
     func perform(_ action: String = kAXPressAction) -> AXError {
         mutate { AXUIElementPerformAction(raw, action as CFString) }

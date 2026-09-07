@@ -148,14 +148,23 @@ always know which mechanism answered:
 - Neither given: the app's **focused element**. That is where `type` goes by default.
 - `--window <title substring>` scopes the verb to one of the app's windows instead of its
   primary one — the answer to two "Untitled" windows, a sheet, or a second document. It
-  works on `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`, `drag`, and
-  `park`; ambiguity is refused with the matching titles listed, and a `screenshot` that
-  cannot be scoped to the named window refuses rather than widening to the display.
+  works on `find`, `read`, `click`, `type`, `wait`, `screenshot`, `move`, `drag`, `park`,
+  and `resize`; ambiguity is refused with each candidate's index and frame listed, and a
+  `screenshot` that cannot be scoped to the named window refuses rather than widening to
+  the display.
 
 **Ambiguity is refused, never guessed.** A label matching several elements returns the
 candidates with their roles; the next move is `--role`, a longer label, or coordinates.
 Substring matching means `delete` can name three buttons, and acting on whichever
 sorted first is a coin flip on somebody's data.
+
+**Same-titled windows.** When two windows share a title (`--window Untitled` matching
+both), the refusal lists each with a **0-based index** and its frame — the same order
+`windows --app` prints, echoed as `windowCandidates` in the reply. Pick one with
+`--window-index <n>` (0 is the first), or `--window-at <x,y>` to pick whichever window
+contains a screen point. Both refinements narrow the title match — or the whole window
+list when `--window` is omitted, so `--window-at` alone means "whichever window is under
+this point". They work everywhere `--window` does.
 
 **Menu items never match label queries.** `find`, `click`, `type`, `scroll`, `wait`, and
 `read --label` skip the menu bar; a closed menu item's frame is a meaningless 0×0 rect at
@@ -266,7 +275,10 @@ reading a slow view.
 **`screenshot [--app X | --x --y --w --h] [--path F] [--since T]`** — hands the pixels to
 you; your model does the looking. `--app` captures the app's primary window through a
 window filter (occlusion-proof, works while parked), a region captures visible pixels,
-and with neither the main display is captured. Reply: `path`, `width`/`height` (pixels), `rect`
+and with neither the main display is captured. A window **parked on the virtual display**
+is captured by a raw region grab at its parked frame (the reply carries `parked: true`) —
+the window-filter path resolves the real displays first and would otherwise fall through
+to the whole main display. Reply: `path`, `width`/`height` (pixels), `rect`
 (points), `token`, `window`. Captures land in the app's `captures` folder and are swept
 after 24 h; `--path` must end in `.png`, must not exist, and must be under Desktop,
 Downloads, Pictures, `/tmp`, or that folder. With `--since` the reply is changed-region
@@ -390,6 +402,17 @@ says whether it landed: macOS sometimes declines to promote an accessory (menu-b
 LSUIElement) app while a regular app holds focus, and the reply says so rather than
 claiming success. Use it when background delivery is not dependable: AppKit menus,
 WebKit hover.
+
+**`resize --app X --width W --height H [--x PX --y PY]`** — sets a window's size (and, with
+both `--x`/`--y`, its position) by writing `kAXSizeAttribute`/`kAXPositionAttribute` — a
+ghost AX write, no cursor and no focus change. The answer for apps whose posted clicks
+read `noEffect` and whose AX name forces `--pid`: a Wine window will not accept a synthetic
+drag on its resize corner but will accept a size written directly. Width/height are in
+points, at least 1. The resulting frame is read back as evidence — `verdict: confirmed`
+when it landed within 2 pt, `unverifiable` when the window manager clamped it (a fixed- or
+bounded-size window), `noEffect` when nothing moved — with `before`/`after` frames. Pass
+both `--x` and `--y` to reposition too, or neither. Presence-gated like `activate`, since
+it visibly moves a window a person may be watching. Scopes with `--window` like the rest.
 
 ## 6. When the tree is empty: vision
 
