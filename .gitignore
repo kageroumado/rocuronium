@@ -6,10 +6,9 @@ xcuserdata/
 *.moved-aside
 .swiftpm/
 .build/
-# Raw away-experiment replies include window titles and menu history from the
-# user's real session — browsing history, filenames. Results get distilled into
-# ROADMAP.md; the raw logs never leave this machine.
-Docs/Archive/away-experiment-*.log
+# Docs/ is a local working area — architecture notes, roadmap, and away-experiment logs that
+# contain real session window titles and browsing history. It stays on disk, never in the repo.
+Docs/
 
 # Agent worktrees are their own checkouts, never content of this one.
 .claude/worktrees/
