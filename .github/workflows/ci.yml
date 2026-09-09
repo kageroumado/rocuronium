@@ -38,5 +38,7 @@ jobs:
             -project Rocuronium.xcodeproj \
             -scheme Rocuronium \
             -destination 'platform=macOS' \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
