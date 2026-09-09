@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: the workflow only reads the checked-out code.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    name: CLI package (swift test)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Show toolchain
+        run: swift --version
+      - name: Test
+        working-directory: RocuroniumCLI
+        run: swift test
+
+  app:
+    name: App + unit tests (xcodebuild)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Show toolchain
+        run: xcodebuild -version
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project Rocuronium.xcodeproj \
+            -scheme Rocuronium \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
