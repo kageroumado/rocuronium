@@ -1,3 +1,5 @@
+<img src=".github/rocuronium-icon.png" alt="Rocuronium icon" width="128" height="128">
+
 # rocuronium
 
 **Drive this Mac without taking the cursor.**
@@ -6,6 +8,10 @@ A menu bar daemon that lets an AI agent see and operate macOS — read text, cli
 type, scroll, drag, draw — while the human keeps their cursor, their focus, and a kill
 switch. Every action returns **evidence** of what observably happened, because
 accessibility APIs routinely lie about success.
+
+<img src=".github/rocuronium-overlay.png" alt="The presence overlay while an agent asks to move the cursor: the jellyfish escort, the approve/decline prompt answered by holding Y or N, and the bezel narrating the action with the take-over shortcut" width="720">
+
+*A cursor-taking action while someone is at the machine: the jellyfish marks where the agent is, the prompt waits for a one-second hold on Y or N, and the bezel narrates the action with the shortcut that halts everything.*
 
 ## What makes it different
 
