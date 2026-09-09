@@ -13,3 +13,6 @@ Docs/
 # Agent worktrees are their own checkouts, never content of this one.
 .claude/worktrees/
 .detector-training/
+
+# Design prototypes are local scratch, never shipped.
+Prototypes/
