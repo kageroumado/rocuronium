@@ -24,18 +24,24 @@ struct TrustBoundaryTests {
         #expect(!CodeIdentity.isTrusted(executableAt: "/nonexistent/adrafinil", identifiers: ["adrafinil"]))
     }
 
-    @Test func teamSignedBinaryWithForeignIdentifierIsNotTrusted() throws {
+    /// The signed CLI inside the installed bundle. Tests that need real signed bytes are
+    /// skipped where it is absent (a CI runner), since nothing else on a clean machine
+    /// carries the team's signature.
+    private static let installedCLI = "/Applications/Rocuronium.app/Contents/Resources/rocuronium"
+    private static let installedBundlePresent = FileManager.default.isExecutableFile(atPath: installedCLI)
+
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func teamSignedBinaryWithForeignIdentifierIsNotTrusted() {
         // Our own CLI, checked under an identifier it does not carry: team alone is not enough.
-        let cli = "/Applications/Rocuronium.app/Contents/Resources/rocuronium"
-        try #require(FileManager.default.isExecutableFile(atPath: cli), "installed bundle absent — skipped")
+        let cli = Self.installedCLI
         #expect(CodeIdentity.isTrusted(executableAt: cli, identifiers: ["rocuronium"]))
         #expect(!CodeIdentity.isTrusted(executableAt: cli, identifiers: ["adrafinil"]))
     }
 
-    @Test func unsignedCopyOfTrustedBinaryIsNotTrusted() throws {
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func unsignedCopyOfTrustedBinaryIsNotTrusted() throws {
         // The same bytes minus the signature: what a planted file at the expected path is.
-        let cli = "/Applications/Rocuronium.app/Contents/Resources/rocuronium"
-        try #require(FileManager.default.isExecutableFile(atPath: cli), "installed bundle absent — skipped")
+        let cli = Self.installedCLI
         let copy = FileManager.default.temporaryDirectory.appending(path: "rocuronium-\(UUID().uuidString)")
         try FileManager.default.copyItem(atPath: cli, toPath: copy.path)
         defer { try? FileManager.default.removeItem(at: copy) }
