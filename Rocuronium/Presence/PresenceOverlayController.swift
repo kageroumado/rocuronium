@@ -30,7 +30,9 @@ final class PresenceOverlayController {
     /// 15 s after one. Each command renews a `holdSafety` window instead of the short linger.
     private var holdActive = false
 
-    private enum Constants {
+    // Nonisolated so `restartLinger`'s default argument, evaluated at the call site, can
+    // read it without an actor hop.
+    private nonisolated enum Constants {
         /// The chrome eases in over this once the action actually begins — brisk, so the
         /// creature is present for the click that summoned it rather than still arriving.
         static let fadeIn: TimeInterval = 0.3

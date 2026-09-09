@@ -2025,7 +2025,7 @@ actor Engine {
             }
         }
 
-        if await vlm.isAvailable {
+        if vlm.isAvailable {
             let candidates = try await vlm.locate(instruction, in: capture.image)
             if let best = candidates.first {
                 let center = CGPoint(x: best.rect.midX, y: best.rect.midY)

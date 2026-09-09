@@ -243,7 +243,6 @@ final class PlanExecutor {
         if let abortReason {
             reply["abortReason"] = abortReason
         }
-        let lastGuardFailed = results.last.flatMap(\.guardResult).map { !$0.passed } ?? false
         reply["summary"] = abortReason != nil
             ? "plan aborted at step \(results.count): \(abortReason!)"
             : "plan completed — \(results.count) step(s)"

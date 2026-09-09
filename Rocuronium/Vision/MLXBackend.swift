@@ -4,7 +4,7 @@ import ImageIO
 import MLX
 import MLXLMCommon
 import MLXVLM
-import Tokenizers
+@preconcurrency import Tokenizers
 
 actor MLXBackend: GroundingBackend {
     nonisolated let identifier = "holo-3.1-4b"
@@ -102,7 +102,7 @@ actor MLXBackend: GroundingBackend {
         guard FileManager.default.fileExists(atPath: modelDir.appending(path: ModelStore.Constants.manifestName).path)
         else {
             throw GroundingError.modelNotInstalled(
-                "The VLM is not installed. Run `rocuronium setup` to download Holo-3.1-4B (~3.7 GB)."
+                "The VLM is not installed. Download Holo 3.1 4B (~3.7 GB) from Rocuronium's Settings → Models."
             )
         }
 

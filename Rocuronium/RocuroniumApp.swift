@@ -61,6 +61,25 @@ final class EngineHost {
         settingsWindow.show()
     }
 
+    /// Whether the copy of the agent skill in `~/.claude/skills` matches this build. Read
+    /// when the popover opens, since it is a handful of small file reads.
+    private(set) var skillState: EmbeddedSkill.InstallState = .notInstalled
+    private(set) var skillError: String?
+
+    func refreshSkillState() {
+        skillState = EmbeddedSkill.state(at: EmbeddedSkill.defaultInstallDirectory)
+    }
+
+    func installSkill() {
+        do {
+            try EmbeddedSkill.install(into: EmbeddedSkill.defaultInstallDirectory)
+            skillError = nil
+        } catch {
+            skillError = error.localizedDescription
+        }
+        refreshSkillState()
+    }
+
     init() {
         let server = ControlServer(router: router)
         self.server = server

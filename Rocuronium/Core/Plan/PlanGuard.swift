@@ -183,7 +183,7 @@ enum PlanGuard: Decodable, Sendable {
             guard let pid else {
                 return Result(passed: false, reason: "no pid resolved — cannot diff the tree")
             }
-            guard let changed = engine.treeChangedSinceToken(token, pid: pid) else {
+            guard let changed = await engine.treeChangedSinceToken(token, pid: pid) else {
                 return Result(passed: false, reason: "token '\(token.prefix(24))' is unknown, evicted, or was not a whole-window read")
             }
             return Result(

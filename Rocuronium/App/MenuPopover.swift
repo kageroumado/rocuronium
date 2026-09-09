@@ -17,7 +17,7 @@ struct MenuPopover: View {
 
     /// Which sections are visible, so appearing/disappearing cards glide instead of snapping.
     private var layoutSignature: String {
-        "\(hero)|\(engine.canCaptureScreen)|\(engine.startupError != nil)|\(engine.activityLog.entries.count)|\(engine.strayCount)"
+        "\(hero)|\(engine.canCaptureScreen)|\(engine.startupError != nil)|\(engine.activityLog.entries.count)|\(engine.strayCount)|\(engine.skillState == .current)"
     }
 
     private enum Hero: Hashable {
@@ -73,6 +73,10 @@ struct MenuPopover: View {
 
                 visionCard
 
+                if engine.skillState != .current {
+                    skillCard
+                }
+
                 if !engine.activityLog.entries.isEmpty {
                     activityCard
                 }
@@ -83,6 +87,7 @@ struct MenuPopover: View {
             }
             .padding(Theme.Space.lg)
         }
+        .task { engine.refreshSkillState() }
     }
 
     // MARK: - Header
@@ -310,6 +315,35 @@ struct MenuPopover: View {
         }
         .padding(Theme.Space.md)
         .glassCard(tint: anyInstalled ? nil : Theme.agent.opacity(0.08))
+    }
+
+    /// Shown while the user-level copy of the agent skill is missing or differs from this
+    /// build. The skill is the operator manual; a harness that loads it drives the engine as
+    /// documented, and `rocuronium guide` prints the same text for one that does not.
+    private var skillCard: some View {
+        let outdated = if case .outdated = engine.skillState { true } else { false }
+        return HStack(alignment: .top, spacing: Theme.Space.md) {
+            Image(systemName: "text.book.closed.fill")
+                .foregroundStyle(Theme.agent)
+                .symbolRenderingMode(.hierarchical)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(outdated ? "Agent skill is out of date" : "Agent skill not installed")
+                    .font(.callout.weight(.medium))
+                Text(outdated
+                    ? "The copy in ~/.claude/skills differs from this build's operator guide."
+                    : "Install the operator guide as a Claude Code skill in ~/.claude/skills/rocuronium.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(outdated ? "Update skill" : "Install skill") { engine.installSkill() }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                if let error = engine.skillError {
+                    Text(error).font(.caption2).foregroundStyle(Theme.blocked)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(Theme.Space.md)
+        .glassCard(tint: Theme.agent.opacity(0.08))
     }
 
     private var overlayToggleCard: some View {

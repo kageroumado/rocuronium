@@ -22,6 +22,9 @@ APP="${1:?usage: Scripts/embed-cli.sh <path-to-Rocuronium.app>}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
+echo "==> Baking the agent skill into the CLI"
+python3 Scripts/embed-skill.py
+
 echo "==> Building the CLI (release)"
 (cd RocuroniumCLI && swift build -c release)
 CLI="$PROJECT_DIR/RocuroniumCLI/.build/release/rocuronium"

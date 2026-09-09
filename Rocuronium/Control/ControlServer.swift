@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import os
-import Security
 import System
 
 /// A Unix-domain socket the CLI and MCP server talk to.
@@ -26,10 +25,10 @@ final class ControlServer {
         static let replyTimeout: TimeInterval = 30
         /// A connected client gets this long to actually send its request.
         static let readTimeout: TimeInterval = 10
-        /// Only binaries signed by us may drive the machine. Apple-anchored plus our team, the
-        /// standard Developer ID form — the embedded CLI satisfies it, an unsigned build does
-        /// not, and neither does anything else on the system.
-        static let peerRequirement = #"anchor apple generic and certificate leaf[subject.OU] = "52K336H235""#
+        /// The binaries allowed on the socket: the embedded CLI (which is also the MCP server)
+        /// and the app itself. Other binaries the team signs are refused — the requirement is
+        /// per-identifier, not per-team.
+        static let peerIdentifiers = ["rocuronium", "glass.kagerou.rocuronium"]
     }
 
     static var socketPath: String {
@@ -40,6 +39,10 @@ final class ControlServer {
     }
 
     private var listeningDescriptor: Int32 = -1
+    /// The inode and device of the socket file this listener created, taken by `stat` on the
+    /// path right after `bind`. `fstat` on the descriptor cannot supply this: a socket
+    /// descriptor reports a pseudo inode on device -1, never the filesystem entry.
+    private var boundFile: (inode: ino_t, device: dev_t)?
     private var watchdog: Task<Void, Never>?
     private let router: CommandRouter
 
@@ -102,6 +105,9 @@ final class ControlServer {
         // Owner-only: this socket can drive the machine, so it must not be world-writable.
         chmod(path, Constants.socketPermissions)
 
+        var created = Darwin.stat()
+        boundFile = path.withCString { stat($0, &created) == 0 } ? (created.st_ino, created.st_dev) : nil
+
         guard listen(descriptor, SOMAXCONN) == 0 else {
             close(descriptor)
             throw ControlError.listenFailed(errno)
@@ -130,27 +136,26 @@ final class ControlServer {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(10))
                 guard let self else { return }
-                await self.rebindIfReplaced()
+                self.rebindIfReplaced()
             }
         }
     }
 
     private func rebindIfReplaced() {
-        guard listeningDescriptor >= 0 else { return }
+        guard listeningDescriptor >= 0, let boundFile else { return }
         var onDisk = Darwin.stat()
-        var onSocket = Darwin.stat()
-        guard fstat(listeningDescriptor, &onSocket) == 0 else { return }
         // `withCString` disambiguates the `stat` *function* from the `stat` *type`.
         let pathExists = Self.socketPath.withCString { stat($0, &onDisk) == 0 }
-        // Our listener still owns the path when the path exists and its inode is ours. Anything
-        // else — the file gone, or a different inode now sitting there — means our descriptor is
-        // orphaned and clients are reaching someone else (or a corpse).
-        let stillOurs = pathExists && onDisk.st_ino == onSocket.st_ino && onDisk.st_dev == onSocket.st_dev
+        // Our listener still owns the path when the path exists and its inode is the one we
+        // created. Anything else — the file gone, or a different inode now sitting there —
+        // means our descriptor is orphaned and clients are reaching someone else (or a corpse).
+        let stillOurs = pathExists && onDisk.st_ino == boundFile.inode && onDisk.st_dev == boundFile.device
         guard !stillOurs else { return }
 
         Self.log.notice("Control socket file at \(Self.socketPath, privacy: .public) was replaced or removed — rebinding")
         close(listeningDescriptor)
         listeningDescriptor = -1
+        self.boundFile = nil
         do {
             try startListener()
         } catch {
@@ -250,28 +255,7 @@ final class ControlServer {
         var isAuthorized: Bool { uid == getuid() && isSignedByUs }
 
         private var isSignedByUs: Bool {
-            var attributes: [String: Any] = [:]
-            if let token = auditToken {
-                // The audit token is the race-free identity; a pid can be recycled between the
-                // check and the work.
-                attributes[kSecGuestAttributeAudit as String] = token
-            } else if pid > 0 {
-                attributes[kSecGuestAttributePid as String] = pid
-            } else {
-                return false
-            }
-
-            var code: SecCode?
-            guard SecCodeCopyGuestWithAttributes(nil, attributes as CFDictionary, [], &code) == errSecSuccess,
-                  let code
-            else { return false }
-
-            var requirement: SecRequirement?
-            guard SecRequirementCreateWithString(
-                Constants.peerRequirement as CFString, [], &requirement,
-            ) == errSecSuccess, let requirement else { return false }
-
-            return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+            CodeIdentity.isTrusted(auditToken: auditToken, pid: pid, identifiers: Constants.peerIdentifiers)
         }
 
         var description: String { "pid \(pid) uid \(uid) — \(executablePath)" }
@@ -322,7 +306,10 @@ final class ControlServer {
         var accumulated = Data()
         let chunkSize = 4096
         var buffer = [UInt8](repeating: 0, count: chunkSize)
-        while accumulated.count < Constants.maximumRequestBytes {
+        // The socket's receive timeout is per read(); this deadline bounds the whole request,
+        // so a client trickling one byte per call cannot hold the single accept thread.
+        let deadline = Date().addingTimeInterval(Constants.readTimeout)
+        while accumulated.count < Constants.maximumRequestBytes, Date() < deadline {
             let count = read(client, &buffer, chunkSize)
             guard count > 0 else { break }
             accumulated.append(contentsOf: buffer[0 ..< count])

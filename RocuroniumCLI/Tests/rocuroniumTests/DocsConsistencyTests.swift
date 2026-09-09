@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import rocuronium
 
@@ -46,6 +47,35 @@ struct DocsConsistencyTests {
     @Test func everyCommandAppearsInUsage() {
         for command in Self.commands {
             #expect(usage.contains(command), "command '\(command)' is absent from the CLI usage text")
+        }
+    }
+
+    /// `guide` is CLI-only, like `mcp`: it prints the skill baked into the binary and never
+    /// touches the socket. It still has to be in the usage text.
+    @Test func guideAppearsInUsage() {
+        #expect(usage.contains("guide"))
+    }
+
+    /// The generated `EmbeddedSkill.swift` must match the skill directory it was baked from,
+    /// or `rocuronium guide` prints a manual the repository no longer says.
+    @Test func embeddedSkillMatchesTheSkillDirectory() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // rocuroniumTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // RocuroniumCLI
+            .deletingLastPathComponent()  // repo root
+            .appending(path: ".claude").appending(path: "skills").appending(path: "rocuronium")
+        try #require(FileManager.default.fileExists(atPath: directory.path), "skill directory absent — not a repository checkout")
+        var onDisk: [String: String] = [:]
+        let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension == "md" else { continue }
+            onDisk[url.path.replacingOccurrences(of: directory.path + "/", with: "")] = try String(contentsOf: url, encoding: .utf8)
+        }
+        let embedded = Dictionary(uniqueKeysWithValues: EmbeddedSkill.files.map { ($0.path, $0.contents) })
+        #expect(Set(onDisk.keys) == Set(embedded.keys), "file set differs — rerun Scripts/embed-skill.py")
+        for (path, contents) in onDisk {
+            #expect(embedded[path] == contents, "\(path) differs — rerun Scripts/embed-skill.py")
         }
     }
 

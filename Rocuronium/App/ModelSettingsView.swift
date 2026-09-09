@@ -1,4 +1,3 @@
-import Hub
 import SwiftUI
 
 struct ModelSettingsView: View {
@@ -82,9 +81,16 @@ private struct ModelRow: View {
                 }
             }
             if store.isDownloading(model.id) {
-                ProgressView(value: store.downloadProgress)
-                    .progressViewStyle(.linear)
-                    .padding(.leading, 30)
+                if store.isVerifying {
+                    Text("Verifying against the pinned digests…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 30)
+                } else {
+                    ProgressView(value: store.downloadProgress)
+                        .progressViewStyle(.linear)
+                        .padding(.leading, 30)
+                }
             }
             if let error = store.downloadError, !model.isInstalled {
                 Text(error)
@@ -112,22 +118,28 @@ private struct StatusBadge: View {
 
 // MARK: - Model
 
+/// One row of the catalog: the pinned descriptor plus what is on disk right now.
 struct ModelInfo: Identifiable {
-    let id: String
-    let displayName: String
-    let detail: String
-    let icon: String
-    let expectedBytes: Int64
+    let descriptor: ModelStore.Descriptor
     var diskBytes: Int64 = 0
     var isInstalled: Bool = false
+    var isVerified: Bool = false
     var isLoaded: Bool = false
 
+    var id: String { descriptor.id }
+    var displayName: String { descriptor.displayName }
+    var detail: String { descriptor.detail }
+    var icon: String { descriptor.icon }
+    var expectedBytes: Int64 { descriptor.bytes }
+
     var statusText: String {
-        isLoaded ? "Loaded" : "Installed"
+        if isLoaded { return "Loaded" }
+        return isVerified ? "Installed" : "Unverified"
     }
 
     var statusColor: Color {
-        isLoaded ? .green : .secondary
+        if isLoaded { return .green }
+        return isVerified ? .secondary : .orange
     }
 }
 
@@ -136,7 +148,7 @@ struct ModelInfo: Identifiable {
 @MainActor
 @Observable
 final class ModelSettingsStore {
-    private(set) var models: [ModelInfo] = ModelSettingsStore.catalog
+    private(set) var models: [ModelInfo] = ModelStore.known.map { ModelInfo(descriptor: $0) }
     private(set) var isMeasuring = false
     private var downloading: Set<String> = []
 
@@ -155,6 +167,7 @@ final class ModelSettingsStore {
             let id = models[index].id
             let dir = ModelStore.directory(for: id)
             models[index].isInstalled = ModelStore.isInstalled(id)
+            models[index].isVerified = ModelStore.isVerified(id)
             models[index].diskBytes = models[index].isInstalled
                 ? Self.directorySize(dir)
                 : 0
@@ -162,36 +175,25 @@ final class ModelSettingsStore {
     }
 
     private(set) var downloadProgress: Double = 0
+    private(set) var isVerifying = false
     private(set) var downloadError: String?
 
     func download(_ model: ModelInfo) {
-        guard let source = Self.sources[model.id] else { return }
         downloading.insert(model.id)
         downloadProgress = 0
+        isVerifying = false
         downloadError = nil
         Task(name: "Download \(model.displayName)") {
-            defer { downloading.remove(model.id) }
+            defer {
+                downloading.remove(model.id)
+                isVerifying = false
+            }
             do {
-                let hub = HubApi()
-                let cachedDir = try await hub.snapshot(
-                    from: source.repo, matching: source.globs
-                ) { progress in
-                    Task { @MainActor in
-                        self.downloadProgress = progress.fractionCompleted
-                    }
+                try await ModelStore.install(model.descriptor) { fraction in
+                    Task { @MainActor in self.downloadProgress = fraction }
+                } verifying: {
+                    Task { @MainActor in self.isVerifying = true }
                 }
-                let dest = ModelStore.directory(for: model.id)
-                try FileManager.default.createDirectory(
-                    at: dest.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try FileManager.default.trashItem(at: dest, resultingItemURL: nil)
-                }
-                try FileManager.default.copyItem(at: cachedDir, to: dest)
-                let manifest = ["source": source.repo, "downloadedAt": ISO8601DateFormatter().string(from: .now)]
-                let data = try JSONSerialization.data(withJSONObject: manifest, options: .prettyPrinted)
-                try data.write(to: dest.appending(path: ModelStore.Constants.manifestName))
                 await measure()
             } catch {
                 downloadError = error.localizedDescription
@@ -199,28 +201,13 @@ final class ModelSettingsStore {
         }
     }
 
-    private struct ModelSource {
-        let repo: String
-        let globs: [String]
-    }
-
-    private static let sources: [String: ModelSource] = [
-        "holo-3.1-4b": ModelSource(
-            repo: "pipenetwork/Holo-3.1-4B-MLX-4bit",
-            globs: ["*.safetensors", "*.json", "*.jinja"]
-        ),
-        "yolo-detector": ModelSource(
-            repo: "kageroumado/rocuronium-ui-detector",
-            globs: ["model.mlpackage/*", "model.mlpackage/**/*"]
-        ),
-    ]
-
     func remove(_ model: ModelInfo) {
         let dir = ModelStore.directory(for: model.id)
         do {
             try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
             if let index = models.firstIndex(where: { $0.id == model.id }) {
                 models[index].isInstalled = false
+                models[index].isVerified = false
                 models[index].diskBytes = 0
             }
         } catch {
@@ -238,24 +225,4 @@ final class ModelSettingsStore {
             total += size
         }
     }
-
-    static let catalog: [ModelInfo] = [
-        ModelInfo(
-            id: "holo-3.1-4b",
-            displayName: "Holo 3.1 4B",
-            detail: "GUI grounding VLM — finds UI elements by description when accessibility is empty. "
-                + "~3 seconds per query on Apple silicon.",
-            icon: "eye.fill",
-            expectedBytes: 3_700_000_000
-        ),
-        ModelInfo(
-            id: "yolo-detector",
-            displayName: "UI Detector",
-            detail: "Fast element detector — proposes control boxes in ~8 ms, so icon toolbars "
-                + "become addressable. Each box is labeled from the text inside it; matched "
-                + "before the VLM is loaded.",
-            icon: "square.dashed",
-            expectedBytes: 5_400_000
-        ),
-    ]
 }

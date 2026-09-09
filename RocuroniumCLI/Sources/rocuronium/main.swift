@@ -63,6 +63,10 @@ Meta
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
+  guide      [<topic> | --list | --install [--to <dir>]]
+                                           the agent skill baked into this binary: the full
+                                           operator guide, or one reference by name; --install
+                                           copies it to ~/.claude/skills/rocuronium
 
 Options
   --pid <n>                 target a process directly; overrides --app
@@ -85,7 +89,7 @@ Options
                             included) come back groundedBy detector (needs Screen Recording)
   --json                    print the raw reply
 
-Eight things to know:
+Nine things to know:
   1. Trust `verdict`, never the exit code. confirmed · noEffect (success was reported and
      nothing changed: change mechanism, do not retry harder) · unverifiable (it may have
      landed: verify before retrying).
@@ -101,6 +105,8 @@ Eight things to know:
      ignores posted keycodes; unicode text still lands.
   7. Every reply reports presence. Cursor-taking verbs are refused while someone is here.
   8. Display asleep blinds every app; a locked screen does not.
+  9. The login window, authentication dialogs, and the screen saver are refused as targets,
+     by name or by pid. A lock is worked through, never talked past.
 """
 
 // MARK: - Argument parsing
@@ -118,6 +124,38 @@ arguments.removeFirst()
 func value(for flag: String) -> String? {
     guard let index = arguments.firstIndex(of: "--\(flag)"), index + 1 < arguments.count else { return nil }
     return arguments[index + 1]
+}
+
+// `guide` prints the agent skill baked into this binary, for a session that does not have the
+// skill installed: the whole guide, one reference by name, or an install into the user-level
+// skills directory. It never touches the socket.
+if command == "guide" {
+    if arguments.contains("--install") {
+        let directory = value(for: "to").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? EmbeddedSkill.defaultInstallDirectory
+        do {
+            try EmbeddedSkill.install(into: directory)
+            print("installed the rocuronium skill (\(EmbeddedSkill.files.count) files) at \(directory.path)")
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("rocuronium guide --install: \(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+    if arguments.contains("--list") {
+        print(EmbeddedSkill.referencePaths.joined(separator: "\n"))
+        exit(0)
+    }
+    if let topic = arguments.first, !topic.hasPrefix("-") {
+        guard let file = EmbeddedSkill.reference(matching: topic) else {
+            FileHandle.standardError.write(Data("rocuronium guide: no reference matches '\(topic)'. Topics: \(EmbeddedSkill.referencePaths.joined(separator: ", "))\n".utf8))
+            exit(2)
+        }
+        print(file.contents)
+        exit(0)
+    }
+    print(EmbeddedSkill.guideText)
+    exit(0)
 }
 
 // MCP mode: a stdio tool server for agent harnesses. Register with e.g.
@@ -295,7 +333,7 @@ if let error = reply["error"] as? String {
 
 // A disruptive action that a present human approved in the popup says so, so the outcome is
 // not mistaken for one that ran unattended. (A decline surfaces as the error above.)
-if let consent = reply["consent"] as? String {
+if let consent = reply["consent"] as? String, consent == "approved" || consent == "declined" {
     FileHandle.standardError.write(Data("rocuronium: the human \(consent) this action.\n".utf8))
 }
 

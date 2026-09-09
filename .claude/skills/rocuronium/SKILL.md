@@ -53,8 +53,9 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 ## Safety and presence
 
-- Ghost verbs (tentacles 0–3) are the default and are safe while a human is present. Cursor-taking verbs (`move`, `drag`, `activate`, `key`/`click` with hardware input) are **refused while a human is present or the screen is locked** unless you pass `--confirm` / `--allow-hardware-input`.
+- Ghost verbs (tentacles 0–3) are the default and are safe while a human is present. Cursor-taking verbs (`move`, `drag`, `activate`, `key`/`click` with hardware input) are **refused while the screen is locked**, and while a human is present the overlay asks them on screen (a one-second hold on Y or N) unless you pass `--confirm`, which asserts the human already approved this in your harness — never pass it to get past a refusal; the reply's `consent` field then reads `asserted-by-caller`. Hardware delivery additionally needs `--allow-hardware-input`.
 - Every reply carries `presence` (`state`, `mayTakeCursor`, `canSee`, `advice`). A human arriving mid-task is visible on the next answer.
+- **Bracket a chain with `busy`** when a human may be watching: `busy on --note "<what you're doing>"` first, `busy off` when done. The overlay then stays up through the thinking between your calls, so its disappearance means "nothing more is coming". Self-releases after ~90 s of silence.
 - **⌃⌥⇧⎋ is the emergency stop.** It halts the engine mid-action. Afterward every acting/perceiving verb is refused with "halted by the human"; `status`/`activity` still answer with `halted: true`. **Resume is a button in the menu-bar popover and nothing else — no socket verb can clear the halt.** If your verbs are suddenly refused with that message, stop and wait; do not look for a workaround.
 
 → The refusal catalog (each refusal, the flag that permits it, why it exists) and the presence model: **reference/presence-and-refusals.md**
@@ -62,7 +63,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 ## Environment facts that trip agents
 
-- **Display asleep is blindness; a locked screen is not.** When the display sleeps every tree collapses to the app element — perception verbs answer "I cannot see", acting verbs wake it first. A locked screen with an awake display is harmless: full trees, ghost input works, only hardware input is refused.
+- **Display asleep is blindness; a locked screen is not.** When the display sleeps every tree collapses to the app element — perception verbs answer "I cannot see", acting verbs wake it first. A locked screen with an awake display is harmless: full trees, ghost input works, only hardware input is refused. The login window, SecurityAgent, and the screen saver are refused as targets by name or pid — a lock is worked through, never talked past.
 - **Background apps**: ghost delivery is dependable for accessibility writes and unicode text, best-effort for menu presses (AppKit never validates background menus). When the verdict matters on a background AppKit app, `activate` it first.
 - **Electron/Chromium ignore posted keycodes** — `type` (unicode) and `shortcut` (menu item) work; a bare `key` keycode does not.
 - **A press that quits/restarts its app** verifies by the process exiting, reported `confirmed`; check `apps` before retrying anything quit-shaped.

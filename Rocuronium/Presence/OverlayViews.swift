@@ -106,8 +106,6 @@ enum JellyfishArt {
         ctx.translateBy(x: rect.minX, y: rect.minY)
         ctx.scaleBy(x: rect.width / designSize.width, y: rect.height / designSize.height)
 
-        let pulsing = phase == .acting || moving
-
         // Halo — bioluminescence as the status channel.
         let (glowColor, glowPeriod, glowRange): (Color, Double, ClosedRange<Double>) = switch phase {
         case .thinking: (JellyPalette.glowThinking, 1.7, 0.5 ... 1.0)

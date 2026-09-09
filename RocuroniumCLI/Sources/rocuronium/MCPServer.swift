@@ -138,7 +138,7 @@ enum MCPServer {
             "Launch an app without taking focus, and return only once its accessibility tree answers — ready:true means 'you can drive it now', not merely 'the process started'. Reports alreadyRunning when it was. Refused while the frontmost app is fullscreen unless `confirm` is true: the new app's first window switches Spaces and drops the human out of their game.",
             properties: [
                 "app": ["type": "string", "description": "App name, bundle id, or full path"],
-                "confirm": ["type": "boolean", "description": "Launch even though a fullscreen app would be interrupted"],
+                "confirm": ["type": "boolean", "description": "Launch even though a fullscreen app would be interrupted. Asserts that the human approved this elsewhere (a harness prompt); pass it only after a real approval, never to get past a refusal"],
             ], required: ["app"],
         ),
         tool(
@@ -155,7 +155,7 @@ enum MCPServer {
             """,
             properties: [
                 "app": ["type": "string"],
-                "confirm": ["type": "boolean", "description": "Take focus even though someone is at the Mac or a fullscreen app is up"],
+                "confirm": ["type": "boolean", "description": "Take focus even though someone is at the Mac or a fullscreen app is up. Skips the on-screen consent prompt because it asserts the human already approved this in the harness — pass it only after a real approval, never to get past a refusal. The reply's consent field then reads asserted-by-caller"],
             ], required: ["app"],
         ),
         tool(
@@ -247,7 +247,7 @@ enum MCPServer {
                 "app": ["type": "string"],
                 "keys": ["type": "string", "description": "cmd+a, cmd+shift+z, cmd+left, ..."],
                 "resolveOnly": ["type": "boolean", "description": "Report the menu item without pressing it"],
-                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
+                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item. Asserts that the human approved it elsewhere; never pass it to get past a refusal"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app", "keys"],
         ),
@@ -308,7 +308,7 @@ enum MCPServer {
                 "app": ["type": "string"],
                 "path": ["type": "string", "description": "Menu title path, levels separated by '>' or '▸'"],
                 "resolveOnly": ["type": "boolean", "description": "Report the resolved item without pressing it"],
-                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item"],
+                "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item. Asserts that the human approved it elsewhere; never pass it to get past a refusal"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app", "path"],
         ),

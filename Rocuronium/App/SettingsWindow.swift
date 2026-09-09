@@ -77,6 +77,7 @@ struct SettingsView: View {
             Group {
                 switch category {
                 case .models: ModelSettingsView()
+                case .skill: SkillSettingsView()
                 case .about: AboutSettingsView()
                 }
             }
@@ -89,6 +90,7 @@ struct SettingsView: View {
 
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case models
+    case skill
     case about
 
     var id: String { rawValue }
@@ -96,6 +98,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .models: "Models"
+        case .skill: "Agent Skill"
         case .about: "About"
         }
     }
@@ -103,6 +106,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .models: "cpu.fill"
+        case .skill: "text.book.closed.fill"
         case .about: "info.circle.fill"
         }
     }

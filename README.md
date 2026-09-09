@@ -160,7 +160,7 @@ Unix-domain socket. The CLI is also the MCP server.
 
 ## Documentation
 
-- **[`.claude/skills/rocuronium`](.claude/skills/rocuronium)** — the agent's operator guide as a Claude Code skill: `SKILL.md` plus a `reference/` folder (the reply contract, targeting, acting, vision, plans, presence, isolation). Copy or symlink it into `~/.claude/skills/` to have it on hand in any project.
+- **[`.claude/skills/rocuronium`](.claude/skills/rocuronium)** — the agent's operator guide as a Claude Code skill: `SKILL.md` plus a `reference/` folder (the reply contract, targeting, acting, vision, plans, presence, isolation). It ships inside the app and the CLI: `rocuronium guide` prints it (or one reference, `rocuronium guide acting`), `rocuronium guide --install` copies it to `~/.claude/skills/rocuronium`, and the menu-bar popover offers the same install when the copy there is missing or out of date.
 - `rocuronium --help` — every command and flag.
 - Each MCP tool carries its own contract in its description.
 - [`CLAUDE.md`](CLAUDE.md) — architecture and invariants for working on the code.

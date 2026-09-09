@@ -47,18 +47,17 @@ final class AdrafinilBridge {
         /// Bounded wait for the willTerminate release path, so a wedged CLI cannot stall
         /// quit; the daemon-side TTL reaps whatever is left.
         static let synchronousReleaseTimeout: TimeInterval = 2
-        /// The installer's symlink locations, then the bundle itself — GUI apps inherit a
-        /// minimal PATH, and on a machine with no symlink the Helpers binary is the CLI.
-        static let installPaths = [
-            "/usr/local/bin/adrafinil",
-            "\(NSHomeDirectory())/.local/bin/adrafinil",
-            "/Applications/Adrafinil.app/Contents/Helpers/adrafinil",
-        ]
+        /// The one place the CLI is executed from. A child of this app inherits its TCC
+        /// responsibility — it runs with the Accessibility and Screen Recording grants — so the
+        /// binary is taken from the bundle alone and its signature is checked before every
+        /// spawn (`CodeIdentity`); the installer's symlinks under user-writable directories are
+        /// never consulted, and neither is `PATH`.
+        static let cliPath = "/Applications/Adrafinil.app/Contents/Helpers/adrafinil"
+        static let cliIdentifiers = ["adrafinil"]
     }
 
     private static let log = Logger(subsystem: "glass.kagerou.rocuronium", category: "AdrafinilBridge")
 
-    @ObservationIgnored private var cliPath: String?
     @ObservationIgnored private var lastActivity: Date?
     @ObservationIgnored private var lastAcquire: Date?
     @ObservationIgnored private var currentKey: String?
@@ -73,8 +72,7 @@ final class AdrafinilBridge {
     @ObservationIgnored private var terminationObserver: (any NSObjectProtocol)?
 
     init() {
-        cliPath = Self.locateCLI()
-        isInstalled = cliPath != nil
+        isInstalled = Self.trustedCLIPath() != nil
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main,
         ) { [weak self] _ in
@@ -89,7 +87,7 @@ final class AdrafinilBridge {
         lastActivity = Date()
         guard !isHolding else { return }
         isHolding = true
-        if cliPath != nil {
+        if isInstalled {
             mechanism = "adrafinil"
             rotateHold()
         } else {
@@ -188,7 +186,7 @@ final class AdrafinilBridge {
         isHolding = false
         fallbackHold?.release()
         fallbackHold = nil
-        guard let cliPath else { return }
+        guard let cliPath = Self.trustedCLIPath() else { return }
         for key in outstandingKeys {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: cliPath)
@@ -218,7 +216,9 @@ final class AdrafinilBridge {
 
     @discardableResult
     private func runCLI(_ arguments: [String]) async -> Bool {
-        guard let cliPath else { return false }
+        // Re-checked per spawn, not once at launch: the file can change under a daemon that
+        // runs for weeks, and what is spawned runs with this app's grants.
+        guard let cliPath = Self.trustedCLIPath() else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliPath)
         process.arguments = arguments
@@ -262,11 +262,16 @@ final class AdrafinilBridge {
         return launched && process.terminationStatus == 0 && message.isEmpty
     }
 
-    private static func locateCLI() -> String? {
-        var candidates = Constants.installPaths
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            candidates += path.split(separator: ":").map { "\($0)/adrafinil" }
+    /// The bundle's CLI when it is present and carries the team's signature; `nil` otherwise.
+    /// A binary at the path that fails the check is logged and treated as not installed — the
+    /// internal display hold takes over, and nothing is executed.
+    private static func trustedCLIPath() -> String? {
+        let path = Constants.cliPath
+        guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        guard CodeIdentity.isTrusted(executableAt: path, identifiers: Constants.cliIdentifiers) else {
+            log.error("Refusing to run \(path, privacy: .public): it is not signed as the Adrafinil CLI by our team")
+            return nil
         }
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        return path
     }
 }

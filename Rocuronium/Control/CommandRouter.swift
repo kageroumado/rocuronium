@@ -274,7 +274,8 @@ final class CommandRouter {
                     target: Self.target(of: request),
                     verdict: reply["verdict"] as? String
                         ?? (reply["ok"] as? Bool == true ? "ok" : "refused"),
-                    summary: reply["summary"] as? String ?? reply["error"] as? String ?? "",
+                    summary: (reply["summary"] as? String ?? reply["error"] as? String ?? "")
+                        + (consentOutcome == "asserted-by-caller" ? " · consent asserted by the caller; no prompt shown" : ""),
                 )
                 overlay.commandFinished(reply)
             }
@@ -1026,7 +1027,7 @@ final class CommandRouter {
         ) else {
             return declinedReply("Bringing \(Self.target(of: request)) forward to click it")
         }
-        await MainActor.run { NSRunningApplication(processIdentifier: pid)?.activate() }
+        await MainActor.run { _ = NSRunningApplication(processIdentifier: pid)?.activate() }
         try? await Task.sleep(for: .milliseconds(500))
         return nil
     }
@@ -1250,7 +1251,13 @@ final class CommandRouter {
     private var consentOutcome: String?
 
     private func consented(prompt: String, detail: String, away: Bool, confirm: Bool) async -> Bool {
-        if away || confirm { return true }
+        if away { return true }
+        if confirm {
+            // The caller vouches for an approval the human gave elsewhere (a harness prompt).
+            // No overlay is shown; the reply and the activity log both say so.
+            consentOutcome = "asserted-by-caller"
+            return true
+        }
         let granted = await overlay.requestConsent(prompt: prompt, detail: detail)
         consentOutcome = granted ? "approved" : "declined"
         return granted
@@ -1392,7 +1399,7 @@ final class CommandRouter {
             let frontBundle = await MainActor.run { EventPoster.frontmostBundleID }
             if frontBundle != targetBundle {
                 await MainActor.run {
-                    NSRunningApplication(processIdentifier: pid)?.activate()
+                    _ = NSRunningApplication(processIdentifier: pid)?.activate()
                 }
                 try? await Task.sleep(for: .milliseconds(200))
                 // The first click after activation is swallowed as an activating click
@@ -2461,9 +2468,10 @@ final class CommandRouter {
         // one bundle id). Refused when nothing runs there — acting on a recycled pid would
         // drive an app nobody chose.
         if let pid = request.pid {
-            guard NSRunningApplication(processIdentifier: pid) != nil else {
+            guard let application = NSRunningApplication(processIdentifier: pid) else {
                 throw RouterError.appNotRunning("pid \(pid)")
             }
+            try Self.refuseCredentialSurface(application)
             return pid
         }
         guard let name = request.app else { throw RouterError.missingApp }
@@ -2477,7 +2485,29 @@ final class CommandRouter {
         guard matches.count == 1 else {
             throw RouterError.ambiguousApp(name, matches.map(Self.instanceDescription))
         }
+        try Self.refuseCredentialSurface(match)
         return match.processIdentifier
+    }
+
+    /// Processes whose windows exist to collect credentials: the login window (which is also
+    /// the lock screen), the authentication dialog host, and the screen saver. Refused as
+    /// targets for every verb, by pid as much as by name. The engine works through a lock by
+    /// reading the trees behind it; a lock that software can talk past is not a lock.
+    nonisolated static let credentialSurfaces: Set<String> = [
+        "com.apple.loginwindow",
+        "com.apple.SecurityAgent",
+        "com.apple.ScreenSaver.Engine",
+    ]
+
+    nonisolated static func isCredentialSurface(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return credentialSurfaces.contains(bundleIdentifier)
+    }
+
+    private static func refuseCredentialSurface(_ application: NSRunningApplication) throws {
+        if isCredentialSurface(bundleIdentifier: application.bundleIdentifier) {
+            throw RouterError.credentialSurface(application.localizedName ?? application.bundleIdentifier ?? "pid \(application.processIdentifier)")
+        }
     }
 
     /// Builds the window selector every window-scoped verb passes to the engine, from
@@ -2596,6 +2626,7 @@ final class CommandRouter {
         case captureExists(String)
         case captureOutsidePermittedDirectory(String)
         case badWindowAt(String)
+        case credentialSurface(String)
 
         var errorDescription: String? {
             switch self {
@@ -2615,6 +2646,9 @@ final class CommandRouter {
                 "\(path) is outside the directories captures may be written to (Desktop, Downloads, Pictures, /tmp, or the app's own captures folder)."
             case let .badWindowAt(text):
                 "'--window-at' must be a finite \"x,y\" screen point, got '\(text)'."
+            case let .credentialSurface(name):
+                "'\(name)' is a credential surface (the lock screen, an authentication dialog, or the screen saver). "
+                    + "Rocuronium never targets it: a lock is worked through, never talked past."
             }
         }
     }

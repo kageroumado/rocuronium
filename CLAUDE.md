@@ -93,7 +93,8 @@ A plan is a JSON step list, not a program: `PlanExecutor` runs steps sequentiall
 
 - **Debug is build-sign-install**: the socket verifies the peer's Developer ID signature, so an unsigned `.build/debug` binary is refused. Run `./Scripts/install.sh` (builds + signs the bundle, no version bump, notarization skipped), then use `/Applications/Rocuronium.app/Contents/Resources/rocuronium`.
 - **The embedded CLI lives in `Contents/Resources`, never `Contents/MacOS`** — the filesystem is case-insensitive and `rocuronium` there would overwrite the app's own `Rocuronium` executable.
-- **A command or flag change lands in four places**: the router's `dispatch`, the CLI `usage`, `MCPServer.tools`, and the guide. `DocsConsistencyTests` proves the first three stay in sync — add a verb to the router and to its `commands` set or the build fails.
+- **A command or flag change lands in four places**: the router's `dispatch`, the CLI `usage`, `MCPServer.tools`, and the skill (`.claude/skills/rocuronium`). `DocsConsistencyTests` proves the first three stay in sync — add a verb to the router and to its `commands` set or the build fails.
+- **The skill is the manual, and it ships inside both binaries.** `Scripts/embed-skill.py` bakes `.claude/skills/rocuronium` into `EmbeddedSkill.swift` in the CLI package and in `Rocuronium/App/` (the same generated file twice; both are committed). `rocuronium guide` prints it and the app offers to install it into `~/.claude/skills`. Edit the skill, rerun the script; the tests compare the generated files against the directory, so a stale copy fails the build.
 
 ## Non-goals
 
