@@ -27,10 +27,32 @@ nonisolated struct AXElement {
 
     // MARK: - Attributes
 
+    /// Runs an AX **read** on the thread it is safe on. Same-process accessibility requests are
+    /// not IPC'd — they execute synchronously on the calling thread — so reading our OWN
+    /// SwiftUI tree from a background executor (the `Engine` actor) races SwiftUI's main-thread
+    /// `ViewGraph`: measured as a segfault in `ViewGraph.accessibilityEnabled` while the
+    /// presence overlay animated, when a walk verb was aimed at Rocuronium itself (the demo
+    /// stage). Route those reads to the main thread, exactly as `mutate` does for self-targeted
+    /// writes. A cross-process element's reads are IPC'd into the target and never touch our
+    /// `ViewGraph`, so the common path takes only one cheap local `AXUIElementGetPid` and no hop.
+    /// Deadlock-free for the same reason as `mutate`: callers on the engine executor never hold
+    /// the main thread blocked waiting on them (the router *awaits* the engine, suspending main).
+    private func readOnCorrectThread<T>(_ read: () -> T) -> T {
+        var targetPid: pid_t = 0
+        if AXUIElementGetPid(raw, &targetPid) == .success,
+           targetPid == ProcessInfo.processInfo.processIdentifier,
+           !Thread.isMainThread {
+            return DispatchQueue.main.sync(execute: read)
+        }
+        return read()
+    }
+
     func attribute(_ name: String) -> CFTypeRef? {
-        var out: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(raw, name as CFString, &out) == .success else { return nil }
-        return out
+        readOnCorrectThread {
+            var out: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(raw, name as CFString, &out) == .success else { return nil }
+            return out
+        }
     }
 
     /// The `AXError` from reading an attribute, or `nil` on success. `attribute` collapses every
@@ -38,9 +60,11 @@ nonisolated struct AXElement {
     /// `.cannotComplete` (the app did not answer within the messaging timeout — it is busy or
     /// wedged) versus `.noValue` (the attribute is legitimately absent).
     func attributeError(_ name: String) -> AXError? {
-        var out: CFTypeRef?
-        let code = AXUIElementCopyAttributeValue(raw, name as CFString, &out)
-        return code == .success ? nil : code
+        readOnCorrectThread {
+            var out: CFTypeRef?
+            let code = AXUIElementCopyAttributeValue(raw, name as CFString, &out)
+            return code == .success ? nil : code
+        }
     }
 
     /// Whether the app answers accessibility queries at all. A single probe of the app-level
@@ -143,9 +167,11 @@ nonisolated struct AXElement {
     }
 
     var actionNames: [String] {
-        var out: CFArray?
-        guard AXUIElementCopyActionNames(raw, &out) == .success else { return [] }
-        return (out as? [String]) ?? []
+        readOnCorrectThread {
+            var out: CFArray?
+            guard AXUIElementCopyActionNames(raw, &out) == .success else { return [] }
+            return (out as? [String]) ?? []
+        }
     }
 
     /// The action that "clicks" this element: `AXPress` where offered, else `AXShowMenu`.
@@ -252,6 +278,30 @@ nonisolated struct AXElement {
         ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role)
     }
 
+    /// A boolean attribute (`AXFullScreen`, `AXMinimized`), or nil when the element does not
+    /// expose it. `CFBoolean` is checked explicitly because it does not bridge to `Bool` through
+    /// `as?`, and reading it as an `NSNumber` would misparse an integer attribute as a bool.
+    func boolValue(_ name: String) -> Bool? {
+        guard let value = attribute(name) else { return nil }
+        guard CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+
+    /// Writes a boolean attribute — `AXFullScreen`, `AXMinimized`. Same rule as every write: the
+    /// return code is not evidence, callers read the value (or the frame) back.
+    @discardableResult
+    func setBool(_ value: Bool, for name: String) -> AXError {
+        mutate { AXUIElementSetAttributeValue(raw, name as CFString, value as CFTypeRef) }
+    }
+
+    /// One of the window's standard title-bar buttons by attribute name (`AXFullScreenButton`,
+    /// `AXZoomButton`, `AXMinimizeButton`, `AXCloseButton`) — the fall-through when the matching
+    /// boolean attribute is absent or refused. Nil when the window does not expose it.
+    func button(_ name: String) -> AXElement? {
+        guard let value = attribute(name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(value as! AXUIElement)
+    }
+
     // MARK: - Mutation
 
     /// Runs a mutating AX call, hopped to the main thread when the target is **this
@@ -338,8 +388,10 @@ nonisolated struct AXElement {
     /// errors) leaves the handle presumed alive, because re-fetching an *equivalent* element
     /// can find the wrong one of several lookalikes.
     var isValid: Bool {
-        var out: CFTypeRef?
-        return AXUIElementCopyAttributeValue(raw, kAXRoleAttribute as CFString, &out) != .invalidUIElement
+        readOnCorrectThread {
+            var out: CFTypeRef?
+            return AXUIElementCopyAttributeValue(raw, kAXRoleAttribute as CFString, &out) != .invalidUIElement
+        }
     }
 
     /// A stable-enough identity for deduping results. `CFEqual` on `AXUIElement` is usable

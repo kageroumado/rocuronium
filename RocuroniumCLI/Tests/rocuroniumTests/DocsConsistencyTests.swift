@@ -16,9 +16,9 @@ struct DocsConsistencyTests {
     /// Every verb `CommandRouter.dispatch` handles. Kept here as the cross-check's fixed point:
     /// add a command to the router and this list, and the tests below prove the docs kept up.
     static let commands: Set<String> = [
-        "status", "diag", "request-capture", "find", "read", "apps", "windows",
+        "status", "diag", "request-capture", "find", "read", "map", "apps", "windows",
         "type", "click", "scroll", "shortcut", "menu", "key", "move", "drag",
-        "wait", "launch", "activate", "display", "park", "resize", "screenshot", "statusitem",
+        "wait", "launch", "activate", "display", "park", "resize", "window", "space", "screenshot", "statusitem",
         "activity", "demo", "plan", "busy",
     ]
 

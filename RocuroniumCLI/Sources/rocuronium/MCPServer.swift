@@ -99,6 +99,29 @@ enum MCPServer {
             ], required: ["app"],
         ),
         tool(
+            "map",
+            """
+            An ASCII layout of an app's interactable elements — the positioning a text `find` \
+            loses, delivered as pure text so you read where the controls sit without a model \
+            spending vision tokens on a screenshot. Returns `map` (a bordered character grid \
+            with each element numbered where it sits in the window), `elements` (the legend: \
+            {n, role, label, frame} per number, frames in screen points), and a `token`. \
+            Accessibility-only in the common case, so it needs no Screen Recording and works \
+            behind a locked screen; it falls through to vision rows (detector boxes, icon \
+            controls included) only when the tree exposes no interactable element. By default it \
+            places the elements a human clicks (buttons, links, fields, checkboxes, …); `all` \
+            widens to every element with a frame and `role` narrows to one kind. The numbers are \
+            snapshot-local — valid only for the returned token — and clicking one is \
+            `click box:N token:<t>`, which re-checks the window has not moved before it acts. \
+            Cheaper than a screenshot for "what can I click and where is it".
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "role": ["type": "string", "description": "Map only elements of this role, e.g. 'button' or 'AXButton'"],
+                "all": ["type": "boolean", "description": "Place every element carrying a frame, not just the interactable ones"],
+            ], required: ["app"],
+        ),
+        tool(
             "apps",
             "List running apps (the set a human would see in the Dock): name, bundle id, pid, frontmost, hidden, launchedAt (ISO 8601) and bundlePath. The last two distinguish two running instances of one bundle id — pick the pid by start time or path, never blindly. Read-only.",
             properties: [:], required: [],
@@ -215,6 +238,8 @@ enum MCPServer {
                 "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
                 "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
                 "y": ["type": "number", "description": "Screen y, paired with x"],
+                "box": ["type": "number", "description": "Click element N from a prior `map` (1-based); resolved through `token` and re-checked against the live window before acting"],
+                "token": ["type": "string", "description": "The token a `map` reply returned — names the snapshot whose box N to click"],
                 "button": ["type": "string", "enum": ["left", "right"], "description": "right opens a context menu"],
                 "count": ["type": "number", "description": "Clicks: 1 (default) or 2 for a double-click"],
                 "modifiers": ["type": "string", "description": "Held modifiers, comma-separated: cmd,shift,option,control,fn"],
@@ -403,10 +428,22 @@ enum MCPServer {
         ),
         tool(
             "busy",
-            "Hold the presence overlay up while you work. Call `busy` with action 'on' (and an optional note) when you START a chain of steps, and again with 'off' when you FINISH — the jellyfish then stays visible through the thinking and waiting between commands, and vanishing means 'nothing more is coming', so the person can stop guarding their mouse. Renewable: any acting command renews the hold, and it self-releases after ~90 s if you go silent. Visual only, and only when the person has 'show overlay for every action' on — it never changes what the engine does.",
+            """
+            Hold the presence overlay up while you work, and declare WHY. Call `busy` with \
+            action 'on' and a `note` when you START a chain of steps, and 'off' when you FINISH \
+            — the jellyfish then stays visible through the thinking and waiting between \
+            commands, and vanishing means 'nothing more is coming', so the person can stop \
+            guarding their mouse. The `note` is the human-visible reason: it becomes the \
+            bezel's headline (capped at 64 characters), with the mechanical per-action summary \
+            beneath it — so a watching human reads what you are trying to do, not just the last \
+            step. Set it whenever you begin real work; 'off' clears it. Renewable: any acting \
+            command renews the hold, and it self-releases after ~90 s if you go silent. Visual \
+            only, and only when the person has 'show overlay for every action' on — it never \
+            changes what the engine does.
+            """,
             properties: [
-                "action": ["type": "string", "enum": ["on", "off"], "description": "'on' (default) raises the hold; 'off' releases it"],
-                "note": ["type": "string", "description": "One line shown under the mark while held, e.g. 'moving the Finder window'"],
+                "action": ["type": "string", "enum": ["on", "off"], "description": "'on' (default) raises the hold; 'off' releases it and clears the reason"],
+                "note": ["type": "string", "description": "The human-visible reason for the work — the bezel headline (capped at 64 chars), e.g. 'tidying the Downloads folder'. Say what you're trying to do, not the mechanical step"],
             ], required: [],
         ),
         tool(
@@ -450,6 +487,53 @@ enum MCPServer {
                 "y": ["type": "number", "description": "Reposition to this screen y, paired with x"],
                 "confirm": ["type": "boolean", "description": "Resize even though someone is at the Mac"],
             ], required: ["app", "w", "h"],
+        ),
+        tool(
+            "window",
+            """
+            Change a window's state with no cursor and no focus change: native fullscreen \
+            on/off, minimize/restore, or zoom. Ghost, level 1 — an AXFullScreen/AXMinimized \
+            attribute write, then the title-bar button (the green fullscreen light, the zoom \
+            button) when the attribute is absent or does not take, verified by reading the \
+            state (or the frame) back; `verdict` says what actually happened and `via` says \
+            which path delivered it. Exactly one action per call. This targets the WINDOW: \
+            in-content fullscreen — a video or web page going fullscreen inside a view — is not \
+            a window attribute, so use `click`/`key f` on the page for that. When neither the \
+            attribute nor the button takes, the reply's `suggestion` names the View-menu path \
+            (some apps only wire fullscreen to the menu item). Presence-gated like `resize`: it \
+            visibly rearranges a window — fullscreen moves it to its own Space — so it is \
+            refused while a human is present unless `confirm` is true.
+            """,
+            properties: [
+                "app": ["type": "string"],
+                "fullscreen": ["type": "string", "enum": ["on", "off"], "description": "Enter (on) or leave (off) native window fullscreen"],
+                "minimize": ["type": "boolean", "description": "Minimize the window to the Dock"],
+                "unminimize": ["type": "boolean", "description": "Restore a minimized window"],
+                "zoom": ["type": "boolean", "description": "Press the green zoom button (toggle user size ↔ zoom size)"],
+                "confirm": ["type": "boolean", "description": "Proceed even though a human is present. Asserts they approved it elsewhere; never pass it to get past a refusal"],
+            ], required: ["app"],
+        ),
+        tool(
+            "space",
+            """
+            Real Mission Control Spaces (not the virtual display). action 'list' (default) \
+            enumerates the Spaces per display with a 1-based index, id, kind (user/fullscreen/\
+            system) and which is active — read-only. action 'switch' moves the display to \
+            another Space with `next`/`prev` or `to` (a 1-based index from list) — this CHANGES \
+            what the human sees, so it is gated like `activate`: refused while a human is \
+            present unless `confirm` is true. action 'move' sends an app's window (`app`, \
+            optionally `window`) to Space `to` WITHOUT switching to it — non-disruptive to the \
+            current view, so it just reports. The virtual display, not this, remains the answer \
+            for invisible agent work; `space` is for deliberate, confirmed cross-Space testing.
+            """,
+            properties: [
+                "action": ["type": "string", "enum": ["list", "switch", "move"], "description": "list (default), switch, or move"],
+                "next": ["type": "boolean", "description": "switch: go to the next Space on the main display"],
+                "prev": ["type": "boolean", "description": "switch: go to the previous Space on the main display"],
+                "to": ["type": "number", "description": "switch/move: destination Space as a 1-based index from `space list` (main display)"],
+                "app": ["type": "string", "description": "move: the app whose window to send to another Space"],
+                "confirm": ["type": "boolean", "description": "switch: proceed even though a human is present. Asserts they approved it elsewhere; never pass it to get past a refusal"],
+            ], required: [],
         ),
         tool(
             "plan",
@@ -533,7 +617,7 @@ enum MCPServer {
     /// schemas centrally so the argument filter accepts it without repeating the property in
     /// each definition.
     private static let windowScopedTools: Set<String> = [
-        "find", "read", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize",
+        "find", "read", "map", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize", "window", "space",
     ]
 
     private static func tool(

@@ -284,6 +284,40 @@ actor Engine {
         )
     }
 
+    /// The roles a human recognizes as clickable — the set `screenshot --annotate` boxes. A
+    /// pure role filter rather than a per-element `AXPress`/`AXShowMenu` probe on purpose: the
+    /// action-name query is an IPC round trip per element, and a whole-tree annotate would pay
+    /// it thousands of times. Icon-only controls keep their role (an unlabelled `AXButton` is
+    /// still `AXButton`), so they are boxed with an empty label — exactly the affordance the
+    /// text `find` cannot give.
+    nonisolated static let interactableRoles: Set<String> = [
+        "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton",
+        "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSlider", "AXIncrementor",
+        "AXStepper", "AXDisclosureTriangle", "AXColorWell", "AXToolbarButton", "AXTabButton",
+        "AXSegment",
+    ]
+
+    /// The interactable elements to draw boxes over for `screenshot --annotate`: every element
+    /// of an `interactableRoles` role that carries a frame, in reading order. No cache key of
+    /// its own — annotate is an occasional, deliberate capture, not a hot path.
+    func annotationRows(pid: pid_t, window: WindowSelector = .init()) throws -> [ElementDescriptor] {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
+        AXElement(pid: pid).enableManualAccessibility()
+        cache.evictDeadProcesses(livePIDs: livePIDs())
+        let results = ElementQuery.search(pid: pid, window: window) { element in
+            element.frame != nil && Self.interactableRoles.contains(element.role)
+        }
+        return results.matches
+            .map { descriptor(for: $0.element, depth: $0.depth) }
+            .sorted { first, second in
+                guard let a = first.frame, let b = second.frame else { return first.frame != nil }
+                let band = max(a.height, b.height) * 0.5
+                if abs(a.y - b.y) > band { return a.y < b.y }
+                return a.x < b.x
+            }
+    }
+
     /// One line of a text dump, `Sendable` because `TextDump.Line` holds nothing but text.
     struct ReadLine: Codable, Sendable {
         let role: String
@@ -674,6 +708,21 @@ actor Engine {
         try titledWindowFrame(pid: pid, window: selector).frame
     }
 
+    /// The window-server id (`CGWindowID`) behind an app's window — the handle the Spaces API
+    /// takes to move a window between Spaces. Resolves the same window `resize`/`park` would.
+    func windowID(pid: pid_t, window selector: WindowSelector = .init()) throws -> CGWindowID {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let window = try (selector.isSpecified ? windowElement(pid: pid, selector: selector) : nil)
+            ?? primaryWindow(of: AXElement(pid: pid))
+        guard let window else {
+            throw EngineError.notFound("a window matching \(selector.describe) for pid \(pid)")
+        }
+        guard let identifier = SpacesManager.windowID(of: window.raw) else {
+            throw EngineError.notFound("a window-server id for \(selector.describe) (pid \(pid)) — the app may not expose one")
+        }
+        return identifier
+    }
+
     /// The title and frame of the same window — what the parked-window screenshot path needs to
     /// both aim its region capture and name the window it captured.
     func titledWindowFrame(
@@ -799,6 +848,113 @@ actor Engine {
             before: before.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
             after: after.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
         )
+    }
+
+    /// What `window` was asked to do, and what the evidence says happened.
+    struct WindowState: Sendable {
+        let window: String
+        /// "fullscreen on", "minimize", "zoom" — echoed for the reply.
+        let requested: String
+        /// How it was delivered: the boolean attribute, the title-bar button, or neither.
+        let via: String
+        let verdict: String
+        let before: ElementDescriptor.Frame?
+        let after: ElementDescriptor.Frame?
+        /// The actionable next step when the ghost paths could not verify — naming the menu
+        /// item, since window fullscreen is also a View-menu command.
+        let suggestion: String?
+    }
+
+    enum WindowAction: Sendable {
+        case fullscreen(Bool)
+        case minimize(Bool)
+        case zoom
+    }
+
+    /// Sets a window's fullscreen/minimized state, or zooms it — ghost, level 1: an
+    /// `AXFullScreen`/`AXMinimized` attribute write, then the title-bar button press when the
+    /// attribute is absent or does not take, verified by reading the state (or the frame) back.
+    /// No cursor, no focus change. The verb targets the *window*; in-content fullscreen (a video
+    /// or web page going fullscreen inside a view) is not a window attribute and stays a `click`
+    /// or `key f` on the page.
+    func setWindowState(
+        pid: pid_t, window selector: WindowSelector = .init(), action: WindowAction
+    ) async throws -> WindowState {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let window = try (selector.isSpecified ? windowElement(pid: pid, selector: selector) : nil)
+            ?? primaryWindow(of: AXElement(pid: pid))
+        guard let window else {
+            throw EngineError.notFound("a window matching \(selector.describe) for pid \(pid)")
+        }
+        func frame(_ rect: CGRect?) -> ElementDescriptor.Frame? {
+            rect.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) }
+        }
+        let before = window.frame
+        let title = window.label
+
+        func settle() async { try? await Task.sleep(for: .milliseconds(200)) }
+        func result(via: String, verdict: String, suggestion: String? = nil, requested: String) -> WindowState {
+            cache.invalidate(pid: pid)
+            return WindowState(
+                window: title, requested: requested, via: via, verdict: verdict,
+                before: frame(before), after: frame(window.frame), suggestion: suggestion,
+            )
+        }
+
+        switch action {
+        case let .fullscreen(wanted):
+            let requested = "fullscreen \(wanted ? "on" : "off")"
+            // Attribute first, read back the boolean it exposes.
+            window.setBool(wanted, for: "AXFullScreen")
+            await settle()
+            if window.boolValue("AXFullScreen") == wanted {
+                return result(via: "AXFullScreen", verdict: "confirmed", requested: requested)
+            }
+            // The green traffic light — subrole-identified, so it is the button whether or not
+            // the attribute exists.
+            if let button = window.button("AXFullScreenButton") {
+                button.perform()
+                await settle()
+                if window.boolValue("AXFullScreen") == wanted {
+                    return result(via: "AXFullScreenButton", verdict: "confirmed", requested: requested)
+                }
+            }
+            // Neither took. Say so honestly and name the menu path, which reaches fullscreen
+            // when the window attribute is refused (some apps only wire the menu item).
+            return result(
+                via: window.boolValue("AXFullScreen") == nil ? "none (no AXFullScreen)" : "none",
+                verdict: "noEffect",
+                suggestion: "try `menu --app <app> --path \"View > \(wanted ? "Enter" : "Exit") Full Screen\"` or `shortcut --keys ctrl+cmd+f`",
+                requested: requested,
+            )
+        case let .minimize(wanted):
+            let requested = wanted ? "minimize" : "unminimize"
+            window.setBool(wanted, for: "AXMinimized")
+            await settle()
+            if window.boolValue("AXMinimized") == wanted {
+                return result(via: "AXMinimized", verdict: "confirmed", requested: requested)
+            }
+            if wanted, let button = window.button("AXMinimizeButton") {
+                button.perform()
+                await settle()
+                if window.boolValue("AXMinimized") == true {
+                    return result(via: "AXMinimizeButton", verdict: "confirmed", requested: requested)
+                }
+            }
+            return result(via: "AXMinimized", verdict: "noEffect", requested: requested)
+        case .zoom:
+            // Zoom has no readable state — it toggles between the user size and the app's zoom
+            // size — so a frame change is the only honest evidence.
+            guard let button = window.button("AXZoomButton") else {
+                return result(via: "none (no AXZoomButton)", verdict: "noEffect",
+                              suggestion: "the window exposes no zoom button; try `menu --path \"Window > Zoom\"`",
+                              requested: "zoom")
+            }
+            button.perform()
+            await settle()
+            let moved = before != window.frame
+            return result(via: "AXZoomButton", verdict: moved ? "confirmed" : "noEffect", requested: "zoom")
+        }
     }
 
     /// Delivers a keyboard shortcut by pressing the menu item that carries it, not by posting

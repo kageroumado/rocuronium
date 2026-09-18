@@ -118,7 +118,10 @@ final class PresenceOverlayController {
         appearForAction()
         model.phase = .thinking
         model.settleStart = nil
-        if !note.isEmpty { model.narration = note }
+        // The note is the human-visible reason for the work bracket — it becomes the bezel's
+        // headline (the "why"), which the per-action narration then sits beneath. Capped so it
+        // stays a glanceable line.
+        if !note.isEmpty { model.intent = String(note.prefix(OverlayModel.intentCap)) }
         model.lastEngagement = Date()
         restartLinger()
     }
@@ -128,6 +131,9 @@ final class PresenceOverlayController {
     func endHold() {
         guard holdActive else { return }
         holdActive = false
+        // The declared reason belongs to the bracket that is ending; a stale intent must not
+        // headline the next unrelated command.
+        model.intent = ""
         model.settleStart = Date()
         model.settleInPlace = false
         restartLinger(seconds: Constants.shortLinger)
@@ -325,6 +331,7 @@ final class PresenceOverlayController {
         hotkey.unregister()
         model.phase = .hidden
         model.sessionStart = nil
+        model.intent = ""
         model.chargeRing = nil
         model.settleStart = nil
         for panel in [window, bezelWindow] {
@@ -368,6 +375,7 @@ final class PresenceOverlayController {
         holdActive = false
         model.phase = .hidden
         model.sessionStart = nil
+        model.intent = ""
         model.chargeRing = nil
         model.settleStart = nil
         for panel in [window, bezelWindow] {

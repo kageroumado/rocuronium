@@ -26,6 +26,14 @@ final class OverlayModel {
     var phase: Phase = .hidden
     /// One line under the mark, in evidence-verdict language.
     var narration = ""
+    /// The human-visible *reason* the agent is driving — what it is trying to accomplish, not
+    /// the mechanical last step. Set from `busy --note`, capped so it cannot overrun the bezel.
+    /// When present it is the bezel's headline and `narration` drops to the line beneath it; the
+    /// last action alone never explains *why*, which is what a watching human wants to know.
+    /// Empty until the agent declares an intent, and cleared when the session ends.
+    var intent = ""
+    /// The hard cap on `intent`: a headline, not a paragraph — the bezel is a glanceable HUD.
+    static let intentCap = 64
     /// When the visible session began; drives the bezel's elapsed clock.
     var sessionStart: Date?
     /// The bezel rests translucent and wakes to full opacity for a beat after each action.

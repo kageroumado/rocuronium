@@ -42,6 +42,24 @@ One frame everywhere: **points** in the global display space, origin at the **to
     …
     5 shown · 994 elements visited
 
+**`map --app X [--role R] [--all]`** — the positioning `find` loses, as pure text. Returns `map` (a bordered ASCII grid with each interactable element numbered where it sits in the window), `elements` (the legend: `{n, role, label, frame}` per number), and a `token`. Accessibility-only in the common case — no Screen Recording, works behind a lock — falling through to vision rows (detector boxes, icon controls included) only when the tree exposes no interactable element. By default it places the elements a human clicks (buttons, links, fields, checkboxes, …); `--all` widens to every framed element, `--role` narrows to one kind, capped at 100 markers. Read the layout without a model paying vision tokens on a screenshot, then click a number with **`click --box N --token <t>`** — which re-checks the window has not moved before it acts, so a stale number is refused, never clicked at the wrong place. The numbers are valid only for that token (§ no persistent handles).
+
+    map --app Rocuronium
+    +--------------------------------------------------------------+
+    |                                                              |
+    |   1                                                          |
+    |          2            3                                      |
+    |   4                                                          |
+    |                                                              |
+    +--------------------------------------------------------------+
+
+    1  AXButton  'Tap Target'  @(760,318)
+    2  AXCheckBox  'Demo Switch'  @(792,392)
+    3  AXTextField  @(940,392)
+    4  AXSlider  @(760,470)
+    mapped 4 element(s) on 'Rocuronium Demo Stage'
+    token map-8f2a1c…  — click one with: click --box 1 --token map-8f2a1c…
+
 **`read --app X [--label Y] [--role R] [--since T] [--ocr]`** — the app's text through accessibility: static text, field values, button titles, checked states, indented by depth, with every interactive element's role shown so you know it can be acted on. Orders of magnitude cheaper than a screenshot, and it works behind a locked screen. Budgets: 20 000 elements, 30 000 characters, 4 000 per value, depth 40, 18 s; the reply carries `truncationReason` when one bit. A web area that yields no text is reported as **hidden, not blank**, with a referral to the channel that can read the DOM. When the whole-window walk finds no text and Screen Recording is granted, `read` **falls back to OCR** automatically; `--ocr` forces it. Vision rows come back as `{role: OCRText, value: <text>, frame}` in reading order (scope `window (OCR)`, `groundedBy: ocr`), with no token or delta — there is no tree walk to diff. When the **UI Detector** model is installed, control boxes join the text as `{role: UIElement, value, frame, groundedBy: detector, confidence}` (scope `window (vision)`), so an icon toolbar reads as addressable controls rather than blank space.
 
     read --app Rocuronium

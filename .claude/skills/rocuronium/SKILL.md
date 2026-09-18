@@ -1,6 +1,6 @@
 ---
 name: rocuronium
-description: Drive this Mac's UI from an agent — read the screen as text, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan).
+description: Drive this Mac's UI from an agent — read the screen as text, map a window's layout as ASCII, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, see where a window's controls sit, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, map, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan).
 ---
 
 # rocuronium
@@ -41,9 +41,9 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 ## Verb catalog
 
-**Observe** — `status`, `diag`, `apps`, `windows --app X`, `find`, `read`, `wait`, `screenshot`, `activity`.
+**Observe** — `status`, `diag`, `apps`, `windows --app X`, `find`, `read`, `map`, `wait`, `screenshot`, `activity`.
 **Act (ghost-first)** — `type`, `click`, `key`, `shortcut` (presses the menu item bound to keys), `menu` (by title path), `scroll`, `statusitem`, `launch`, `activate`, `plan`.
-**Windows** — `resize` (ghost AX resize/move), `display <acquire|release|status>`, `park`.
+**Windows** — `resize` (ghost AX resize/move), `window` (fullscreen/minimize/zoom), `space` (Mission Control Spaces: list/switch/move), `display <acquire|release|status>`, `park`.
 **Cursor paths (take the real cursor, presence-gated)** — `move`, `drag`.
 
 → Targeting (`--app`, the `--label` match tiers, icon-only buttons, `--window`, ambiguity) and the observe verbs in depth: **reference/targeting-and-observing.md**
@@ -55,7 +55,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 - Ghost verbs (tentacles 0–3) are the default and are safe while a human is present. Cursor-taking verbs (`move`, `drag`, `activate`, `key`/`click` with hardware input) are **refused while the screen is locked**, and while a human is present the overlay asks them on screen (a one-second hold on Y or N) unless you pass `--confirm`, which asserts the human already approved this in your harness — never pass it to get past a refusal; the reply's `consent` field then reads `asserted-by-caller`. Hardware delivery additionally needs `--allow-hardware-input`.
 - Every reply carries `presence` (`state`, `mayTakeCursor`, `canSee`, `advice`). A human arriving mid-task is visible on the next answer.
-- **Bracket a chain with `busy`** when a human may be watching: `busy on --note "<what you're doing>"` first, `busy off` when done. The overlay then stays up through the thinking between your calls, so its disappearance means "nothing more is coming". Self-releases after ~90 s of silence.
+- **Bracket a chain with `busy`** when a human may be watching: `busy on --note "<why you're driving>"` first, `busy off` when done. The `--note` is the **human-visible reason** — it becomes the bezel's headline (capped at 64 chars) with the mechanical per-action line beneath it, so a watching human reads *what you're trying to do*, not just the last step. Say the purpose ("tidying the Downloads folder"), not the mechanism. The overlay then stays up through the thinking between your calls, so its disappearance means "nothing more is coming"; it self-releases after ~90 s of silence, and `busy off` clears the reason.
 - **⌃⌥⇧⎋ is the emergency stop.** It halts the engine mid-action. Afterward every acting/perceiving verb is refused with "halted by the human"; `status`/`activity` still answer with `halted: true`. **Resume is a button in the menu-bar popover and nothing else — no socket verb can clear the halt.** If your verbs are suddenly refused with that message, stop and wait; do not look for a workaround.
 
 → The refusal catalog (each refusal, the flag that permits it, why it exists) and the presence model: **reference/presence-and-refusals.md**

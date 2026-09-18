@@ -26,6 +26,11 @@ final class CommandRouter {
     private let engine = Engine()
     /// The most recent capture per screenshot target — what `screenshot --since` diffs against.
     private let frames = FrameStore()
+    /// The legends of recent `map` renders, keyed by the token each returned, so `click --box N
+    /// --token …` can resolve a number back to a frame — but only after re-checking the window
+    /// has not moved since. Snapshot-local and short-lived by design (§221: no persistent
+    /// element handles).
+    private var mapSnapshots: [String: MapSnapshot] = [:]
     private let virtualDisplay: VirtualDisplayBridge
     /// Keeps the display awake for the whole agent session, not just per action.
     private let adrafinil = AdrafinilBridge()
@@ -135,6 +140,22 @@ final class CommandRouter {
         var lease: String?
         /// Where a screenshot should be written. A default under Application Support otherwise.
         var path: String?
+        /// For `click`: aim at element N from a prior `map`, resolved through `token`. 1-based,
+        /// the number the map drew for that element.
+        var box: Double?
+        /// For `click --box`: the token the `map` reply returned — names the snapshot whose box
+        /// N is being clicked.
+        var token: String?
+        /// For `window`: "on"/"off" to enter/leave native window fullscreen.
+        var fullscreen: String?
+        /// For `window`: minimize the window to the Dock, or restore it.
+        var minimize: Bool?
+        var unminimize: Bool?
+        /// For `window`: press the green zoom button (toggle user size ↔ zoom size).
+        var zoom: Bool?
+        /// For `space switch`: move to the next/previous Space on the main display.
+        var next: Bool?
+        var prev: Bool?
         /// Region size for screenshots, paired with x/y.
         var w: Double?
         var h: Double?
@@ -318,7 +339,7 @@ final class CommandRouter {
     /// overlay narrates, and the ⌃⌥⇧⎋ halt refuses.
     private static let actingVerbs: Set<String> = [
         "type", "click", "scroll", "shortcut", "menu", "key",
-        "move", "drag", "launch", "activate", "park", "resize", "statusitem",
+        "move", "drag", "launch", "activate", "park", "resize", "window", "statusitem",
     ]
 
     /// One phrase for the bezel and the log: what the command aimed at.
@@ -383,6 +404,7 @@ final class CommandRouter {
         case "request-capture": requestCapture()
         case "find": try await find(request)
         case "read": try await read(request)
+        case "map": try await map(request)
         case "apps": apps()
         case "windows": try await windows(request)
         case "type": try await typeCommand(request)
@@ -399,6 +421,8 @@ final class CommandRouter {
         case "display": try await display(request)
         case "park": try await park(request)
         case "resize": try await resize(request)
+        case "window": try await window(request)
+        case "space": try await space(request)
         case "screenshot": try await screenshot(request)
         case "statusitem": try await statusItem(request)
         case "activity": activity()
@@ -430,7 +454,9 @@ final class CommandRouter {
                 "ok": true, "busy": true,
                 "shown": overlay.model.showForAllActions,
                 "summary": overlay.model.showForAllActions
-                    ? "holding the overlay up until `busy off`"
+                    ? ((request.note ?? "").isEmpty
+                        ? "holding the overlay up until `busy off`"
+                        : "holding the overlay up until `busy off` — reason shown to the human: '\(request.note!.prefix(OverlayModel.intentCap))'")
                     : "noted — the overlay only shows when 'show for every action' is on",
             ]
         case "off":
@@ -923,6 +949,17 @@ final class CommandRouter {
     }
 
     private func act(_ request: Request, action: GhostReach.Action) async throws -> [String: Any] {
+        var request = request
+        // `click --box N --token <t>` resolves a mapped element's number to a screen point,
+        // guarded against a window that moved since the map was drawn. It supplies its own pid
+        // and coordinates, so it overrides --app/--label for this click.
+        if let box = await resolveBox(request) {
+            if let refusal = box.refusal { return refusal }
+            request.pid = box.pid
+            request.x = box.x
+            request.y = box.y
+            request.label = nil
+        }
         let pid = try resolve(request)
         let selector = try windowSelector(request)
         let foreground = request.foreground == true
@@ -1959,6 +1996,160 @@ final class CommandRouter {
         return reply
     }
 
+    /// Window-state changes with no cursor and no focus change: native fullscreen on/off,
+    /// minimize/restore, and zoom — the Peekaboo `window` verbs, ghost this time. Exactly one
+    /// action per call. Presence-gated like `resize`: each visibly rearranges a window (or a
+    /// whole Space) a person may be watching, so it is refused while someone is present unless
+    /// `confirm` carries their authority.
+    private func window(_ request: Request) async throws -> [String: Any] {
+        let pid = try resolve(request)
+        let selector = try windowSelector(request)
+
+        // Exactly one action — a call that asked for two has no defined order and would leave
+        // the window in a state the caller did not pick.
+        var actions: [(Engine.WindowAction, String)] = []
+        if let fullscreen = request.fullscreen {
+            switch fullscreen.lowercased() {
+            case "on", "true", "yes": actions.append((.fullscreen(true), "fullscreen on"))
+            case "off", "false", "no": actions.append((.fullscreen(false), "fullscreen off"))
+            default:
+                return ["ok": false, "error": "--fullscreen takes on or off, got '\(fullscreen)'", "presence": presenceBlock()]
+            }
+        }
+        if request.minimize == true { actions.append((.minimize(true), "minimize")) }
+        if request.unminimize == true { actions.append((.minimize(false), "unminimize")) }
+        if request.zoom == true { actions.append((.zoom, "zoom")) }
+        guard actions.count == 1 else {
+            return [
+                "ok": false,
+                "error": actions.isEmpty
+                    ? "window needs one action: --fullscreen on|off, --minimize, --unminimize, or --zoom"
+                    : "window takes exactly one action at a time — you asked for \(actions.count)",
+                "presence": presenceBlock(),
+            ]
+        }
+        let (action, label) = actions[0]
+
+        let presence = UserPresence.read()
+        guard await consented(
+            prompt: "\(label.capitalized) \(Self.target(of: request))",
+            detail: "\(Self.target(of: request)) · window \(label)",
+            away: presence.state == .away, confirm: request.confirm == true,
+        ) else {
+            return declinedReply("The window \(label)")
+        }
+
+        isDriving = true
+        defer { isDriving = false }
+        let result = try await engine.setWindowState(pid: pid, window: selector, action: action)
+        var reply: [String: Any] = [
+            "ok": result.verdict == "confirmed",
+            "verdict": result.verdict,
+            "window": result.window,
+            "requested": result.requested,
+            "via": result.via,
+            "summary": result.verdict == "confirmed"
+                ? "\(result.requested) on '\(result.window)' (via \(result.via))"
+                : "\(result.requested) had no observable effect on '\(result.window)'",
+            "presence": presenceBlock(),
+        ]
+        if let before = result.before { reply["before"] = block(for: before) }
+        if let after = result.after { reply["after"] = block(for: after) }
+        if let suggestion = result.suggestion { reply["suggestion"] = suggestion }
+        return reply
+    }
+
+    /// Real Mission Control Spaces — not the virtual display. `space list` enumerates them
+    /// (read-only), `space switch` changes what the human sees (gated like `activate`), and
+    /// `space move` sends a window to another Space without switching to it (non-disruptive, so
+    /// only reported). The virtual display, not Space-switching, stays the answer for invisible
+    /// agent work — this verb is for deliberate, confirmed cross-Space testing.
+    private func space(_ request: Request) async throws -> [String: Any] {
+        switch request.action ?? "list" {
+        case "list":
+            let displays = SpacesManager.list()
+            return [
+                "ok": true,
+                "displays": displays.map { display -> [String: Any] in
+                    [
+                        "display": display.displayIndex,
+                        "identifier": display.displayIdentifier,
+                        "spaces": display.spaces.map { space -> [String: Any] in
+                            ["index": space.index, "id": space.id, "active": space.isActive, "kind": space.kind]
+                        },
+                    ]
+                },
+                "summary": "\(displays.count) display(s), \(displays.reduce(0) { $0 + $1.spaces.count }) Space(s)",
+                "presence": presenceBlock(),
+            ]
+
+        case "switch":
+            // Resolve the target id from --next/--prev or a 1-based --to index on the main display.
+            let targetID: UInt64
+            let described: String
+            if request.next == true {
+                targetID = try SpacesManager.neighbour(1); described = "the next Space"
+            } else if request.prev == true {
+                targetID = try SpacesManager.neighbour(-1); described = "the previous Space"
+            } else if let to = request.to {
+                guard let main = SpacesManager.list().first else {
+                    return ["ok": false, "error": "the Spaces API returned nothing", "presence": presenceBlock()]
+                }
+                let index = Int(to)
+                guard index >= 1, index <= main.spaces.count else {
+                    return ["ok": false, "error": "--to must be a Space index 1–\(main.spaces.count) on the main display (see `space list`)", "presence": presenceBlock()]
+                }
+                targetID = main.spaces[index - 1].id; described = "Space \(index)"
+            } else {
+                return ["ok": false, "error": "space switch needs --next, --prev, or --to <index>", "presence": presenceBlock()]
+            }
+
+            // Switching changes what the person sees on their real display — gate it like activate.
+            let presence = UserPresence.read()
+            guard await consented(
+                prompt: "Switch to \(described)",
+                detail: "space switch",
+                away: presence.state == .away, confirm: request.confirm == true,
+            ) else {
+                return declinedReply("The Space switch")
+            }
+            try SpacesManager.switchTo(id: targetID)
+            return [
+                "ok": true,
+                "switchedTo": targetID,
+                "summary": "switched to \(described)",
+                "presence": presenceBlock(),
+            ]
+
+        case "move":
+            let pid = try resolve(request)
+            let selector = try windowSelector(request)
+            guard let main = SpacesManager.list().first else {
+                return ["ok": false, "error": "the Spaces API returned nothing", "presence": presenceBlock()]
+            }
+            guard let to = request.to else {
+                return ["ok": false, "error": "space move needs --to <index> (the destination Space; see `space list`)", "presence": presenceBlock()]
+            }
+            let index = Int(to)
+            guard index >= 1, index <= main.spaces.count else {
+                return ["ok": false, "error": "--to must be a Space index 1–\(main.spaces.count) on the main display", "presence": presenceBlock()]
+            }
+            let destination = main.spaces[index - 1]
+            let windowID = try await engine.windowID(pid: pid, window: selector)
+            try SpacesManager.move(windowID: windowID, toSpace: destination.id)
+            return [
+                "ok": true,
+                "movedTo": destination.id,
+                "summary": "moved \(Self.target(of: request)) to Space \(index)"
+                    + (destination.isActive ? " (the active Space)" : ""),
+                "presence": presenceBlock(),
+            ]
+
+        default:
+            return ["ok": false, "error": "unknown space action '\(request.action ?? "")' — use list, switch, or move", "presence": presenceBlock()]
+        }
+    }
+
     /// Moves an app's primary window — onto the virtual display by default, or to an explicit
     /// point (which is also how a caller puts a window back where it found it: `park` replies
     /// carry the window's previous position).
@@ -2213,6 +2404,208 @@ final class CommandRouter {
             described: explicitRegion ? "region" : "the main display",
             extra: [:],
         )
+    }
+
+    /// One `map` render's legend, kept just long enough for a follow-up `click --box`. `boxes`
+    /// maps the drawn number (1-based) to the element's screen frame; `windowFrame` and
+    /// `selector` are the freshness check — a box is only clicked if the window is still where
+    /// it was when the numbers were assigned.
+    private struct MapSnapshot {
+        let pid: pid_t
+        let boxes: [Int: CGRect]
+        let selector: WindowSelector
+        /// The mapped window's title, so the freshness check re-resolves *that* window rather
+        /// than whatever the app now calls primary — an app whose main window flips between its
+        /// own windows (or an overlay appearing over it) must not read as a moved target.
+        let windowTitle: String
+        let windowFrame: CGRect
+        let capturedAt: Date
+    }
+
+    /// An ASCII map of an app's interactable elements: each numbered where it sits in the
+    /// window, with a legend `[{n, role, label, frame}]`. The positioning a text `find` loses —
+    /// which controls sit in a row, what is a sidebar, where the compose field is — recovered as
+    /// pure text, so the caller reads the layout without a model spending vision tokens on a
+    /// PNG. AX-only in the common case (no Screen Recording, works behind a lock); it falls
+    /// through to vision rows only when the tree exposes no interactable element. The numbers are
+    /// snapshot-local — valid only for the reply's token — and `click --box N --token <t>`
+    /// re-resolves the frame against a live freshness check, never a stale coordinate (§221).
+    private func map(_ request: Request) async throws -> [String: Any] {
+        guard DisplayWake.perceptionIsReliable else {
+            return ["ok": false, "error": "the display is asleep — the accessibility trees collapse and there is nothing to map", "presence": presenceBlock()]
+        }
+        let pid = try resolve(request)
+        let selector = try windowSelector(request)
+        let target = try await engine.titledWindowFrame(pid: pid, window: selector)
+        let rect = CGRect(x: target.frame.x, y: target.frame.y, width: target.frame.width, height: target.frame.height)
+
+        // What to place: interactable elements by default; `--all` widens to everything with a
+        // frame, `--role` narrows to one kind — the same knobs `find` uses.
+        var rows: [(role: String, label: String, frame: CGRect)]
+        var groundedBy = "accessibility"
+        if request.all == true || request.role != nil {
+            rows = try await engine.find(
+                pid: pid, query: nil, role: request.role, window: selector,
+                all: true, limit: Int.max, offset: 0,
+            ).elements.compactMap { row in
+                guard let frame = row.frame else { return nil }
+                return (row.role, row.label, CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height))
+            }
+        } else {
+            rows = try await engine.annotationRows(pid: pid, window: selector).compactMap { row in
+                guard let frame = row.frame else { return nil }
+                return (row.role, row.label, CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height))
+            }
+        }
+        // An app whose tree exposes no interactable element still has a layout — fall through to
+        // the vision rows (detector boxes, icon controls included) so it maps rather than blanks.
+        if rows.isEmpty, ScreenCapture.isPermitted {
+            rows = (try? await engine.visionRows(pid: pid, window: selector))?.map {
+                ($0.role, $0.label, CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height))
+            } ?? []
+            if !rows.isEmpty { groundedBy = "vision" }
+        }
+        // Keep what falls on the window, in reading order, capped: past a hundred markers the
+        // grid is unreadable and a number keys nothing a human could find.
+        rows = rows.filter { $0.frame.intersects(rect) }
+        let truncated = rows.count > Constants.mapBoxCap
+        rows = Array(rows.prefix(Constants.mapBoxCap))
+
+        let canvas = Self.renderMap(
+            rows.enumerated().map { (n: $0.offset + 1, center: CGPoint(x: $0.element.frame.midX, y: $0.element.frame.midY)) },
+            in: rect,
+        )
+
+        let token = "map-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10)
+        pruneMapSnapshots()
+        mapSnapshots[String(token)] = MapSnapshot(
+            pid: pid,
+            boxes: Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.offset + 1, $0.element.frame) }),
+            selector: selector,
+            windowTitle: target.title,
+            windowFrame: rect,
+            capturedAt: Date(),
+        )
+
+        let legend = rows.enumerated().map { index, row -> [String: Any] in
+            ["n": index + 1, "role": row.role, "label": row.label, "frame": block(for: row.frame)]
+        }
+        var reply: [String: Any] = [
+            "ok": true,
+            "map": canvas,
+            "elements": legend,
+            "groundedBy": groundedBy,
+            "rect": block(for: rect),
+            "token": String(token),
+            "count": legend.count,
+            "note": "box numbers are valid only for token \(token) — click one with `click --box N --token \(token)`",
+            "summary": "mapped \(legend.count) element(s) on '\(target.title)'",
+            "presence": presenceBlock(),
+        ]
+        if truncated {
+            reply["truncated"] = true
+            reply["truncationReason"] = "more than \(Constants.mapBoxCap) elements — narrow with --role, or read the full list with find"
+        }
+        return reply
+    }
+
+    /// Lays numbered markers onto a character grid sized to the window's aspect, inside a border
+    /// that stands for the window bounds. Each element's center maps to a cell; on a collision
+    /// the number slides to the nearest free run of cells on its row, then to a neighbouring row,
+    /// so two controls in the same place stay both visible rather than one overwriting the other.
+    nonisolated static func renderMap(_ markers: [(n: Int, center: CGPoint)], in rect: CGRect) -> String {
+        let columns = 62
+        // Character cells are about twice as tall as wide, so halve the vertical count to keep
+        // the drawing in proportion with the real window.
+        let aspect = rect.width > 0 ? rect.height / rect.width : 0.6
+        let interiorRows = max(6, min(28, Int((Double(columns) * aspect * 0.5).rounded())))
+        var grid = [[Character]](repeating: [Character](repeating: " ", count: columns), count: interiorRows)
+
+        func free(_ row: Int, _ col: Int, _ length: Int) -> Bool {
+            guard row >= 0, row < interiorRows, col >= 0, col + length <= columns else { return false }
+            return (col ..< col + length).allSatisfy { grid[row][$0] == " " }
+        }
+        func write(_ text: String, _ row: Int, _ col: Int) {
+            for (offset, character) in text.enumerated() { grid[row][col + offset] = character }
+        }
+        for marker in markers.sorted(by: { $0.center.y == $1.center.y ? $0.center.x < $1.center.x : $0.center.y < $1.center.y }) {
+            let label = String(marker.n)
+            let fx = rect.width > 0 ? (marker.center.x - rect.minX) / rect.width : 0.5
+            let fy = rect.height > 0 ? (marker.center.y - rect.minY) / rect.height : 0.5
+            let targetCol = min(max(Int((fx * Double(columns - label.count)).rounded()), 0), columns - label.count)
+            let targetRow = min(max(Int((fy * Double(interiorRows - 1)).rounded()), 0), interiorRows - 1)
+            var placed = false
+            // Spiral outward from the ideal cell: same row first (shift by the offset both ways),
+            // then adjacent rows, until a free run of `label.count` cells is found.
+            search: for radius in 0 ..< max(columns, interiorRows) {
+                for rowDelta in -radius ... radius {
+                    for colDelta in [radius, -radius] where radius > 0 || colDelta == radius {
+                        let row = targetRow + rowDelta, col = targetCol + colDelta
+                        if free(row, col, label.count) { write(label, row, col); placed = true; break search }
+                    }
+                    if radius == 0 { break }
+                }
+            }
+            _ = placed
+        }
+        let border = "+" + String(repeating: "-", count: columns) + "+"
+        let body = grid.map { "|" + String($0) + "|" }.joined(separator: "\n")
+        return border + "\n" + body + "\n" + border
+    }
+
+    /// Keeps the map snapshot store small and fresh — it holds only enough for the next
+    /// `click --box`, never a growing archive of every render.
+    private func pruneMapSnapshots() {
+        let cutoff = Date(timeIntervalSinceNow: -Constants.mapSnapshotTTL)
+        mapSnapshots = mapSnapshots.filter { $0.value.capturedAt > cutoff }
+        if mapSnapshots.count > Constants.mapSnapshotCap {
+            let survivors = mapSnapshots.sorted { $0.value.capturedAt > $1.value.capturedAt }
+                .prefix(Constants.mapSnapshotCap)
+            mapSnapshots = Dictionary(uniqueKeysWithValues: survivors.map { ($0.key, $0.value) })
+        }
+    }
+
+    /// Resolves `click --box N --token <t>` to a screen point, or a refusal. The box is clicked
+    /// only when the snapshot's window is still where it was: a stale box on a moved window would
+    /// click whatever now sits at those coordinates, the exact hazard §221 declines persistent
+    /// handles to avoid. Returns nil when no `box` was requested (an ordinary click).
+    private func resolveBox(_ request: Request) async -> (pid: pid_t, x: Double, y: Double, refusal: [String: Any]?)? {
+        guard let boxNumber = request.box.map({ Int($0) }) else { return nil }
+        func refuse(_ message: String) -> (pid_t, Double, Double, [String: Any]?) {
+            (0, 0, 0, ["ok": false, "error": message, "presence": presenceBlock()])
+        }
+        guard let token = request.token, let snapshot = mapSnapshots[token] else {
+            return refuse("no live map snapshot for that token — run `map` first, then click --box with the token it returns")
+        }
+        guard NSRunningApplication(processIdentifier: snapshot.pid) != nil else {
+            mapSnapshots[token] = nil
+            return refuse("the mapped app (pid \(snapshot.pid)) is no longer running — re-run map")
+        }
+        guard let frame = snapshot.boxes[boxNumber] else {
+            return refuse("box \(boxNumber) is not in snapshot \(token) (it numbered \(snapshot.boxes.count) element(s), 1–\(snapshot.boxes.count))")
+        }
+        // Freshness: the window must still be where the numbers were assigned. A moved or
+        // resized window means every cached box coordinate is now wrong. Re-resolve the exact
+        // window the map named — by its title when it has one, so a flipped main window or an
+        // overlay appearing over the app does not masquerade as the target having moved.
+        let freshnessSelector = snapshot.selector.isSpecified || snapshot.windowTitle.isEmpty
+            ? snapshot.selector
+            : WindowSelector(title: snapshot.windowTitle)
+        guard let live = try? await engine.titledWindowFrame(pid: snapshot.pid, window: freshnessSelector) else {
+            return refuse("the snapshot's window is gone — re-run map")
+        }
+        let liveFrame = CGRect(x: live.frame.x, y: live.frame.y, width: live.frame.width, height: live.frame.height)
+        guard framesMatch(liveFrame, snapshot.windowFrame) else {
+            return refuse("the window moved or resized since the snapshot — its box coordinates are stale; re-run map")
+        }
+        return (snapshot.pid, frame.midX, frame.midY, nil)
+    }
+
+    /// Two window frames are "the same window, unmoved" within a couple of points — the same
+    /// tolerance the tree cache's fingerprint treats as no change.
+    private func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 2 && abs(a.minY - b.minY) <= 2
+            && abs(a.width - b.width) <= 2 && abs(a.height - b.height) <= 2
     }
 
     /// The shared back half of every screenshot: store the frame for future diffs, hand out
@@ -2579,6 +2972,14 @@ final class CommandRouter {
         static let maximumScrollSearchSteps = 12
         /// An already-running app should answer almost immediately.
         static let relaunchReadySeconds = 5.0
+        /// Past this many markers the ASCII map is unreadable and a number keys nothing useful —
+        /// narrow with --role or read the full list with `find` instead.
+        static let mapBoxCap = 100
+        /// How long a map's numbering stays clickable. Long enough to read the map and act;
+        /// short enough that a stale layout is refused rather than clicked.
+        static let mapSnapshotTTL: TimeInterval = 5 * 60
+        /// A handful of recent maps, so parallel work on a few windows all keep their numbers.
+        static let mapSnapshotCap = 8
     }
 
     private func block(for rect: CGRect) -> [String: Any] {

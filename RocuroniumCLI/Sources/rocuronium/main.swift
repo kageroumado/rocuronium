@@ -24,6 +24,8 @@ Observe
   windows    --app <a>                     titles and frames
   find       --app <a> [--label <t>] [--role <r>] [--all] [--limit <n>] [--offset <n>] [--ocr]
   read       --app <a> [--label <t>] [--role <r>] [--since <token>] [--ocr]   text, or the delta
+  map        --app <a> [--role <r>] [--all]   ASCII layout of the interactable elements,
+                                              numbered; click one with `click --box N --token`
   wait       --app <a> (--label <t> [--role <r>] [--gone] | --for '<guard json>')
                         [--timeout <s, max 25>]
   screenshot [--app <a> | --x --y --w --h] [--path <f.png>] [--since <token>]
@@ -31,7 +33,7 @@ Observe
 
 Act — ghost first; every reply carries verdict, tentacle, attempts
   type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
-  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n>) [--observe]
+  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n> | --box <n> --token <t>) [--observe]
              [--button left|right] [--count 2] [--modifiers cmd,shift] [--foreground]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
   shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item;
@@ -54,12 +56,17 @@ Cursor paths — take the real cursor; refused while a human is present or an ap
 
 Windows
   resize     --app <a> --width <w> --height <h> [--x <px> --y <py>]   ghost AX resize/move
+  window     --app <a> (--fullscreen on|off | --minimize | --unminimize | --zoom) [--confirm]
+                        ghost window-state change; presence-gated like resize
   display    <acquire|release|status> [--reason <t>] [--minutes <n>] [--lease <id>]
   park       --app <a> [--x <n> --y <n>]   onto the virtual display, or back to a point
+  space      <list | switch (--next|--prev|--to <n>) [--confirm] | move --app <a> --to <n>>
+                        real Mission Control Spaces; switch is presence-gated like activate
 
 Meta
-  busy       [on|off] [--note <t>]           hold the presence overlay up while you work,
-                                             so "creature gone" means "nothing is coming"
+  busy       [on|off] [--note <t>]           hold the presence overlay up while you work;
+                                             --note is the human-visible reason (bezel headline,
+                                             ≤64 chars), so "creature gone" means "nothing coming"
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
@@ -166,8 +173,9 @@ if command == "mcp" {
 }
 
 var payload: [String: Any] = ["command": command]
-// `display` and `demo` take a positional subcommand: `rocuronium display acquire`.
-if command == "display" || command == "demo" || command == "busy", let action = arguments.first, !action.hasPrefix("-") {
+// `display`, `demo`, `busy`, and `space` take a positional subcommand: `rocuronium space switch`.
+if command == "display" || command == "demo" || command == "busy" || command == "space",
+   let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
 }
@@ -198,7 +206,7 @@ if command == "plan" {
         exit(2)
     }
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note", "token", "fullscreen"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
@@ -221,7 +229,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset", "box"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -256,6 +264,11 @@ if arguments.contains("--restore") { payload["restore"] = true }
 if arguments.contains("--observe") { payload["observe"] = true }
 if arguments.contains("--ocr") { payload["ocr"] = true }
 if arguments.contains("--all") { payload["all"] = true }
+if arguments.contains("--minimize") { payload["minimize"] = true }
+if arguments.contains("--unminimize") { payload["unminimize"] = true }
+if arguments.contains("--zoom") { payload["zoom"] = true }
+if arguments.contains("--next") { payload["next"] = true }
+if arguments.contains("--prev") { payload["prev"] = true }
 let wantsRawJSON = arguments.contains("--json")
 
 // MARK: - Transport
@@ -378,6 +391,20 @@ case "find":
     print("\n\(range) · \(reply["elementsVisited"] ?? 0) elements visited\(page)"
         + ((reply["truncated"] as? Bool == true) ? " · TRUNCATED" : ""))
 
+case "map":
+    print(reply["map"] as? String ?? "")
+    print("")
+    for element in reply["elements"] as? [[String: Any]] ?? [] {
+        let frame = element["frame"] as? [String: Any] ?? [:]
+        let position = frame.isEmpty ? "" : "  @(\(Int(frame["x"] as? Double ?? 0)),\(Int(frame["y"] as? Double ?? 0)))"
+        let label = element["label"] as? String ?? ""
+        let name = label.isEmpty ? "" : "  '\(label)'"
+        print("\(element["n"] ?? "?")  \(element["role"] ?? "?")\(name)\(position)")
+    }
+    print("\n\(reply["summary"] as? String ?? "")"
+        + ((reply["truncated"] as? Bool == true) ? "  · TRUNCATED (\(reply["truncationReason"] as? String ?? "narrow it"))" : ""))
+    if let token = reply["token"] as? String { print("token \(token)  — click one with: click --box <n> --token \(token)") }
+
 case "read" where reply["delta"] != nil:
     print(reply["delta"] as? String ?? "")
     print("\n\(reply["summary"] as? String ?? "")")
@@ -472,6 +499,32 @@ case "resize":
     if let before = frameText("before"), let after = frameText("after") {
         print("\(before)  →  \(after)")
     }
+
+case "space" where reply["displays"] != nil:
+    for display in reply["displays"] as? [[String: Any]] ?? [] {
+        print("display \(display["display"] ?? "?")  (\(display["identifier"] ?? "?"))")
+        for space in display["spaces"] as? [[String: Any]] ?? [] {
+            let active = space["active"] as? Bool == true ? "  ← active" : ""
+            print("  \(space["index"] ?? "?"). id \(space["id"] ?? "?")  [\(space["kind"] ?? "?")]\(active)")
+        }
+    }
+    print("\n\(reply["summary"] as? String ?? "")")
+
+case "space":
+    print(reply["summary"] as? String ?? "done")
+
+case "window":
+    print(reply["summary"] as? String ?? "done")
+    if let verdict = reply["verdict"] as? String { print("verdict: \(verdict)") }
+    func windowFrameText(_ key: String) -> String? {
+        guard let f = reply[key] as? [String: Any] else { return nil }
+        return "@(\(Int(f["x"] as? Double ?? 0)),\(Int(f["y"] as? Double ?? 0))) "
+            + "\(Int(f["w"] as? Double ?? 0))x\(Int(f["h"] as? Double ?? 0))"
+    }
+    if let before = windowFrameText("before"), let after = windowFrameText("after") {
+        print("\(before)  →  \(after)")
+    }
+    if let suggestion = reply["suggestion"] as? String { print("→ \(suggestion)") }
 
 case "park":
     print(reply["summary"] as? String ?? "done")

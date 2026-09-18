@@ -85,7 +85,7 @@ nonisolated enum EmbeddedSkill {
         File(path: "SKILL.md", contents: ##"""
 ---
 name: rocuronium
-description: Drive this Mac's UI from an agent — read the screen as text, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan).
+description: Drive this Mac's UI from an agent — read the screen as text, map a window's layout as ASCII, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, see where a window's controls sit, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, map, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan).
 ---
 
 # rocuronium
@@ -126,9 +126,9 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 ## Verb catalog
 
-**Observe** — `status`, `diag`, `apps`, `windows --app X`, `find`, `read`, `wait`, `screenshot`, `activity`.
+**Observe** — `status`, `diag`, `apps`, `windows --app X`, `find`, `read`, `map`, `wait`, `screenshot`, `activity`.
 **Act (ghost-first)** — `type`, `click`, `key`, `shortcut` (presses the menu item bound to keys), `menu` (by title path), `scroll`, `statusitem`, `launch`, `activate`, `plan`.
-**Windows** — `resize` (ghost AX resize/move), `display <acquire|release|status>`, `park`.
+**Windows** — `resize` (ghost AX resize/move), `window` (fullscreen/minimize/zoom), `space` (Mission Control Spaces: list/switch/move), `display <acquire|release|status>`, `park`.
 **Cursor paths (take the real cursor, presence-gated)** — `move`, `drag`.
 
 → Targeting (`--app`, the `--label` match tiers, icon-only buttons, `--window`, ambiguity) and the observe verbs in depth: **reference/targeting-and-observing.md**
@@ -140,7 +140,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 
 - Ghost verbs (tentacles 0–3) are the default and are safe while a human is present. Cursor-taking verbs (`move`, `drag`, `activate`, `key`/`click` with hardware input) are **refused while the screen is locked**, and while a human is present the overlay asks them on screen (a one-second hold on Y or N) unless you pass `--confirm`, which asserts the human already approved this in your harness — never pass it to get past a refusal; the reply's `consent` field then reads `asserted-by-caller`. Hardware delivery additionally needs `--allow-hardware-input`.
 - Every reply carries `presence` (`state`, `mayTakeCursor`, `canSee`, `advice`). A human arriving mid-task is visible on the next answer.
-- **Bracket a chain with `busy`** when a human may be watching: `busy on --note "<what you're doing>"` first, `busy off` when done. The overlay then stays up through the thinking between your calls, so its disappearance means "nothing more is coming". Self-releases after ~90 s of silence.
+- **Bracket a chain with `busy`** when a human may be watching: `busy on --note "<why you're driving>"` first, `busy off` when done. The `--note` is the **human-visible reason** — it becomes the bezel's headline (capped at 64 chars) with the mechanical per-action line beneath it, so a watching human reads *what you're trying to do*, not just the last step. Say the purpose ("tidying the Downloads folder"), not the mechanism. The overlay then stays up through the thinking between your calls, so its disappearance means "nothing more is coming"; it self-releases after ~90 s of silence, and `busy off` clears the reason.
 - **⌃⌥⇧⎋ is the emergency stop.** It halts the engine mid-action. Afterward every acting/perceiving verb is refused with "halted by the human"; `status`/`activity` still answer with `halted: true`. **Resume is a button in the menu-bar popover and nothing else — no socket verb can clear the halt.** If your verbs are suddenly refused with that message, stop and wait; do not look for a workaround.
 
 → The refusal catalog (each refusal, the flag that permits it, why it exists) and the presence model: **reference/presence-and-refusals.md**
@@ -163,7 +163,7 @@ Every acting verb is ghost-first and replies with the contract in reference/repl
 
 **`type --app X --text T [--label Y] [--submit]`** — through accessibility, `type` **sets the field's value to `T`**, replacing what was there, and confirms by read-back. When that write is refused or ignored, it falls through to keystrokes, which **insert at the caret** after a posted click on the field; `tentacle` in the reply says which happened, so read it before assuming either semantics. A value that changed but does not match (smart quotes) is reported `noEffect` and never retried, to avoid duplicating text. Search fields are special: the read-back confirms but SwiftUI's binding ignores the write, so it is undone and keystrokes are used. Rails: absent `--text` is refused (pass `""` explicitly to clear, because clearing is unrecoverable); a newline or tab is refused without `--submit`, because a newline in a composer sends. Electron accepts unicode keystrokes and ignores keycodes, so editing operations (clear, select-all) are accessibility writes there, never keystrokes.
 
-**`click --app X (--label Y [--role R] | --x N --y N)`** — accessibility press (or show-menu, for menu buttons and the remote controls System Settings panes host) → posted click → sting if permitted. An **accepted press ends the ladder** even when it verifies as `unverifiable` or `noEffect`; escalation to posted or hardware clicks happens only when the element exposes no press action. So a `noEffect` click does not mean "try harder", it means "look elsewhere for the consequence": `read --since`, the window list, a region screenshot. Window-count, whole-window pixel, and tree-diff evidence (`treeChanges`/`treeDelta`) are added automatically for the dialog-opening and button-elsewhere cases; `--observe` forces the tree diff on a window large enough that it would otherwise be skipped.
+**`click --app X (--label Y [--role R] | --x N --y N | --box N --token T)`** — accessibility press (or show-menu, for menu buttons and the remote controls System Settings panes host) → posted click → sting if permitted. `--box N --token T` clicks element **N** from a prior `map` (reference/targeting-and-observing.md): the token names the map, the number keys the element, and before acting the daemon re-checks the mapped window is still where it was — a window that moved or resized since is refused with "re-run map", never clicked at a stale coordinate. This is the *safer* way to click a mapped element than copying its `--x --y` out of the legend, which carries no such guard. An **accepted press ends the ladder** even when it verifies as `unverifiable` or `noEffect`; escalation to posted or hardware clicks happens only when the element exposes no press action. So a `noEffect` click does not mean "try harder", it means "look elsewhere for the consequence": `read --since`, the window list, a region screenshot. Window-count, whole-window pixel, and tree-diff evidence (`treeChanges`/`treeDelta`) are added automatically for the dialog-opening and button-elsewhere cases; `--observe` forces the tree diff on a window large enough that it would otherwise be skipped.
 
 `--button right` opens a context menu (through `AXShowMenu` where the element exposes it, cursor-free; a posted right-click otherwise — a menu appearing is the window-count change it confirms by). `--count 2` double-clicks; `--modifiers cmd,shift` holds those keys through the click. A non-plain click has no `AXPress` equivalent, so it skips tentacle 1 and is delivered as a posted (or, with `--allow-hardware-input`, hardware) event carrying the button, count, and flags — verified by pixels, tree, and window count, not a press read-back.
 
@@ -195,6 +195,8 @@ Both share the hazard rail: every app's menu bar includes the Apple menu, so `cm
 **`launch --app X [--confirm]`** — starts an app without taking focus and returns once its accessibility tree answers: `ready: true` means "you can drive it now", not "the process started" (20 s budget; 5 s when it was already running, reported `alreadyRunning`). Takes a name, a bundle id, or a full path. Refused while the frontmost app is fullscreen unless `--confirm`: a new window arriving switches Spaces and throws the human out of their game. `park` the target instead.
 
 **`activate --app X [--confirm]`** — brings an app forward on purpose, the one thing ghost verbs promise never to do, so it is presence-gated like hardware input, and refused outright while the frontmost app is fullscreen (activating another app switches Spaces and drops the human out of their game) unless `--confirm`. Read-back says whether it landed: macOS sometimes declines to promote an accessory (menu-bar, LSUIElement) app while a regular app holds focus, and the reply says so rather than claiming success. Use it when background delivery is not dependable: AppKit menus, WebKit hover.
+
+**`window --app X (--fullscreen on|off | --minimize | --unminimize | --zoom) [--confirm]`** — window-state changes with no cursor and no focus change. Ghost level 1: an `AXFullScreen`/`AXMinimized` attribute write, then the title-bar button (the green fullscreen light, the minimize/zoom buttons) when the attribute is absent or does not take, verified by reading the state (or, for zoom, the frame) back — `verdict` says what happened, `via` says which path delivered it, `before`/`after` carry the frames. Exactly one action per call. This is *window* fullscreen (the app takes its own Space); **in-content fullscreen** — a video or web page going fullscreen inside a view — is not a window attribute, so `click`/`key f` the page element for that. When neither attribute nor button takes, the reply's `suggestion` names the `menu`/`shortcut` path (some apps only wire fullscreen to the View menu). Presence-gated like `resize` — it visibly rearranges a window, and fullscreen switches Spaces — so it is refused while a human is present unless `--confirm`. Scopes with `--window`.
 
 **`resize --app X --width W --height H [--x PX --y PY]`** — sets a window's size (and, with both `--x`/`--y`, its position) by writing `kAXSizeAttribute`/`kAXPositionAttribute` — a ghost AX write, no cursor and no focus change. The answer for apps whose posted clicks read `noEffect` and whose AX name forces `--pid`: a Wine window will not accept a synthetic drag on its resize corner but will accept a size written directly. Width/height are in points, at least 1. The resulting frame is read back as evidence — `verdict: confirmed` when it landed within 2 pt, `unverifiable` when the window manager clamped it (a fixed- or bounded-size window), `noEffect` when nothing moved — with `before`/`after` frames. Pass both `--x` and `--y` to reposition too, or neither. Presence-gated like `activate`, since it visibly moves a window a person may be watching. Scopes with `--window` like the rest.
 
@@ -245,6 +247,16 @@ The headless virtual display is the strongest isolation available: windows parke
 The sting clicks whatever window is topmost at the coordinate, so a hardware click on an occluded target is refused with the occluder named. The reliable sequence when hardware input is truly needed:
 
     park --app X  →  act with --allow-hardware-input  →  park --app X --x --y (the before block)
+
+## Real Spaces vs the virtual display
+
+`space` drives Mission Control Spaces — what you want for *testing* an app across Spaces, as opposed to hiding work on the virtual display.
+
+- `space list` — the Spaces per display, each with a 1-based index, id, kind (user/fullscreen/system), and which is active. Read-only.
+- `space switch (--next | --prev | --to <index>)` — moves the display to another Space. This **changes what the human sees on their real display**, so it is *not* ghost: gated like `activate` — refused while a human is present unless `--confirm`. This is exactly why the virtual display, not Space-switching, remains the answer for invisible agent work.
+- `space move --app X [--window …] --to <index>` — sends a window to another Space without switching to it. Non-disruptive to the current view, so it is un-gated and just reported.
+
+Built on the same private SkyLight/CGS footing as the virtual display; `space list` degrades to empty rather than lying if the API is mid-transition.
 
 """##),
         File(path: "reference/plans.md", contents: ##"""
@@ -424,6 +436,24 @@ One frame everywhere: **points** in the global display space, origin at the **to
     AXButton  (button)  @(1448,698)  near right of 'Back'  depth 7
     …
     5 shown · 994 elements visited
+
+**`map --app X [--role R] [--all]`** — the positioning `find` loses, as pure text. Returns `map` (a bordered ASCII grid with each interactable element numbered where it sits in the window), `elements` (the legend: `{n, role, label, frame}` per number), and a `token`. Accessibility-only in the common case — no Screen Recording, works behind a lock — falling through to vision rows (detector boxes, icon controls included) only when the tree exposes no interactable element. By default it places the elements a human clicks (buttons, links, fields, checkboxes, …); `--all` widens to every framed element, `--role` narrows to one kind, capped at 100 markers. Read the layout without a model paying vision tokens on a screenshot, then click a number with **`click --box N --token <t>`** — which re-checks the window has not moved before it acts, so a stale number is refused, never clicked at the wrong place. The numbers are valid only for that token (§ no persistent handles).
+
+    map --app Rocuronium
+    +--------------------------------------------------------------+
+    |                                                              |
+    |   1                                                          |
+    |          2            3                                      |
+    |   4                                                          |
+    |                                                              |
+    +--------------------------------------------------------------+
+
+    1  AXButton  'Tap Target'  @(760,318)
+    2  AXCheckBox  'Demo Switch'  @(792,392)
+    3  AXTextField  @(940,392)
+    4  AXSlider  @(760,470)
+    mapped 4 element(s) on 'Rocuronium Demo Stage'
+    token map-8f2a1c…  — click one with: click --box 1 --token map-8f2a1c…
 
 **`read --app X [--label Y] [--role R] [--since T] [--ocr]`** — the app's text through accessibility: static text, field values, button titles, checked states, indented by depth, with every interactive element's role shown so you know it can be acted on. Orders of magnitude cheaper than a screenshot, and it works behind a locked screen. Budgets: 20 000 elements, 30 000 characters, 4 000 per value, depth 40, 18 s; the reply carries `truncationReason` when one bit. A web area that yields no text is reported as **hidden, not blank**, with a referral to the channel that can read the DOM. When the whole-window walk finds no text and Screen Recording is granted, `read` **falls back to OCR** automatically; `--ocr` forces it. Vision rows come back as `{role: OCRText, value: <text>, frame}` in reading order (scope `window (OCR)`, `groundedBy: ocr`), with no token or delta — there is no tree walk to diff. When the **UI Detector** model is installed, control boxes join the text as `{role: UIElement, value, frame, groundedBy: detector, confidence}` (scope `window (vision)`), so an icon toolbar reads as addressable controls rather than blank space.
 

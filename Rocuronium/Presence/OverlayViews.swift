@@ -525,21 +525,29 @@ struct BezelView: View {
                 BezelMarkView(model: model)
                     .frame(width: 30, height: 38)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(model.narration)
+                    // The headline is the agent's declared reason when it set one (busy --note);
+                    // otherwise the last action. So a watching human reads *why* first, and the
+                    // mechanical step drops to the line beneath — never just "no live map snapshot"
+                    // with no clue what the agent was even attempting.
+                    Text(model.intent.isEmpty ? model.narration : model.intent)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(width: 300, alignment: .leading)
                     HStack(spacing: 6) {
-                        Text("Agent session")
+                        // With an intent up top, this line carries the live action; without one it
+                        // is the plain session label. Either way the elapsed clock follows.
+                        Text(model.intent.isEmpty
+                            ? "Agent session"
+                            : (model.narration.isEmpty ? "Agent session" : model.narration))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Text(elapsed(at: timeline.date))
                             .monospacedDigit()
                     }
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                    // Never compressed: squeezable text under-reports the window's
-                    // fitting size, and the whole bezel then renders cramped.
-                    .fixedSize()
+                    .frame(width: 300, alignment: .leading)
                 }
                 Divider()
                     .frame(height: 26)
