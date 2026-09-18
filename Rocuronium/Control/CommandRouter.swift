@@ -2571,8 +2571,8 @@ final class CommandRouter {
     /// handles to avoid. Returns nil when no `box` was requested (an ordinary click).
     private func resolveBox(_ request: Request) async -> (pid: pid_t, x: Double, y: Double, refusal: [String: Any]?)? {
         guard let boxNumber = request.box.map({ Int($0) }) else { return nil }
-        func refuse(_ message: String) -> (pid_t, Double, Double, [String: Any]?) {
-            (0, 0, 0, ["ok": false, "error": message, "presence": presenceBlock()])
+        func refuse(_ message: String) -> (pid: pid_t, x: Double, y: Double, refusal: [String: Any]?) {
+            (pid: 0, x: 0, y: 0, refusal: ["ok": false, "error": message, "presence": presenceBlock()])
         }
         guard let token = request.token, let snapshot = mapSnapshots[token] else {
             return refuse("no live map snapshot for that token — run `map` first, then click --box with the token it returns")
@@ -2598,7 +2598,7 @@ final class CommandRouter {
         guard framesMatch(liveFrame, snapshot.windowFrame) else {
             return refuse("the window moved or resized since the snapshot — its box coordinates are stale; re-run map")
         }
-        return (snapshot.pid, frame.midX, frame.midY, nil)
+        return (pid: snapshot.pid, x: Double(frame.midX), y: Double(frame.midY), refusal: nil)
     }
 
     /// Two window frames are "the same window, unmoved" within a couple of points — the same
