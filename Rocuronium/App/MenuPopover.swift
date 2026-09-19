@@ -32,7 +32,9 @@ struct MenuPopover: View {
     }
 
     private var content: some View {
-        GlassEffectContainer(spacing: Theme.Space.md) {
+        // Zero blend distance: the footer's controls sit closer together than any nonzero
+        // spacing would allow before their glass starts pooling into one shape.
+        GlassEffectContainer(spacing: 0) {
             VStack(alignment: .leading, spacing: Theme.Space.md) {
                 header
                 heroCard
@@ -85,7 +87,7 @@ struct MenuPopover: View {
                 overlayToggleCard
                 bottomBar
             }
-            .padding(Theme.Space.lg)
+            .popoverContainer()
         }
         .task { engine.refreshSkillState() }
     }
@@ -375,36 +377,14 @@ struct MenuPopover: View {
                 StateChip(text: "locked", systemImage: "lock.fill")
             }
             Spacer(minLength: 0)
-            GlassEffectContainer(spacing: Theme.Space.sm) {
-                HStack(spacing: Theme.Space.sm) {
-                    Button {
-                        engine.showSettings()
-                    } label: {
-                        Image(systemName: "gearshape").frame(width: 16, height: 16)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                    .help("Settings — models, preferences")
-                    Button {
-                        engine.showDemoStage()
-                    } label: {
-                        Image(systemName: "theatermasks").frame(width: 16, height: 16)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                    .help("Open the demo stage — deterministic targets for every verb")
-                    Button {
-                        NSApplication.shared.terminate(nil)
-                    } label: {
-                        // `xmark`, not `power`: a power glyph in a Mac context reads as
-                        // "shut down the Mac" — the wrong mental model for quitting the app.
-                        Image(systemName: "xmark").frame(width: 16, height: 16)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                    .help("Quit Rocuronium — the control socket goes with it")
-                }
-            }
+            FooterIconButton("Settings", systemImage: "gearshape") { engine.showSettings() }
+                .help("Settings — models, preferences")
+            FooterIconButton("Demo Stage", systemImage: "theatermasks") { engine.showDemoStage() }
+                .help("Open the demo stage — deterministic targets for every verb")
+            // `xmark`, not `power`: a power glyph in a Mac context reads as "shut down the
+            // Mac" — the wrong mental model for quitting the app.
+            FooterIconButton("Quit Rocuronium", systemImage: "xmark") { NSApplication.shared.terminate(nil) }
+                .help("Quit Rocuronium — the control socket goes with it")
         }
     }
 }
