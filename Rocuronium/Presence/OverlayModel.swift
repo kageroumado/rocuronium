@@ -91,7 +91,7 @@ final class OverlayModel {
     /// While a confirm key is held, which answer it is and how far toward the 1 s threshold —
     /// drives the fill on the Yes/No affordance so a hold reads as deliberate, and a tap does
     /// nothing. `true` = yes, `false` = no.
-    var consentHold: (answer: Bool, fraction: Double)?
+    var consentHold: (answer: ConsentAnswer, fraction: Double)?
     /// The bezel window's frame, in the effects window's top-left coordinates — home for
     /// the jellyfish's perch, kept current as the human drags the bezel around.
     var bezelFrame: CGRect?

@@ -23,7 +23,7 @@ final class PresenceOverlayController {
     private var bezelMoveObserver: (any NSObjectProtocol)?
     private let hotkey = HotkeyMonitor()
     private let consentKeys = ConsentHotkeys()
-    private var consentContinuation: CheckedContinuation<Bool, Never>?
+    private var consentContinuation: CheckedContinuation<ConsentAnswer, Never>?
     private var lingerTask: Task<Void, Never>?
     /// True between `beginHold` and `endHold`: the agent has declared a work bracket, so the
     /// chrome stays up through the thinking and waiting between commands — not just for the
@@ -158,10 +158,10 @@ final class PresenceOverlayController {
     /// Ask the human at the machine to approve a disruptive action, and block on the answer.
     /// The socket call awaits this, so the whole point is that it resolves quickly: a one-second
     /// hold on **Y** or **N**, or the timeout (treated as no) well inside the socket's 30 s.
-    func requestConsent(prompt: String, detail: String) async -> Bool {
+    func requestConsent(prompt: String, detail: String) async -> ConsentAnswer {
         // Resolve any prompt already standing (only one at a time) as a decline before opening
         // the new one — a stale continuation must never be abandoned unresumed.
-        if consentContinuation != nil { resolveConsent(false) }
+        if consentContinuation != nil { resolveConsent(.decline) }
 
         appearForAction()
         model.phase = .needsHuman
@@ -188,7 +188,7 @@ final class PresenceOverlayController {
         let deadline = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(Constants.consentTimeout))
             guard !Task.isCancelled else { return }
-            self?.resolveConsent(false)
+            self?.resolveConsent(.decline)
         }
         defer { deadline.cancel() }
 
@@ -197,7 +197,7 @@ final class PresenceOverlayController {
         }
     }
 
-    private func resolveConsent(_ answer: Bool) {
+    private func resolveConsent(_ answer: ConsentAnswer) {
         guard let continuation = consentContinuation else { return }
         consentContinuation = nil
         consentKeys.stop()
@@ -205,7 +205,11 @@ final class PresenceOverlayController {
         model.consent = nil
         model.consentHold = nil
         model.phase = .idle
-        model.narration = answer ? "Approved — proceeding" : "Declined"
+        model.narration = switch answer {
+        case .approve: "Approved — proceeding"
+        case .approveForAWhile: "Approved for \(StandingApproval.minutes) minutes — proceeding"
+        case .decline: "Declined"
+        }
         model.lastEngagement = Date()
         restartLinger()
         continuation.resume(returning: answer)

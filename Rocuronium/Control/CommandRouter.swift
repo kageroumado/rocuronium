@@ -48,6 +48,7 @@ final class CommandRouter {
         PresenceOverlayController.shared = overlay
         PresenceOverlayController.installRelayHooks()
         overlay.onEmergencyStop = { [activityLog] in
+            StandingApproval.end()
             activityLog.append(
                 action: "halt", target: "⌃⌥⇧⎋",
                 verdict: "halted",
@@ -594,6 +595,7 @@ final class CommandRouter {
             "virtualDisplayActive": virtualDisplay.activeLease != nil,
             "displayHold": adrafinil.isHolding ? (adrafinil.mechanism ?? "internal") : "none",
             "halted": EmergencyStop.isHalted,
+            "standingApprovalSeconds": StandingApproval.secondsLeft,
         ]
         // Why the halt happened — the ⌃⌥⇧⎋ press, or a plan that paused for the human — so a
         // halted agent learns more than the generic refusal string tells it.
@@ -1295,9 +1297,24 @@ final class CommandRouter {
             consentOutcome = "asserted-by-caller"
             return true
         }
-        let granted = await overlay.requestConsent(prompt: prompt, detail: detail)
-        consentOutcome = granted ? "approved" : "declined"
-        return granted
+        if StandingApproval.isStanding {
+            // The human already answered for this stretch of work; the reply and the activity
+            // log say which approval let the action through.
+            consentOutcome = "standing-approval"
+            return true
+        }
+        switch await overlay.requestConsent(prompt: prompt, detail: detail) {
+        case .approve:
+            consentOutcome = "approved"
+            return true
+        case .approveForAWhile:
+            StandingApproval.grant()
+            consentOutcome = "approved-for-\(StandingApproval.minutes)-minutes"
+            return true
+        case .decline:
+            consentOutcome = "declined"
+            return false
+        }
     }
 
     /// The refusal a declined (or unanswered) consent returns — the same shape as the old
