@@ -4,6 +4,8 @@
 
 **Drive this Mac without taking the cursor.**
 
+<a href="https://kagerou.glass/get/rocuronium?from=readme"><img src=".github/download.svg" alt="Download Rocuronium for Mac" width="360" height="80"></a><br><sub>A signed, notarized disk image · free and open source (MIT)</sub>
+
 A menu bar daemon that lets an AI agent see and operate macOS — read text, click buttons,
 type, scroll, drag, draw — while the human keeps their cursor, their focus, and a kill
 switch. Every action returns **evidence** of what observably happened, because
@@ -58,7 +60,7 @@ parsed rows, and `groundedBy` on every row says which tier answered.
 brew install kageroumado/tap/rocuronium
 ```
 
-Or download the DMG from [Releases](https://github.com/kageroumado/rocuronium/releases).
+Or [download the DMG](https://kagerou.glass/get/rocuronium?from=readme) of the latest release.
 
 Grant **Accessibility** (required) and **Screen Recording** (for screenshots and
 `scroll --until-text` OCR) in System Settings > Privacy & Security.
