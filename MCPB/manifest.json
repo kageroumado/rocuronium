@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "rocuronium",
+  "display_name": "Rocuronium",
+  "version": "0.0.0",
+  "description": "Drive this Mac without taking the cursor: read, click, type, and scroll any app, with evidence.",
+  "long_description": "Rocuronium lets an agent see and operate macOS through accessibility and per-process posted events, so the human keeps their cursor, their focus, and a kill switch (Ctrl+Option+Shift+Escape). Every acting tool returns a verdict (confirmed, noEffect, unverifiable) from what observably changed, because accessibility APIs routinely report success for actions that did nothing.\n\nThis bundle is the MCP server: the signed, notarized `rocuronium` CLI from the Rocuronium release. It speaks to the Rocuronium menu bar app, which holds the Accessibility and Screen Recording grants, so the app must be installed and running: `brew install kageroumado/tap/rocuronium`, or the disk image from https://kagerou.glass/get/rocuronium.",
+  "author": {
+    "name": "kageroumado",
+    "url": "https://kagerou.glass"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kageroumado/rocuronium"
+  },
+  "homepage": "https://github.com/kageroumado/rocuronium",
+  "documentation": "https://github.com/kageroumado/rocuronium#readme",
+  "support": "https://github.com/kageroumado/rocuronium/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/rocuronium",
+    "mcp_config": {
+      "command": "${__dirname}/server/rocuronium",
+      "args": ["mcp"],
+      "env": {}
+    }
+  },
+  "tools": [],
+  "tools_generated": false,
+  "keywords": ["macos", "accessibility", "automation", "computer-use", "agent", "ui"],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": ["darwin"]
+  }
+}
