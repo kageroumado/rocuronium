@@ -14,7 +14,7 @@
     "type": "git",
     "url": "https://github.com/kageroumado/rocuronium"
   },
-  "homepage": "https://github.com/kageroumado/rocuronium",
+  "homepage": "https://kagerou.glass/rocuronium/",
   "documentation": "https://github.com/kageroumado/rocuronium#readme",
   "support": "https://github.com/kageroumado/rocuronium/issues",
   "icon": "icon.png",
@@ -23,15 +23,26 @@
     "entry_point": "server/rocuronium",
     "mcp_config": {
       "command": "${__dirname}/server/rocuronium",
-      "args": ["mcp"],
+      "args": [
+        "mcp"
+      ],
       "env": {}
     }
   },
   "tools": [],
   "tools_generated": false,
-  "keywords": ["macos", "accessibility", "automation", "computer-use", "agent", "ui"],
+  "keywords": [
+    "macos",
+    "accessibility",
+    "automation",
+    "computer-use",
+    "agent",
+    "ui"
+  ],
   "license": "MIT",
   "compatibility": {
-    "platforms": ["darwin"]
+    "platforms": [
+      "darwin"
+    ]
   }
 }

@@ -1,10 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.kageroumado/rocuronium",
+  "name": "glass.kagerou/rocuronium",
   "title": "Rocuronium",
   "description": "Drive macOS apps without taking the cursor: read, click, type, scroll, each with evidence.",
   "version": "1.2.0",
-  "websiteUrl": "https://github.com/kageroumado/rocuronium",
+  "websiteUrl": "https://kagerou.glass/rocuronium/",
   "repository": {
     "url": "https://github.com/kageroumado/rocuronium",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "mcpb",
       "identifier": "https://github.com/kageroumado/rocuronium/releases/download/v1.2/rocuronium-1.2.mcpb",
       "version": "1.2.0",
-      "fileSha256": "49d275ee6d77729686edc5752cab4fb59a8bfc8cbfd0c67be5f24aaef0bc3c8d",
+      "fileSha256": "c38117e9f3b0f79e565f971b8fb1e42c89e3b1b883bad93a1906d7629105ccc4",
       "transport": {
         "type": "stdio"
       }
