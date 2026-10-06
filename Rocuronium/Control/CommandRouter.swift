@@ -1285,6 +1285,26 @@ final class CommandRouter {
         }
         let pid = try resolve(request)
 
+        // A chord reaches the app's key-equivalent dispatch, which fires the menu item that
+        // carries it — so `key cmd+shift+q` is Apple ▸ Log Out and `key cmd+delete` is Move to
+        // Trash. The `shortcut` rail applies here too: a chord a hazardous item carries is
+        // refused without `confirm`.
+        if request.confirm != true,
+           let hazard = try? await engine.pressShortcut(pid: pid, keys: keys, mode: .resolveOnly)
+        {
+            if let consequence = hazard.hazard {
+                return [
+                    "ok": false,
+                    "error": "'\(keys)' is the key equivalent of '\(hazard.menuPath)', which \(consequence). "
+                        + "Pass confirm:true if that is genuinely intended.",
+                    "menuItem": hazard.menuPath,
+                    "hazard": consequence,
+                    "requiresConfirm": true,
+                    "presence": presenceBlock(),
+                ]
+            }
+        }
+
         var delivery: Engine.KeyDelivery = .process
         if request.allowHardwareInput == true {
             let presence = UserPresence.read()

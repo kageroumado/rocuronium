@@ -161,31 +161,30 @@ struct HardwareAimTests {
 
     /// A real Return, Tab, Escape or Delete would submit, move focus, cancel or erase past the
     /// `--submit` rail, so control characters get no stroke even from a map that has one.
-    @Test func controlCharactersGetNoStroke() {
-        let map: [String: KeyLayout.Stroke] = [
+    @Test func controlCharactersGetNoKey() {
+        let layout = KeyboardLayout(keys: [
             "\r": .init(keyCode: 36, shift: false), "\t": .init(keyCode: 48, shift: false),
             "\u{1b}": .init(keyCode: 53, shift: false), "\u{8}": .init(keyCode: 51, shift: false),
             "\u{7f}": .init(keyCode: 117, shift: false), "r": .init(keyCode: 15, shift: false),
-        ]
-        for control in ["\n", "\r", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{2028}", "\u{200b}"] {
-            #expect(KeyLayout.stroke(for: control, in: map) == nil)
+        ])
+        for control: Character in ["\n", "\r", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{2028}", "\u{200b}"] {
+            #expect(layout.key(for: control) == nil)
         }
-        #expect(KeyLayout.stroke(for: "r", in: map)?.keyCode == 15)
-        #expect(KeyLayout.stroke(for: "👍", in: map) == nil)
+        #expect(layout.key(for: "r")?.keyCode == 15)
+        #expect(layout.key(for: "👍") == nil)
     }
 
     /// The live layout: letters and space map to real keys, and no control character is in
-    /// the map at all.
+    /// the table at all.
     @MainActor
     @Test func currentLayoutMapsPrintableCharactersOnly() {
-        let map = KeyLayout.currentMap()
-        #expect(!map.isEmpty)
-        #expect(map.keys.allSatisfy(KeyLayout.isPrintable))
-        for control in ["\r", "\n", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{3}"] {
-            #expect(map[control] == nil)
+        let layout = KeyboardLayout.current(asciiCapable: false)
+        #expect(layout.keys.keys.allSatisfy(KeyboardLayout.isPrintable))
+        for control: Character in ["\r", "\n", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{3}"] {
+            #expect(layout.keys[control] == nil)
         }
-        #expect(map[" "] != nil)
-        #expect(map["r"] != nil)
-        #expect(map["R"]?.shift == true)
+        #expect(layout.key(for: " ") != nil)
+        #expect(layout.key(for: "r") != nil)
+        #expect(layout.key(for: "R")?.shift == true)
     }
 }

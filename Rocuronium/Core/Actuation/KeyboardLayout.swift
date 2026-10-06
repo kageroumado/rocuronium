@@ -1,9 +1,15 @@
 import Carbon.HIToolbox
 import CoreGraphics
 
-/// Which physical key types a printable character — what `key --keys cmd+=` needs to post a
-/// keycode for "=". A keycode names a key position, not a character, so the answer depends on
-/// the keyboard layout: on AZERTY "a" is keycode 0x0C, not 0x00.
+/// Which physical key types a printable character. A keycode names a key position, not a
+/// character, so the answer depends on the keyboard layout: on AZERTY "a" is keycode 0x0C,
+/// not 0x00. Two callers: `key --keys cmd+=` needs a keycode for "=", and the hardware
+/// tentacle stamps each typed character with its real keycode, because games and Wine read the
+/// keycode and ignore the unicode payload — keycode 0 reads as the A key to them.
+///
+/// Control characters never get a key: a real Return, Tab, Escape or Delete submits, moves
+/// focus, cancels or erases, and `type` admits a newline only behind `--submit` — so they keep
+/// the keycode-0 + unicode-payload path, whose meaning is the toolkit's to interpret.
 nonisolated struct KeyboardLayout: Sendable {
     struct Key: Sendable, Equatable {
         let keyCode: CGKeyCode
@@ -15,7 +21,20 @@ nonisolated struct KeyboardLayout: Sendable {
     let keys: [Character: Key]
 
     func key(for character: Character) -> Key? {
-        keys[character] ?? character.lowercased().first.flatMap { keys[$0] }
+        guard Self.isPrintable(character) else { return nil }
+        return keys[character] ?? character.lowercased().first.flatMap { keys[$0] }
+    }
+
+    /// Every scalar is visible text or a space: no control (Cc), format (Cf), surrogate,
+    /// private-use, unassigned, or line/paragraph separator scalars.
+    static func isPrintable(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format, .surrogate, .privateUse, .unassigned,
+                 .lineSeparator, .paragraphSeparator: false
+            default: true
+            }
+        }
     }
 
     /// The ANSI US layout. The fallback when the current layout cannot be read (an input
@@ -42,11 +61,14 @@ nonisolated struct KeyboardLayout: Sendable {
         return KeyboardLayout(keys: keys)
     }()
 
-    /// The current ASCII-capable layout, read through `UCKeyTranslate`; ANSI when it cannot
-    /// be read. Text Input Sources must be queried on the main thread.
+    /// The current layout, read through `UCKeyTranslate`; ANSI when it cannot be read.
+    /// `asciiCapable` reads the ASCII-capable layout a chord's letters live on; otherwise the
+    /// selected layout, the one a human would type text with. Text Input Sources must be
+    /// queried on the main thread.
     @MainActor
-    static func current() -> KeyboardLayout {
-        guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+    static func current(asciiCapable: Bool = true) -> KeyboardLayout {
+        let selected = asciiCapable ? nil : TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+        guard let source = selected ?? TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
               let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
         else { return ansi }
         let data = Unmanaged<CFData>.fromOpaque(pointer).takeUnretainedValue() as Data
@@ -68,7 +90,7 @@ nonisolated struct KeyboardLayout: Sendable {
                         OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeyState, characters.count, &length, &characters,
                     )
                     guard status == noErr, length == 1,
-                          let scalar = Unicode.Scalar(characters[0]), scalar.value >= 0x20, scalar.value != 0x7F
+                          let scalar = Unicode.Scalar(characters[0]), isPrintable(Character(scalar))
                     else { continue }
                     let key = Key(keyCode: CGKeyCode(code), shift: shift)
                     if shift {

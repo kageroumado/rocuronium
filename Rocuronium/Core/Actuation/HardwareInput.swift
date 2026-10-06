@@ -506,7 +506,7 @@ nonisolated enum HardwareInput {
     static func type(_ text: String, onlyWhileFrontmost target: pid_t) async -> String {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
-        let layout = await MainActor.run { KeyLayout.currentMap() }
+        let layout = await MainActor.run { KeyboardLayout.current(asciiCapable: false) }
         var delivered = ""
         // Per-scalar UTF-16 payloads, not `UniChar(scalar.value)` — that truncating
         // conversion traps on any non-BMP scalar. See `EventPoster.utf16Payloads`.
@@ -518,7 +518,7 @@ nonisolated enum HardwareInput {
             // The real key for the character, so keycode readers (games, Wine) see the key a
             // human would press; a character no key types keeps keycode 0 and relies on the
             // payload alone.
-            let stroke = KeyLayout.stroke(for: String(scalars[index]), in: layout)
+            let stroke = layout.key(for: Character(scalars[index]))
             let keyCode = stroke?.keyCode ?? 0
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)

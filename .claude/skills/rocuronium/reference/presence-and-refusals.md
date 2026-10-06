@@ -24,7 +24,7 @@ Refusals are rails, not failures. Each names the flag that permits the act; pass
 |---|---|---|---|
 | control character in text | `type` | `--submit` | a newline in a composer sends the message |
 | absent text | `type` | pass `""` | clearing a field is unrecoverable |
-| session-ending or data-destroying menu item | `shortcut`, `menu` | `--confirm` | `cmd+shift+q` is Log Out from any app |
+| session-ending or data-destroying menu item | `shortcut`, `menu`, a `key` chord that item carries | `--confirm` | `cmd+shift+q` is Log Out from any app |
 | a human is present | `activate`, `move`, `drag`, hardware `key` | `--confirm` | focus and cursor belong to the human |
 | frontmost app is fullscreen | `launch`, `activate`, `move`, `drag` | `--confirm` | bringing another app forward switches Spaces, dropping the human out of the game |
 | resizing the frontmost fullscreen app | `resize` | `--confirm` | its window would leave its fullscreen Space |
