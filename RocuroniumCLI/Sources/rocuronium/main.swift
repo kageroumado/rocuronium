@@ -225,18 +225,21 @@ for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", 
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
-// `key`/`shortcut` take the chord as --keys, and also as --key or a bare trailing word
+// `key`/`shortcut` take the chord as --keys, and also as --key or a bare word
 // (`key --app X escape`) — the two spellings callers reach for besides the documented one.
 if command == "key" || command == "shortcut", payload["keys"] == nil {
     if let found = value(for: "key") {
         payload["keys"] = found
-    } else if let last = arguments.last, !last.hasPrefix("--") {
+    } else {
         // A bare word is positional unless it is the value of the flag before it; the flags
         // these two verbs take without a value are the only flags it may follow.
         let switches: Set<String> = ["--allow-hardware-input", "--confirm", "--resolve-only", "--observe", "--json"]
-        let previous = arguments.count >= 2 ? arguments[arguments.count - 2] : nil
-        if previous.map({ !$0.hasPrefix("--") || switches.contains($0) }) ?? true {
-            payload["keys"] = last
+        for (index, word) in arguments.enumerated() where !word.hasPrefix("--") {
+            let previous = index > 0 ? arguments[index - 1] : nil
+            if previous.map({ !$0.hasPrefix("--") || switches.contains($0) }) ?? true {
+                payload["keys"] = word
+                break
+            }
         }
     }
 }

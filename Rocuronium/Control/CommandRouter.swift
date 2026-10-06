@@ -1288,25 +1288,22 @@ final class CommandRouter {
         // A chord reaches the app's key-equivalent dispatch, which fires the menu item that
         // carries it — so `key cmd+shift+q` is Apple ▸ Log Out and `key cmd+delete` is Move to
         // Trash. The `shortcut` rail applies here too: a chord a hazardous item carries is
-        // refused without `confirm`. The check fails closed: only "no menu item carries this
-        // chord" lets the key through; a resolve that cannot run (display asleep, a menu bar
-        // that will not answer) is not evidence the chord is harmless.
+        // refused without `confirm`. Every item carrying the chord is judged, and the check
+        // fails closed: a menu that could not be fully searched (display asleep, a menu bar
+        // past the walk cap) is not evidence the chord is harmless.
         if request.confirm != true {
             do {
-                let resolved = try await engine.pressShortcut(pid: pid, keys: keys, mode: .resolveOnly)
-                if let consequence = resolved.hazard {
+                if let (menuPath, consequence) = try await engine.hazardousShortcutItem(pid: pid, keys: keys) {
                     return [
                         "ok": false,
-                        "error": "'\(keys)' is the key equivalent of '\(resolved.menuPath)', which \(consequence). "
+                        "error": "'\(keys)' is the key equivalent of '\(menuPath)', which \(consequence). "
                             + "Pass confirm:true if that is genuinely intended.",
-                        "menuItem": resolved.menuPath,
+                        "menuItem": menuPath,
                         "hazard": consequence,
                         "requiresConfirm": true,
                         "presence": presenceBlock(),
                     ]
                 }
-            } catch let error as Engine.EngineError where error.isNotFound {
-                // No menu item carries the chord, so key-equivalent dispatch fires no item.
             } catch {
                 return [
                     "ok": false,

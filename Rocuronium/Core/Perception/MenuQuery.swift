@@ -213,6 +213,42 @@ nonisolated enum MenuQuery {
         return best?.match
     }
 
+    /// Every menu item that carries the chord in any of its encodings, and whether the walk
+    /// stopped at its cap first. For the hazard rail, which must not judge a chord by its
+    /// best-ranked item alone: key-equivalent dispatch may fire another encoding, and a
+    /// truncated walk has not seen every item.
+    static func allItems(for shortcut: Shortcut, in menuBar: AXElement) -> (matches: [Match], truncated: Bool) {
+        var visited = 0
+        var matches: [Match] = []
+        collect(menuBar, shortcut: shortcut, path: [], depth: 0, visited: &visited, matches: &matches)
+        return (matches, visited > Constants.maximumItemsVisited)
+    }
+
+    private static func collect(
+        _ element: AXElement, shortcut: Shortcut, path: [String], depth: Int, visited: inout Int,
+        matches: inout [Match]
+    ) {
+        guard depth <= Constants.maximumDepth else { return }
+        for child in element.children {
+            visited += 1
+            guard visited <= Constants.maximumItemsVisited else { return }
+            let title = child.string(kAXTitleAttribute) ?? ""
+            if child.role == "AXMenuItem", rank(child, shortcut) != nil {
+                matches.append(Match(
+                    element: child,
+                    path: (path + [title]).filter { !$0.isEmpty }.joined(separator: " ▸ "),
+                    enabled: (child.attribute(kAXEnabledAttribute) as? Bool) ?? true,
+                ))
+                continue
+            }
+            collect(
+                child, shortcut: shortcut,
+                path: title.isEmpty || child.role == "AXMenu" ? path : path + [title],
+                depth: depth + 1, visited: &visited, matches: &matches,
+            )
+        }
+    }
+
     // MARK: - Path matching
 
     /// Splits "File ▸ Export…" (or "File > Export") into components. Both separators are

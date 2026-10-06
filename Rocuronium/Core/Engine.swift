@@ -199,6 +199,7 @@ actor Engine {
         case menuPathNotFound(component: String, available: [String])
         case menuPathIsSubmenu(path: String, items: [String])
         case pathRefused(String)
+        case menuNotSearchable(String)
         /// A sting refusal because another app's window covers the action point. Carries a
         /// machine-readable `suggestion` (typically a `park` invocation) that the router
         /// surfaces alongside the error — a suggestion, never an action taken unilaterally:
@@ -237,7 +238,7 @@ actor Engine {
                 "No menu item '\(component)' at that level. It offers: \(available.joined(separator: ", "))."
             case let .menuPathIsSubmenu(path, items):
                 "'\(path)' is a submenu, not an item — pressing it would only open it on screen. Name one of its items: \(items.joined(separator: ", "))."
-            case let .pathRefused(reason):
+            case let .pathRefused(reason), let .menuNotSearchable(reason):
                 reason
             case let .occludedTarget(reason, _):
                 reason
@@ -1144,6 +1145,24 @@ actor Engine {
             throw EngineError.notFound("a menu item carrying '\(keys)'")
         }
         return try await press(match, pid: pid, mode: mode, observe: observe)
+    }
+
+    /// The hazardous menu item a chord would fire through key-equivalent dispatch, if any:
+    /// every item carrying the chord is judged, not just the best-ranked one. Nil when no item
+    /// carries it or none is hazardous; throws when the menu cannot be fully searched, because
+    /// an unsearched menu is not evidence the chord is harmless.
+    func hazardousShortcutItem(pid: pid_t, keys: String) throws -> (menuPath: String, hazard: String)? {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        guard let shortcut = MenuQuery.Shortcut.parse(keys) else { throw EngineError.unparseableShortcut(keys) }
+        guard let menuBar = AXElement(pid: pid).menuBar else { return nil }
+        let found = MenuQuery.allItems(for: shortcut, in: menuBar)
+        if let match = found.matches.first(where: { $0.hazard != nil }), let hazard = match.hazard {
+            return (match.path, hazard)
+        }
+        guard !found.truncated else {
+            throw EngineError.menuNotSearchable("the menu bar is larger than the search cap, so '\(keys)' could not be cleared")
+        }
+        return nil
     }
 
     /// Presses a menu item named by its title path ("File ▸ Export…" — ">" works too).
