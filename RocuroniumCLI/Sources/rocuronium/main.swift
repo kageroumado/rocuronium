@@ -89,7 +89,8 @@ Options
   --window-index <n>        pick among same-titled windows by 0-based position (the order
                             `windows` prints and the ambiguity error lists)
   --window-at <x,y>         pick the window whose frame contains this screen point
-  --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys
+  --allow-hardware-input    permit the sting on type, click, key: real cursor, session keys.
+                            Games hear only these: activate first, then type/key with it
   --foreground              on click, skip the ghost tentacles: activate the app and click with
                             the real cursor so the press is a genuine gesture that can raise a
                             system permission prompt (TCC, notifications). Implies

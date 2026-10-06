@@ -2200,8 +2200,11 @@ actor Engine {
         // The tree-delta channel's before-walk, same timing and same reason.
         let treeBaseline = wantsPress ? treeEvidenceBaseline(pid: pid, observe: observe, window: window) : nil
 
+        let aimPoint: CGPoint? = if case let .point(x, y) = effectiveLocator { CGPoint(x: x, y: y) } else { nil }
+        let typesIntoFocus = if case .focused = effectiveLocator { true } else { false }
         let reach = GhostReach(
             allowHardwareInput: allowHardwareInput, foreground: foreground, clickOptions: clickOptions,
+            aimPoint: aimPoint, typesIntoFocus: typesIntoFocus,
         )
         // A list row has no press action; selecting it is the click. Ghost and verified by the
         // selection read-back, so it runs ahead of the ladder and only a confirmed selection
@@ -2510,7 +2513,7 @@ actor Engine {
         // window with the user's cursor is the thing this tool promises not to do. The
         // measured ambush: Refrax's PIP panel silently ate a hover aimed under it.
         let actionPoint = button != nil ? plan.start : plan.end
-        let ownerPid = HardwareInput.ownerOfWindow(at: actionPoint)
+        let ownerPid = HardwareInput.occluder(at: actionPoint, target: pid)
         var endpointOwner: String?
         if let ownerPid, ownerPid != pid {
             endpointOwner = await MainActor.run {

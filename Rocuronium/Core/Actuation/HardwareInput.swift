@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -18,9 +19,10 @@ nonisolated enum HardwareInput {
         static let clickHoldDuration: Duration = .milliseconds(30)
         static let perCharacterDelay: Duration = .milliseconds(12)
         static let settleDelay: Duration = .milliseconds(80)
-        /// Ordinary application windows. Higher layers are the Dock and menu bar, whose
-        /// full-screen backing windows would otherwise look like they cover everything.
-        static let normalWindowLayer = 0
+        /// Owners of the whole-display backing windows stacked above every ordinary window
+        /// (the Dock's, at the Dock level). The menu bar strip, also the window server's, is
+        /// not a whole display and stays an occluder.
+        static let backdropOwners: Set<String> = ["Dock", "Window Server"]
         /// Elasticity: cursor movement below this between two of our samples is rounding
         /// noise, not a hand.
         static let humanNoiseFloor = 1.0
@@ -39,7 +41,46 @@ nonisolated enum HardwareInput {
         static let excessDecay = 0.9
     }
 
-    /// Who owns the frontmost ordinary window at `point`.
+    /// One on-screen window as the occlusion check sees it: who owns it, its stacking layer,
+    /// its frame in global top-left points, and its alpha.
+    struct WindowSlot: Equatable, Sendable {
+        let pid: pid_t
+        var owner: String = ""
+        let layer: Int
+        let frame: CGRect
+        var alpha: Double = 1
+    }
+
+    /// The on-screen windows, front to back, as `CGWindowListCopyWindowInfo` orders them.
+    static func onScreenWindowSlots() -> [WindowSlot] {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
+        ) as? [[String: Any]] else { return [] }
+        return windows.compactMap { window in
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+            else { return nil }
+            return WindowSlot(
+                pid: pid, owner: (window[kCGWindowOwnerName as String] as? String) ?? "",
+                layer: layer, frame: frame,
+                alpha: (window[kCGWindowAlpha as String] as? Double) ?? 1,
+            )
+        }
+    }
+
+    /// The active displays' bounds, in the same global top-left points as window frames.
+    static func displayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map(CGDisplayBounds)
+    }
+
+    /// Who would receive a real click at `point` instead of `target`, or nil when the target
+    /// would.
     ///
     /// This check exists because the hardware tentacle differs from every other tentacle in a way
     /// that is easy to miss: `postToPid` delivers to a *process* regardless of stacking, but
@@ -47,20 +88,40 @@ nonisolated enum HardwareInput {
     /// on this Mac: fifteen windows overlapped a single test point. Clicking an occluded
     /// target would silently click a different app — with the user's own cursor, at a
     /// coordinate the caller believed belonged to its target.
-    static func ownerOfWindow(at point: CGPoint) -> pid_t? {
-        guard let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
-        ) as? [[String: Any]] else { return nil }
-        // The list is front-to-back, so the first hit is the one that would receive the click.
-        for window in windows {
-            guard (window[kCGWindowLayer as String] as? Int) == Constants.normalWindowLayer,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  frame.contains(point)
-            else { continue }
-            return (window[kCGWindowOwnerPID as String] as? pid_t)
+    static func occluder(at point: CGPoint, target: pid_t?) -> pid_t? {
+        occluder(
+            at: point, target: target, ownPID: getpid(),
+            windows: onScreenWindowSlots(), displays: displayBounds(),
+        )
+    }
+
+    /// The z-order rule, pure so it can be tested on synthetic window lists. It fails closed:
+    /// anything that might take the click counts.
+    ///
+    /// Every visible window stacked **above the target's own topmost window at the point**
+    /// occludes it, on any layer — a pop-up menu, a notification banner, an authorization
+    /// dialog, the menu bar strip. The target's layer is not assumed to be 0: a fullscreen game
+    /// can sit on a raised level, and a layer filter blames whatever is behind it. Exempt are
+    /// only our own windows (the presence overlay), fully transparent windows, and the Dock's
+    /// and the window server's whole-display backing windows, which sit above every ordinary
+    /// window and are recognized by owner *and* a frame equal to a display — never by layer.
+    /// When the target has no window at the point, anything else there occludes it.
+    static func occluder(
+        at point: CGPoint, target: pid_t?, ownPID: pid_t, windows: [WindowSlot], displays: [CGRect],
+    ) -> pid_t? {
+        func isBackdrop(_ slot: WindowSlot) -> Bool {
+            Constants.backdropOwners.contains(slot.owner) && displays.contains(slot.frame)
         }
-        return nil
+        let hits = windows.filter {
+            $0.frame.contains(point) && $0.alpha > 0
+                && ($0.pid != ownPID || $0.pid == target) && !isBackdrop($0)
+        }
+        let above = if let target, let targetIndex = hits.firstIndex(where: { $0.pid == target }) {
+            hits[..<targetIndex]
+        } else {
+            hits[...]
+        }
+        return above.first { $0.pid != target }?.pid
     }
 
     /// Moves the pointer to `point`, clicks, and puts the pointer back where it was.
@@ -437,19 +498,35 @@ nonisolated enum HardwareInput {
 
     /// Returns how much of `text` was actually delivered, so a run cut short is reported
     /// rather than assumed complete.
+    ///
+    /// `target` is re-verified as the frontmost process before every character: these
+    /// keystrokes land in whatever holds the keyboard, and a ⌘-Tab, a launching app or a modal
+    /// from elsewhere mid-payload would otherwise receive the rest of it.
     @discardableResult
-    static func type(_ text: String) async -> String {
+    static func type(_ text: String, onlyWhileFrontmost target: pid_t) async -> String {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
+        let layout = await MainActor.run { KeyLayout.currentMap() }
         var delivered = ""
         // Per-scalar UTF-16 payloads, not `UniChar(scalar.value)` — that truncating
         // conversion traps on any non-BMP scalar. See `EventPoster.utf16Payloads`.
         let scalars = Array(text.unicodeScalars)
         for (index, var units) in EventPoster.utf16Payloads(of: text).enumerated() {
             guard consoleIsStillOurs else { return delivered }
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+            let frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+            guard frontmost == target else { return delivered }
+            // The real key for the character, so keycode readers (games, Wine) see the key a
+            // human would press; a character no key types keeps keycode 0 and relies on the
+            // payload alone.
+            let stroke = KeyLayout.stroke(for: String(scalars[index]), in: layout)
+            let keyCode = stroke?.keyCode ?? 0
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
             else { continue }
+            if stroke?.shift == true {
+                down.flags = .maskShift
+                up.flags = .maskShift
+            }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.post(tap: SessionContext.eventTap)
