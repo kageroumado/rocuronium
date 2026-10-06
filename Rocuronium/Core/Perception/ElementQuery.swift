@@ -28,6 +28,8 @@ nonisolated enum ElementQuery {
     struct Match {
         let element: AXElement
         let depth: Int
+        /// How the element answered a `--label` query; nil for role and predicate searches.
+        var classification: LabelMatching.Classification? = nil
     }
 
     struct Results {
@@ -206,30 +208,65 @@ nonisolated enum ElementQuery {
     /// output is often a *value* (note bodies, static text), and a label-only match made that
     /// text unfindable and un-scrollable-to. But values are noisy — a query like "save" sits
     /// inside any document mentioning saving — so a value match never competes with a label
-    /// match: it is used only when no label matched at all.
+    /// match: it is used only when no label matched at all. `LabelMatching` holds the rules.
     ///
-    /// `role` narrows by element role when several roles share a label (a button and a menu
-    /// item both titled "Restart to update" — measured on Refrax). "button" and "AXButton"
-    /// both work; matching is case-insensitive.
-    static func named(_ query: String, role: String? = nil, pid: pid_t, window: WindowSelector = .init()) -> Results {
-        let needle = query.lowercased()
-        func labelMatches(_ element: AXElement) -> Bool {
-            let label = element.label.lowercased()
-            return !label.isEmpty && (label == needle || label.contains(needle))
+    /// A control with no name of its own is matched by the label its row gives it
+    /// (`AXElement.derivedLabel`), and the static text that label was read from is dropped from
+    /// the matches when the control is among them: they are one target, and the control is the
+    /// one that acts.
+    ///
+    /// `exact` keeps whole-string matches only. `role` narrows by element role when several
+    /// roles share a label (a button and a menu item both titled "Restart to update" —
+    /// measured on Refrax). "button" and "AXButton" both work; matching is case-insensitive.
+    static func named(
+        _ query: String, role: String? = nil, pid: pid_t, window: WindowSelector = .init(), exact: Bool = false
+    ) -> Results {
+        func names(_ element: AXElement) -> (names: [String], derived: DerivedLabel?) {
+            let derived = element.derivedLabel
+            return ([element.label] + (derived.map { [$0.text] } ?? []), derived)
+        }
+        func classify(_ element: AXElement) -> (LabelMatching.Classification?, DerivedLabel?) {
+            let (candidates, derived) = names(element)
+            return (LabelMatching.classify(names: candidates, value: element.value, needle: query, exactOnly: exact), derived)
         }
         let results = search(pid: pid, window: window) { element in
             guard roleMatches(element.role, wanted: role) else { return false }
-            return labelMatches(element) || element.value?.lowercased().contains(needle) == true
+            return classify(element).0 != nil
         }
-        // Re-reading the label here costs one IPC round trip per *match* (bounded and small),
-        // not per element visited — the price of distinguishing the two tiers in a single walk.
-        let labelTier = results.matches.filter { labelMatches($0.element) }
+        // Re-classifying here costs a few IPC round trips per *match* (bounded and small), not
+        // per element visited — the price of keeping the walk's predicate a plain Bool.
+        var derivedSources = Set<String>()
+        var classified: [Match] = results.matches.map { match in
+            let (classification, derived) = classify(match.element)
+            if let source = derived?.sourceSignature { derivedSources.insert(source) }
+            var copy = match
+            copy.classification = classification
+            return copy
+        }
+        if !derivedSources.isEmpty {
+            classified.removeAll { derivedSources.contains($0.element.signature) }
+        }
+        let tier = LabelMatching.tier(classified.map(\.classification))
         return Results(
-            matches: labelTier.isEmpty ? results.matches : labelTier,
+            matches: tier.map { classified[$0] },
             elementsVisited: results.elementsVisited,
             truncated: results.truncated,
             truncationReason: results.truncationReason,
         )
+    }
+
+    /// One target out of a label search's matches, with the rule that chose it, or the
+    /// ambiguity. In `exact` mode every survivor already matched whole, so a single one is
+    /// reported as `exact`.
+    static func pickOne(_ matches: [Match], exact: Bool) -> (match: Match?, matchedBy: String?, ambiguous: [Match]) {
+        switch LabelMatching.pick(matches.map(\.classification)) {
+        case .none:
+            return (nil, nil, [])
+        case let .one(index, matchedBy):
+            return (matches[index], exact ? LabelMatching.MatchedBy.exact.rawValue : matchedBy.rawValue, [])
+        case let .ambiguous(indices):
+            return (nil, nil, indices.map { matches[$0] })
+        }
     }
 
     /// Role comparison for the `role` filter: nil matches everything, and the "AX" prefix is

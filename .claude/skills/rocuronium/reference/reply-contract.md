@@ -14,6 +14,8 @@ Every command answers one JSON object (`--json` prints it; MCP returns it verbat
 | `referral` | `{channel, reason, advice}` when no tentacle can reach the target and something else can (web content wants `refrax-ctl`, CDP, or Safari scripting). A referral means "compose that tool yourself". |
 | `suggestion` | a machine-readable next move on a refusal (the occlusion refusal suggests `park`) |
 | `groundedBy` | `detector` or `vlm` when the target's coordinates came from vision rather than the accessibility tree (see reference/vision.md) |
+| `matchedBy` | which rule picked the target: `only` (the one match), `exact` (the one whole-string match among several, or `--exact`), `box-element` (a `map` box re-found as its element), `box-point` (the hit test at the box's center) |
+| `appResolution` | present when `--app` named several running instances and one was taken (frontmost, the only one with a window at the point, or the only one with a window) — says which pid and why |
 | `treeChanges` / `treeDelta` | on `click`/`shortcut`/`menu`: how many window elements moved across the act, and the rendered diff of them. Any change confirms the act on its own — the channel that sees a sibling value ticking when pixels cannot. Absent when the tree was too large to walk twice (pass `--observe`) or truncated. |
 
 ## The tentacles

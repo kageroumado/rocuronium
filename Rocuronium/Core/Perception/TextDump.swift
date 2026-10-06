@@ -96,6 +96,11 @@ nonisolated enum TextDump {
             nodes.append(.init(role: role, label: title, value: value, depth: depth))
             // A title that merely repeats the value carries no information, only tokens.
             if title == value { title = "" }
+            // An unnamed switch reads as its row's text, so "Ghost Mode: 1 [AXCheckBox]" says
+            // which switch is on. Display only: the snapshot above keeps the element's own name.
+            if title.isEmpty, AXElement.rowLabelledRoles.contains(role), let derived = element.derivedLabel {
+                title = derived.text
+            }
             if !title.isEmpty || !value.isEmpty {
                 lines.append(Line(role: role, title: title, value: value, depth: depth))
                 characters += title.count + value.count

@@ -44,7 +44,8 @@ enum MCPServer {
             control is `label:"", roleDescription:"button"`, often with `help` (its tooltip, \
             readable without hovering), `identifier` (SwiftUI's accessibilityIdentifier, \
             frequently the symbol name), and `near` ("right of 'Undo'"): match on those and \
-            aim by frame. Give `label` to search by case-insensitive substring of the title, \
+            aim by frame. An unnamed switch/checkbox/pop-up is labelled by its row's text, \
+            with labelSource:'row', and matches `label` by it. Give `label` to search by case-insensitive substring of the title, \
             description, or placeholder (element *values* are the fallback tier, so text \
             seen in `read` output is findable); give `role` alone to list every element of \
             that role; omit both to list editable fields. `truncated:true` means the walk \
@@ -60,6 +61,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string", "description": "App name or bundle id, e.g. 'Discord'"],
                 "label": ["type": "string", "description": "Substring of the element's label/placeholder"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Element role filter, e.g. 'button' or 'AXButton'"],
                 "all": ["type": "boolean", "description": "List every element carrying a frame, not just editables ('show me everything'); role still narrows"],
                 "limit": ["type": "number", "description": "Page size (default 20); reply carries shown/total/offset"],
@@ -93,6 +95,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Read just this element's subtree; the main window when omitted"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "since": ["type": "string", "description": "Observation token from a prior read of the same scope; reply becomes the structural delta"],
                 "ocr": ["type": "boolean", "description": "Read the window's pixels instead of the tree — text rows groundedBy ocr, plus control boxes groundedBy detector when the UI Detector model is installed (needs Screen Recording)"],
@@ -150,6 +153,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Substring of the element's label to watch for (the sugar form)"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "gone": ["type": "boolean", "description": "Wait for the element to disappear instead"],
                 "expect": ["type": "object", "description": "A guard object to poll until it passes; supersedes label/gone"],
@@ -197,6 +201,7 @@ enum MCPServer {
                 "app": ["type": "string"],
                 "text": ["type": "string", "description": "The text to put in the field (empty string clears it)"],
                 "label": ["type": "string", "description": "Target field's label; the focused element when omitted"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "submit": ["type": "boolean", "description": "Allow Return/Tab in the text"],
                 "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
@@ -215,7 +220,13 @@ enum MCPServer {
             as is the window's accessibility-tree diff: `treeChanges` counts what moved and \
             `treeDelta` renders it (a sibling label ticking 'clicks: 0' → 'clicks: 1' that \
             no pixel diff can see), and any tree change confirms the click on its own. \
-            When a label matches several roles, pass `role`. A point on a plain group ascends \
+            When a label matches several elements and exactly one matches as the whole string, \
+            that one is clicked and the reply says matchedBy:'exact'; otherwise pass `role` or \
+            `exact`. A press-less list row (a SwiftUI List sidebar row) is selected through its \
+            outline's AXSelectedRows, confirmed by the selection read-back. `box` re-finds the \
+            mapped element and presses it (matchedBy:'box-element'), falling back to a hit test \
+            at its center ('box-point'). With x/y and `window`, the point must lie in that window \
+            — a browser window's title is its tab's, so this catches the wrong tab. A point on a plain group ascends \
             to the enclosing pressable control (SwiftUI wraps buttons this way). When the \
             accessibility tree has no match, vision grounding (OCR, then a local VLM if \
             installed) resolves the label to coordinates and the reply says `groundedBy`. \
@@ -235,6 +246,7 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Substring of the element's label to click"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role, e.g. 'button'"],
                 "x": ["type": "number", "description": "Screen point, top-left origin (from find/windows frames or a screenshot rect)"],
                 "y": ["type": "number", "description": "Screen y, paired with x"],
@@ -286,6 +298,9 @@ enum MCPServer {
             exists — some AppKit views expose one; Chromium/Electron never do. Bare `dy`/`dx` \
             falls back to posted wheel events, which every toolkit measured so far ignores — \
             an honest noEffect there means "use label instead", not "retry harder". \
+            Without `label` the target is the window's largest scrollable pane (or `area` N), \
+            named in the reply's `scrollArea`; `to` and `dy` both move its scroll bar (dy as a \
+            step sized from the thumb), so the pane need not be under the pointer. \
             `untilText` scrolls deterministically to a string the AX tree may not even \
             contain: each step captures the window and OCRs it locally, stopping the moment \
             the text is legible; the reply's foundAt rectangle is ready for a coordinate \
@@ -294,11 +309,13 @@ enum MCPServer {
             properties: [
                 "app": ["type": "string"],
                 "label": ["type": "string", "description": "Element to bring into view (the mechanism that actually works)"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "dy": ["type": "number", "description": "Vertical pixel delta; positive reveals content below (with untilText: just the direction sign)"],
                 "dx": ["type": "number", "description": "Horizontal pixel delta"],
                 "to": ["type": "number", "description": "Absolute vertical position, 0 (top) to 1 (bottom)"],
                 "untilText": ["type": "string", "description": "Scroll until this string is legible in the frame (local OCR per step; needs Screen Recording)"],
+                "area": ["type": "number", "description": "Without label: which of the window's scroll areas, 0-based in tree order (default: the largest that scrolls; the reply's scrollArea says which of how many)"],
             ], required: ["app"],
         ),
         tool(
@@ -390,6 +407,7 @@ enum MCPServer {
                 "end": ["type": "string", "description": "Destination \"x,y\" in screen points (top-left origin)"],
                 "app": ["type": "string", "description": "Target app — enables label aiming, occlusion refusal, window-count and tree-diff evidence"],
                 "label": ["type": "string", "description": "Aim at this element's center instead of end"],
+                "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "start": ["type": "string", "description": "Path start \"x,y\"; current cursor position when omitted"],
                 "via": ["type": "string", "description": "Waypoints the curve passes through: \"x,y x,y …\""],
@@ -475,9 +493,10 @@ enum MCPServer {
             accept a size written directly). Width/height are in points. The resulting frame is \
             read back as evidence: verdict 'confirmed' when the frame landed within 2 pt, \
             'unverifiable' when it changed but was clamped (a fixed- or bounded-size window), \
-            'noEffect' when nothing moved — never a lie. Presence-gated like activate, since it \
-            visibly moves a window a person may be watching; refused while someone is present \
-            unless confirm is true. Pass both x and y to reposition as well, or neither.
+            'noEffect' when nothing moved — never a lie. Ghost work: it takes no cursor and no \
+            focus, so it asks nobody; the one refusal is resizing the frontmost app while it is \
+            fullscreen (it would leave its Space) unless confirm is true. Pass both x and y to \
+            reposition as well, or neither.
             """,
             properties: [
                 "app": ["type": "string"],
@@ -485,7 +504,7 @@ enum MCPServer {
                 "h": ["type": "number", "description": "New height in points (at least 1)"],
                 "x": ["type": "number", "description": "Reposition to this screen x as well (with y); omit both to resize in place"],
                 "y": ["type": "number", "description": "Reposition to this screen y, paired with x"],
-                "confirm": ["type": "boolean", "description": "Resize even though someone is at the Mac"],
+                "confirm": ["type": "boolean", "description": "Resize the frontmost app even though it is fullscreen"],
             ], required: ["app", "w", "h"],
         ),
         tool(
@@ -577,7 +596,9 @@ enum MCPServer {
             """
             Open Rocuronium's deterministic demo stage — a fixed practice window at \
             (720, 200), 560×720, with instrumented targets for every verb: a click counter, \
-            a text field with an echo, a switch, a slider, a hover pad, and a 120-row \
+            a text field with an echo, a switch, a slider, a hover pad, a sidebar List \
+            ('pane: …'), an unnamed 'Ghost Mode' switch ('ghost: on|off'), buttons 符合 and \
+            不符合 ('answer: …'), and a 120-row \
             scroll list whose needle is 'Row 87 · the needle'. Drive it with app \
             'Rocuronium'; every consequence is readable back. Action 'reset' (default) \
             zeroes the counters, 'show' keeps state, 'hide' closes it.
@@ -617,7 +638,7 @@ enum MCPServer {
     /// schemas centrally so the argument filter accepts it without repeating the property in
     /// each definition.
     private static let windowScopedTools: Set<String> = [
-        "find", "read", "map", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize", "window", "space",
+        "find", "read", "map", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize", "window", "space", "scroll",
     ]
 
     private static func tool(

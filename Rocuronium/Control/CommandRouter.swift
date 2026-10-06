@@ -116,6 +116,12 @@ final class CommandRouter {
         /// Narrows a label match by element role ("button" or "AXButton") — the answer when
         /// two roles share the same text and "be more specific" has no more-specific label.
         var role: String?
+        /// Match `label` as the whole string (case- and whitespace-insensitive) instead of a
+        /// substring — `符合` without `不符合`.
+        var exact: Bool?
+        /// For `scroll`: which of the window's scroll areas, 0-based in tree order — the reply's
+        /// `scrollArea` lists how many there are.
+        var area: Double?
         var text: String?
         var x: Double?
         var y: Double?
@@ -282,6 +288,7 @@ final class CommandRouter {
     func route(_ data: Data) async -> Data {
         do {
             consentOutcome = nil
+            appResolution = nil
             let request = try JSONDecoder().decode(Request.self, from: data)
             if let complaint = validate(request) {
                 return encode(["ok": false, "error": complaint])
@@ -290,6 +297,7 @@ final class CommandRouter {
             // A consent prompt shown mid-request rides out on the reply, so the caller learns a
             // human approved or declined — actionable state, not just success/failure prose.
             if let consentOutcome { reply["consent"] = consentOutcome }
+            if let appResolution { reply["appResolution"] = appResolution }
             if Self.actingVerbs.contains(request.command) {
                 activityLog.append(
                     action: request.command,
@@ -698,6 +706,7 @@ final class CommandRouter {
         if let identifier = element.identifier { row["identifier"] = identifier }
         if let subrole = element.subrole { row["subrole"] = subrole }
         if let near = element.near { row["near"] = near }
+        if let source = element.labelSource { row["labelSource"] = source }
         if let frame = element.frame {
             row["frame"] = ["x": frame.x, "y": frame.y, "w": frame.width, "h": frame.height]
         }
@@ -718,6 +727,7 @@ final class CommandRouter {
             all: request.all == true,
             limit: request.limit.map { max(Int($0), 0) } ?? 20,
             offset: request.offset.map { max(Int($0), 0) } ?? 0,
+            exact: request.exact == true,
         )
         if outcome.elements.isEmpty, request.all != true, ScreenCapture.isPermitted,
            let fallback = try? await visionFindReply(pid: pid, query: request.label, window: selector) {
@@ -792,7 +802,7 @@ final class CommandRouter {
         }
         let outcome = try await engine.read(
             pid: pid, label: request.label, role: request.role, since: request.since,
-            window: selector,
+            window: selector, exact: request.exact == true,
         )
         // An empty walk on an app that exposes no tree is exactly where OCR earns its place —
         // fall back rather than reply "nothing here" about a window full of text. Only for the
@@ -952,15 +962,17 @@ final class CommandRouter {
 
     private func act(_ request: Request, action: GhostReach.Action) async throws -> [String: Any] {
         var request = request
-        // `click --box N --token <t>` resolves a mapped element's number to a screen point,
-        // guarded against a window that moved since the map was drawn. It supplies its own pid
-        // and coordinates, so it overrides --app/--label for this click.
+        // `click --box N --token <t>` resolves a mapped element's number to the element the
+        // legend recorded, guarded against a window that moved since the map was drawn. It
+        // supplies its own pid and target, so it overrides --app/--label for this click.
+        var mapped: Engine.MappedElement?
         if let box = await resolveBox(request) {
             if let refusal = box.refusal { return refusal }
             request.pid = box.pid
             request.x = box.x
             request.y = box.y
             request.label = nil
+            mapped = box.element
         }
         let pid = try resolve(request)
         let selector = try windowSelector(request)
@@ -976,12 +988,21 @@ final class CommandRouter {
         }
         // A coordinate is answered by a hit-test and a label by a search; neither falls back to
         // the other, so the caller always knows which mechanism replied.
-        let locator: Engine.Locator = if let x = request.x, let y = request.y {
+        let locator: Engine.Locator = if let mapped {
+            .mapped(mapped)
+        } else if let x = request.x, let y = request.y {
             .point(x: x, y: y)
         } else if let label = request.label {
-            .named(label, role: request.role, window: selector)
+            .named(label, role: request.role, window: selector, exact: request.exact == true)
         } else {
             .focused
+        }
+        // A coordinate under `--window` must land in that window. The window a browser names
+        // is its active tab, so this is the check that catches "right app, wrong tab" before
+        // any tentacle — ghost or hardware — aims at content that is no longer there.
+        if mapped == nil, let x = request.x, let y = request.y, selector.isSpecified,
+           let reason = try await engine.pointOutsideWindow(pid: pid, point: CGPoint(x: x, y: y), window: selector) {
+            return ["ok": false, "error": reason, "presence": presenceBlock()]
         }
 
         var clickOptions = GhostReach.ClickOptions()
@@ -1092,7 +1113,12 @@ final class CommandRouter {
                 return ["ok": false, "error": "'\(name)' must be a finite pixel delta within ±\(Int(Bounds.extent))"]
             }
         }
+        if request.label != nil, request.area != nil {
+            return ["ok": false, "error": "pass --label or --area, not both — a label already names its scroll area", "presence": presenceBlock()]
+        }
         let pid = try resolve(request)
+        let selector = try windowSelector(request)
+        let areaIndex = request.area.map { Int($0) }
 
         isDriving = true
         defer { isDriving = false }
@@ -1110,8 +1136,10 @@ final class CommandRouter {
                 needle: needle,
                 deltaY: request.dy ?? 1,
                 maxSteps: Constants.maximumScrollSearchSteps,
+                window: selector, areaIndex: areaIndex, exact: request.exact == true,
             )
             var reply = evidenceReply(search.evidence)
+            if let pick = search.area { reply["scrollArea"] = scrollAreaBlock(pick) }
             reply["steps"] = search.steps
             if let before = search.barBefore { reply["scrollbarBefore"] = before }
             if let after = search.barAfter { reply["scrollbarAfter"] = after }
@@ -1131,11 +1159,24 @@ final class CommandRouter {
             deltaX: request.dx ?? 0,
             deltaY: request.dy ?? 0,
             toFraction: request.to,
+            window: selector, areaIndex: areaIndex, exact: request.exact == true,
         )
         var reply = evidenceReply(result.evidence)
         if let before = result.barBefore { reply["scrollbarBefore"] = before }
         if let after = result.barAfter { reply["scrollbarAfter"] = after }
+        if let pick = result.area { reply["scrollArea"] = scrollAreaBlock(pick) }
         return reply
+    }
+
+    /// Which of the window's scroll areas a label-less scroll took, so a wrong pane is one
+    /// `--area <n>` away rather than a silent miss.
+    private func scrollAreaBlock(_ pick: Engine.ScrollAreaPick) -> [String: Any] {
+        var block: [String: Any] = ["index": pick.index, "of": pick.count]
+        if let frame = pick.frame { block["frame"] = self.block(for: frame) }
+        if pick.count > 1 {
+            block["note"] = "scrolled area \(pick.index) of \(pick.count) (the largest that scrolls unless --area named one); --area <n> picks another"
+        }
+        return block
     }
 
     /// Delivers a keyboard shortcut by pressing its menu item — no CGEvent, no focus change,
@@ -1288,6 +1329,10 @@ final class CommandRouter {
     /// form, that a human said yes or no — not just that the action succeeded or was refused.
     /// `nil` when no prompt was shown (nobody present, or `--confirm` already carried authority).
     private var consentOutcome: String?
+
+    /// Set when `--app` named several running instances and one was taken by the
+    /// `AppInstancePicker` rules; rides out on the reply as `appResolution`.
+    private var appResolution: String?
 
     private func consented(prompt: String, detail: String, away: Bool, confirm: Bool) async -> Bool {
         if away { return true }
@@ -1480,6 +1525,7 @@ final class CommandRouter {
             window: try windowSelector(request),
             // Clamped: the socket cancels at 30 s, and a tooltip needs at most a second or two.
             dwell: request.dwell.map { .milliseconds(min(max(Int($0), 0), 5000)) },
+            exact: request.exact == true,
         )
 
         // The read-back is the system's own cursor position: the gesture is confirmed when
@@ -1630,7 +1676,7 @@ final class CommandRouter {
         let gone = request.gone == true
         let outcome = try await engine.waitFor(
             pid: pid, label: label, role: request.role, gone: gone, timeout: .seconds(seconds),
-            window: try windowSelector(request),
+            window: try windowSelector(request), exact: request.exact == true,
         )
         return [
             // ok mirrors the condition so scripts can branch on the exit code directly.
@@ -1798,6 +1844,8 @@ final class CommandRouter {
         // Coordinates that came from pixels rather than the tree are less certain; the
         // caller's cue to verify with a diff before building on them.
         if let groundedBy = evidence.groundedBy { reply["groundedBy"] = groundedBy }
+        // Which rule picked the one target out of several candidates, or how a map box resolved.
+        if let matchedBy = evidence.matchedBy { reply["matchedBy"] = matchedBy }
         // The tree-delta channel: how many elements moved, and (when any did) the rendered
         // diff — the reply's most legible account of what the action caused.
         if let treeChanges = evidence.treeChanges { reply["treeChanges"] = treeChanges }
@@ -1980,13 +2028,16 @@ final class CommandRouter {
             return ["ok": false, "error": "pass both --x and --y to reposition, or neither", "presence": presenceBlock()]
         }
 
-        let presence = UserPresence.read()
-        guard await consented(
-            prompt: "Resize \(Self.target(of: request)) to \(Int(width))×\(Int(height))",
-            detail: "\(Self.target(of: request)) · resize",
-            away: presence.state == .away, confirm: request.confirm == true,
-        ) else {
-            return declinedReply("The resize")
+        // Ghost work: an AXSize/AXPosition write takes no cursor and no focus, so it asks
+        // nobody (a consent prompt per call stalled a seven-launch × four-size walk on
+        // Sevoflurane). The one resize that disturbs a watching human is of the fullscreen app
+        // they are in, which leaves its Space.
+        let targetIsFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive == true
+        if targetIsFrontmost, wouldInterruptFullscreen(confirm: request.confirm == true) {
+            return fullscreenRefusal(
+                effect: "resizing its window would pull it out of its fullscreen Space",
+                override: "Pass confirm:true if that is genuinely intended.",
+            )
         }
 
         isDriving = true
@@ -2429,7 +2480,10 @@ final class CommandRouter {
     /// it was when the numbers were assigned.
     private struct MapSnapshot {
         let pid: pid_t
-        let boxes: [Int: CGRect]
+        let boxes: [Int: (role: String, label: String, frame: CGRect)]
+        /// "accessibility" when the boxes are tree elements a click can re-find and press;
+        /// "vision" when they are pixels only.
+        let groundedBy: String
         let selector: WindowSelector
         /// The mapped window's title, so the freshness check re-resolves *that* window rather
         /// than whatever the app now calls primary — an app whose main window flips between its
@@ -2497,7 +2551,10 @@ final class CommandRouter {
         pruneMapSnapshots()
         mapSnapshots[String(token)] = MapSnapshot(
             pid: pid,
-            boxes: Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.offset + 1, $0.element.frame) }),
+            boxes: Dictionary(uniqueKeysWithValues: rows.enumerated().map {
+                ($0.offset + 1, (role: $0.element.role, label: $0.element.label, frame: $0.element.frame))
+            }),
+            groundedBy: groundedBy,
             selector: selector,
             windowTitle: target.title,
             windowFrame: rect,
@@ -2586,10 +2643,12 @@ final class CommandRouter {
     /// only when the snapshot's window is still where it was: a stale box on a moved window would
     /// click whatever now sits at those coordinates, the exact hazard §221 declines persistent
     /// handles to avoid. Returns nil when no `box` was requested (an ordinary click).
-    private func resolveBox(_ request: Request) async -> (pid: pid_t, x: Double, y: Double, refusal: [String: Any]?)? {
+    private func resolveBox(
+        _ request: Request
+    ) async -> (pid: pid_t, x: Double, y: Double, element: Engine.MappedElement?, refusal: [String: Any]?)? {
         guard let boxNumber = request.box.map({ Int($0) }) else { return nil }
-        func refuse(_ message: String) -> (pid: pid_t, x: Double, y: Double, refusal: [String: Any]?) {
-            (pid: 0, x: 0, y: 0, refusal: ["ok": false, "error": message, "presence": presenceBlock()])
+        func refuse(_ message: String) -> (pid: pid_t, x: Double, y: Double, element: Engine.MappedElement?, refusal: [String: Any]?) {
+            (pid: 0, x: 0, y: 0, element: nil, refusal: ["ok": false, "error": message, "presence": presenceBlock()])
         }
         guard let token = request.token, let snapshot = mapSnapshots[token] else {
             return refuse("no live map snapshot for that token — run `map` first, then click --box with the token it returns")
@@ -2598,9 +2657,10 @@ final class CommandRouter {
             mapSnapshots[token] = nil
             return refuse("the mapped app (pid \(snapshot.pid)) is no longer running — re-run map")
         }
-        guard let frame = snapshot.boxes[boxNumber] else {
+        guard let box = snapshot.boxes[boxNumber] else {
             return refuse("box \(boxNumber) is not in snapshot \(token) (it numbered \(snapshot.boxes.count) element(s), 1–\(snapshot.boxes.count))")
         }
+        let frame = box.frame
         // Freshness: the window must still be where the numbers were assigned. A moved or
         // resized window means every cached box coordinate is now wrong. Re-resolve the exact
         // window the map named — by its title when it has one, so a flipped main window or an
@@ -2615,7 +2675,11 @@ final class CommandRouter {
         guard framesMatch(liveFrame, snapshot.windowFrame) else {
             return refuse("the window moved or resized since the snapshot — its box coordinates are stale; re-run map")
         }
-        return (pid: snapshot.pid, x: Double(frame.midX), y: Double(frame.midY), refusal: nil)
+        // Vision rows have no element behind them; those boxes stay coordinate clicks.
+        let element: Engine.MappedElement? = snapshot.groundedBy == "accessibility"
+            ? .init(role: box.role, label: box.label, frame: frame, window: freshnessSelector)
+            : nil
+        return (pid: snapshot.pid, x: Double(frame.midX), y: Double(frame.midY), element: element, refusal: nil)
     }
 
     /// Two window frames are "the same window, unmoved" within a couple of points — the same
@@ -2893,7 +2957,19 @@ final class CommandRouter {
         let matches = exactBundle.isEmpty ? (exactName.isEmpty ? looseName : exactName) : exactBundle
         guard let match = matches.first else { throw RouterError.appNotRunning(name) }
         guard matches.count == 1 else {
-            throw RouterError.ambiguousApp(name, matches.map(Self.instanceDescription))
+            // Several instances answer to the name: take the one the human is looking at, or
+            // refuse. See `AppInstancePicker` for the order.
+            let aim = request.x.flatMap { x in request.y.map { CGPoint(x: x, y: $0) } }
+            guard case let .chosen(pid, reason) = AppInstancePicker.pick(AppInstancePicker.candidates(for: matches), aim: aim),
+                  let chosen = matches.first(where: { $0.processIdentifier == pid })
+            else {
+                throw RouterError.ambiguousApp(name, matches.map(Self.instanceDescription))
+            }
+            try Self.refuseCredentialSurface(chosen)
+            appResolution = "\(matches.count) running apps answer to '\(name)'; took pid \(pid)"
+                + (chosen.bundleURL.map { " at \($0.path)" } ?? "")
+                + " — \(reason). Pass --pid to choose another."
+            return pid
         }
         try Self.refuseCredentialSurface(match)
         return match.processIdentifier
@@ -3054,7 +3130,8 @@ final class CommandRouter {
                 "'\(query)' matched \(candidates.count) elements: \(candidates.joined(separator: ", ")). Be more specific."
             case let .ambiguousApp(name, candidates):
                 "\(candidates.count) running apps are named '\(name)': \(candidates.joined(separator: "; ")). "
-                    + "Target one by its bundle id — acting on whichever listed first would drive the wrong app."
+                    + "None is frontmost or the only one with a window on screen, so pass --pid <n> (or the bundle id) — "
+                    + "acting on whichever listed first would drive the wrong app."
             case let .captureWriteFailed(path): "Could not write the capture to \(path)."
             case let .captureNotPNG(name):
                 "'\(name)' is not a .png path — captures are PNG, and writing one over a file of another type would destroy it."

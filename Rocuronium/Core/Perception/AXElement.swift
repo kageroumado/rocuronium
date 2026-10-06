@@ -350,6 +350,13 @@ nonisolated struct AXElement {
         return mutate { AXUIElementSetAttributeValue(raw, kAXSizeAttribute as CFString, value) }
     }
 
+    /// Writes any attribute — `AXSelectedRows` on an outline, say. Same rule as every write:
+    /// the return code is not evidence, callers read back.
+    @discardableResult
+    func setAttribute(_ name: String, _ value: CFTypeRef) -> AXError {
+        mutate { AXUIElementSetAttributeValue(raw, name as CFString, value) }
+    }
+
     @discardableResult
     func perform(_ action: String = kAXPressAction) -> AXError {
         mutate { AXUIElementPerformAction(raw, action as CFString) }
