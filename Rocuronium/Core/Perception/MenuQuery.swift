@@ -219,19 +219,29 @@ nonisolated enum MenuQuery {
     /// truncated walk has not seen every item.
     static func allItems(for shortcut: Shortcut, in menuBar: AXElement) -> (matches: [Match], truncated: Bool) {
         var visited = 0
+        var truncated = false
         var matches: [Match] = []
-        collect(menuBar, shortcut: shortcut, path: [], depth: 0, visited: &visited, matches: &matches)
-        return (matches, visited > Constants.maximumItemsVisited)
+        collect(menuBar, shortcut: shortcut, path: [], depth: 0, visited: &visited, truncated: &truncated, matches: &matches)
+        return (matches, truncated)
     }
 
+    /// Both caps mark the walk truncated: an item past the depth limit is as unseen as one
+    /// past the item limit.
     private static func collect(
         _ element: AXElement, shortcut: Shortcut, path: [String], depth: Int, visited: inout Int,
-        matches: inout [Match]
+        truncated: inout Bool, matches: inout [Match]
     ) {
-        guard depth <= Constants.maximumDepth else { return }
-        for child in element.children {
+        let children = element.children
+        guard depth <= Constants.maximumDepth else {
+            if !children.isEmpty { truncated = true }
+            return
+        }
+        for child in children {
             visited += 1
-            guard visited <= Constants.maximumItemsVisited else { return }
+            guard visited <= Constants.maximumItemsVisited else {
+                truncated = true
+                return
+            }
             let title = child.string(kAXTitleAttribute) ?? ""
             if child.role == "AXMenuItem", rank(child, shortcut) != nil {
                 matches.append(Match(
@@ -244,7 +254,7 @@ nonisolated enum MenuQuery {
             collect(
                 child, shortcut: shortcut,
                 path: title.isEmpty || child.role == "AXMenu" ? path : path + [title],
-                depth: depth + 1, visited: &visited, matches: &matches,
+                depth: depth + 1, visited: &visited, truncated: &truncated, matches: &matches,
             )
         }
     }
