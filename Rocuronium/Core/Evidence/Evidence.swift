@@ -64,6 +64,12 @@ nonisolated struct Evidence: Codable, Sendable {
     /// "detector" when the YOLO+OCR tier matched; "vlm" when the VLM grounder produced them.
     var groundedBy: String? = nil
 
+    /// Which rule picked the target out of a label search or a `map` box: `only` (the one
+    /// match), `exact` (the one whole-string match among several substring matches, or
+    /// `--exact`), `box-element` (the mapped element re-found itself), `box-point` (the hit test
+    /// at the box's center). Nil for coordinates and the focused element.
+    var matchedBy: String? = nil
+
     /// The window's accessibility-tree diff across the action, rendered the way `read --since`
     /// renders it. Set whenever the tree-delta evidence channel walked and something changed —
     /// the sibling label that ticked while the pressed button's own rect returned to rest.

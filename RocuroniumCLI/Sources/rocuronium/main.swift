@@ -22,18 +22,18 @@ Observe
   diag                                     what each permission check really returns
   apps                                     running apps: name, bundle id, pid, frontmost
   windows    --app <a>                     titles and frames
-  find       --app <a> [--label <t>] [--role <r>] [--all] [--limit <n>] [--offset <n>] [--ocr]
-  read       --app <a> [--label <t>] [--role <r>] [--since <token>] [--ocr]   text, or the delta
+  find       --app <a> [--label <t> [--exact]] [--role <r>] [--all] [--limit <n>] [--offset <n>] [--ocr]
+  read       --app <a> [--label <t> [--exact]] [--role <r>] [--since <token>] [--ocr]   text, or the delta
   map        --app <a> [--role <r>] [--all]   ASCII layout of the interactable elements,
                                               numbered; click one with `click --box N --token`
-  wait       --app <a> (--label <t> [--role <r>] [--gone] | --for '<guard json>')
+  wait       --app <a> (--label <t> [--exact] [--role <r>] [--gone] | --for '<guard json>')
                         [--timeout <s, max 25>]
   screenshot [--app <a> | --x --y --w --h] [--path <f.png>] [--since <token>]
   activity                                 the last 50 acting commands with verdicts
 
 Act — ghost first; every reply carries verdict, tentacle, attempts
-  type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
-  click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n> | --box <n> --token <t>) [--observe]
+  type       --app <a> --text <t> [--label <t> [--exact]] [--role <r>] [--submit]
+  click      --app <a> (--label <t> [--exact] [--role <r>] | --x <n> --y <n> | --box <n> --token <t>) [--observe]
              [--button left|right] [--count 2] [--modifiers cmd,shift] [--foreground]
   key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|cmd+=|f5|r|…>   a named key or
              one character (posted at its key on the current layout), with modifiers
@@ -41,7 +41,9 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
              cmd+a/c/x/v do select-all/copy/cut/paste via accessibility + clipboard, with a verdict
   menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
   scroll     --app <a> (--label <t> | --to <0..1> | --dy <px> [--dx <px>]
-                        | --until-text <s> [--dy <±1>])
+                        | --until-text <s> [--dy <±1>]) [--area <n>]
+             no --label: the largest scrollable pane, or --area <n> (0-based); --to and --dy
+             move its scroll bar, so the pane need not be under the pointer
   statusitem --app <a> [--label <t>] [--press]
   launch     --app <name|bundle id|path> [--confirm]   (--confirm to interrupt a fullscreen app)
   activate   --app <a> [--confirm]                      (--confirm to interrupt a fullscreen app)
@@ -56,7 +58,8 @@ Cursor paths — take the real cursor; refused while a human is present or an ap
              [--duration <s>] [--dwell <ms>] [--easing <e>] [--restore] [--confirm]
 
 Windows
-  resize     --app <a> --width <w> --height <h> [--x <px> --y <py>]   ghost AX resize/move
+  resize     --app <a> --width <w> --height <h> [--x <px> --y <py>]   ghost AX resize/move;
+                        asks nobody (refused only on the fullscreen front app without --confirm)
   window     --app <a> (--fullscreen on|off | --minimize | --unminimize | --zoom) [--confirm]
                         ghost window-state change; presence-gated like resize
   display    <acquire|release|status> [--reason <t>] [--minutes <n>] [--lease <id>]
@@ -79,8 +82,10 @@ Meta
 Options
   --pid <n>                 target a process directly; overrides --app
   --window <title substr>   scope to one window (find/read/click/type/wait/screenshot/
-                            move/drag/park/resize); ambiguity is refused with each
-                            candidate's index and frame
+                            move/drag/park/resize/scroll); ambiguity is refused with each
+                            candidate's index and frame. With --x/--y the point must lie in
+                            that window (a browser window's title is its tab's), else refused
+  --exact                   match --label as the whole string, not a substring
   --window-index <n>        pick among same-titled windows by 0-based position (the order
                             `windows` prints and the ambiguity error lists)
   --window-at <x,y>         pick the window whose frame contains this screen point
@@ -103,8 +108,11 @@ Nine things to know:
      landed: verify before retrying).
   2. Coordinates are points, origin at the top-left of the main display, everywhere.
   3. `--label` is a case-insensitive substring of title, description, placeholder, then
-     value. Ambiguity is refused; narrow with --role. An icon-only button has an empty
-     label and a roleDescription of 'button' — match its help, identifier, or near instead.
+     value; when several match and exactly one matches whole, that one wins (matchedBy:
+     exact). Otherwise ambiguity is refused; narrow with --role or --exact. An icon-only
+     button has an empty label — match its help, identifier, or near instead. An unnamed
+     switch is labelled by its row's text (labelSource: row). `--app` naming two running
+     instances takes the frontmost, else the only one with a window (appResolution says so).
   4. `type` sets the field's value through accessibility; when that is refused it falls
      through to keystrokes at the caret. The reply's tentacle says which happened.
   5. `read` returns a token; `read --since <token>` returns only what changed. Pixels miss
@@ -250,7 +258,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset", "box"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset", "box", "area"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -285,6 +293,7 @@ if arguments.contains("--restore") { payload["restore"] = true }
 if arguments.contains("--observe") { payload["observe"] = true }
 if arguments.contains("--ocr") { payload["ocr"] = true }
 if arguments.contains("--all") { payload["all"] = true }
+if arguments.contains("--exact") { payload["exact"] = true }
 if arguments.contains("--minimize") { payload["minimize"] = true }
 if arguments.contains("--unminimize") { payload["unminimize"] = true }
 if arguments.contains("--zoom") { payload["zoom"] = true }
@@ -369,6 +378,11 @@ if let error = reply["error"] as? String {
 // not mistaken for one that ran unattended. (A decline surfaces as the error above.)
 if let consent = reply["consent"] as? String, consent == "approved" || consent == "declined" {
     FileHandle.standardError.write(Data("rocuronium: the human \(consent) this action.\n".utf8))
+}
+
+// Several running apps answered to --app and one was taken; say which, so the pick is never silent.
+if let resolution = reply["appResolution"] as? String {
+    FileHandle.standardError.write(Data("rocuronium: \(resolution)\n".utf8))
 }
 
 switch command {

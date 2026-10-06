@@ -59,6 +59,10 @@ actor Engine {
     private let cache = TreeCache()
     /// The walks `read` handed out observation tokens for; what `read --since` diffs against.
     private let observations = TreeSnapshotStore()
+    /// Which rule the last label resolution used to pick its one target (`LabelMatching`) —
+    /// reported on the act reply as `matchedBy`. Requests are serialized, so the last
+    /// resolution is this request's.
+    private var lastMatchedBy: String?
 
     private enum Constants {
         /// How much a window may change on its own between two back-to-back captures and
@@ -113,6 +117,9 @@ actor Engine {
         /// For a row with no `label` of its own: the nearest labelled sibling and the bearing
         /// to it ("right of 'Undo'"), the only handle an agent has on an unnamed control.
         let near: String?
+        /// Where `label` came from when the element names nothing itself: "row" for a control
+        /// labelled by the text beside it (`AXElement.derivedLabel`). Nil for an own name.
+        var labelSource: String? = nil
 
         struct Frame: Codable, Sendable {
             let x: Double, y: Double, width: Double, height: Double
@@ -126,8 +133,20 @@ actor Engine {
     /// coordinates.
     enum Locator: Sendable {
         case focused
-        case named(String, role: String?, window: WindowSelector)
+        /// `exact` keeps whole-string label matches only (`--exact`).
+        case named(String, role: String?, window: WindowSelector, exact: Bool)
         case point(x: Double, y: Double)
+        /// An element numbered by a prior `map`: re-found by role and frame, so the press goes
+        /// to the element itself rather than to whatever a hit test at its center returns.
+        case mapped(MappedElement)
+    }
+
+    /// What a `map` legend recorded for one numbered element.
+    struct MappedElement: Sendable {
+        let role: String
+        let label: String
+        let frame: CGRect
+        let window: WindowSelector
     }
 
     struct FindOutcome: Sendable {
@@ -241,7 +260,7 @@ actor Engine {
 
     func find(
         pid: pid_t, query: String?, role: String? = nil, window: WindowSelector = .init(),
-        all: Bool = false, limit: Int = 20, offset: Int = 0
+        all: Bool = false, limit: Int = 20, offset: Int = 0, exact: Bool = false
     ) throws -> FindOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         // A named window that does not exist is an error, not an empty result — resolve it
@@ -254,7 +273,7 @@ actor Engine {
 
         // `all` is its own cache key (a distinct predicate) but the page — limit/offset — is
         // applied after, over the cached full match set, so paging never re-walks.
-        let key = cacheKey(all ? "@all" : query, role: role, window: window)
+        let key = cacheKey(all ? "@all" : query, role: role, window: window, exact: exact)
         let results = cache.results(for: pid, key: key) {
             if all {
                 // Everything the walk can see and aim at: every element carrying a frame.
@@ -262,7 +281,7 @@ actor Engine {
                     ElementQuery.roleMatches($0.role, wanted: role) && $0.frame != nil
                 }
             } else if let query {
-                ElementQuery.named(query, role: role, pid: pid, window: window)
+                ElementQuery.named(query, role: role, pid: pid, window: window, exact: exact)
             } else if let role {
                 // A bare role query is a legitimate question ("list the buttons").
                 ElementQuery.search(pid: pid, window: window) { ElementQuery.roleMatches($0.role, wanted: role) }
@@ -363,7 +382,10 @@ actor Engine {
     /// Anything that would make that diff a lie — evicted token, another process, a
     /// different scope or window, a truncated walk on either side, or wholesale change —
     /// degrades to the full read with `diffNote` naming the reason.
-    func read(pid: pid_t, label: String?, role: String? = nil, since: String? = nil, window: WindowSelector = .init()) throws -> ReadOutcome {
+    func read(
+        pid: pid_t, label: String?, role: String? = nil, since: String? = nil, window: WindowSelector = .init(),
+        exact: Bool = false
+    ) throws -> ReadOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
@@ -373,7 +395,7 @@ actor Engine {
         let scope: String
         if let label {
             // Same cache key as `find`, so a find-then-read pair costs one walk, not two.
-            let element = try resolveNamed(pid: pid, label: label, role: role, window: window)
+            let element = try resolveNamed(pid: pid, label: label, role: role, window: window, exact: exact)
             root = element
             scope = "\(element.role) '\(element.label)'"
         } else {
@@ -388,7 +410,7 @@ actor Engine {
         let dump = TextDump.dump(root: root)
         // The window is part of the scope key: a `--since` diff must never compare a walk of
         // one window against a token from another with the same label.
-        let scopeKey = "\(window.isSpecified ? "win:\(window.cacheToken)|" : "")\(label ?? "@window")|\(role ?? "*")"
+        let scopeKey = "\(window.isSpecified ? "win:\(window.cacheToken)|" : "")\(exact ? "=" : "")\(label ?? "@window")|\(role ?? "*")"
         var delta: ReadOutcome.Delta?
         var diffNote: String?
         if let since {
@@ -500,7 +522,10 @@ actor Engine {
     /// The timeout is the router's problem to bound: the control socket cancels requests at
     /// 30 s, so callers pass at most 25 and loop on a "call again" reply. The poll itself
     /// checks for cancellation so a cancelled request stops burning AX IPC.
-    func waitFor(pid: pid_t, label: String, role: String? = nil, gone: Bool, timeout: Duration, window: WindowSelector = .init()) async throws -> WaitOutcome {
+    func waitFor(
+        pid: pid_t, label: String, role: String? = nil, gone: Bool, timeout: Duration, window: WindowSelector = .init(),
+        exact: Bool = false
+    ) async throws -> WaitOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
         AXElement(pid: pid).enableManualAccessibility()
@@ -510,8 +535,8 @@ actor Engine {
 
         while true {
             polls += 1
-            let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window)) {
-                ElementQuery.named(label, role: role, pid: pid, window: window)
+            let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window, exact: exact)) {
+                ElementQuery.named(label, role: role, pid: pid, window: window, exact: exact)
             }.matches
             let satisfied = gone ? matches.isEmpty : !matches.isEmpty
             let elapsed = seconds(start.duration(to: clock.now))
@@ -757,6 +782,32 @@ actor Engine {
             window.string(kAXTitleAttribute) ?? "",
             .init(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height),
         )
+    }
+
+    /// Why a coordinate action must not go ahead under `--window`, or nil when the point lies in
+    /// the named window. A browser window's title is its active tab's, so a window named by its
+    /// tab title that no longer owns the point means the content changed under the caller —
+    /// "right app, wrong tab". The refusal names the window that does own the point.
+    func pointOutsideWindow(pid: pid_t, point: CGPoint, window selector: WindowSelector) throws -> String? {
+        guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
+        let wanted = try windowElement(pid: pid, selector: selector)
+        let here = "(\(Int(point.x)), \(Int(point.y)))"
+        guard let hit = ElementQuery.hitTest(point, pid: pid) else {
+            return "nothing of this app is at \(here), so it cannot be in the window matching \(selector.describe)"
+        }
+        // Any ancestor may be the named one (a sheet inside its window included); the first
+        // window on the way up is what the refusal names.
+        var node: AXElement? = hit
+        var owner: AXElement?
+        for _ in 0 ..< 60 {
+            guard let current = node, current.role != "AXApplication" else { break }
+            if CFEqual(current.raw, wanted.raw) { return nil }
+            if owner == nil, current.role == "AXWindow" { owner = current }
+            node = current.parent
+        }
+        let actual = owner?.string(kAXTitleAttribute) ?? ""
+        return "\(here) is in the window '\(actual)', not the window matching \(selector.describe) "
+            + "— the content there changed (another tab or document is showing). Re-read before acting."
     }
 
     // MARK: - Actuation
@@ -1456,13 +1507,18 @@ actor Engine {
         role: String? = nil,
         deltaX: Double,
         deltaY: Double,
-        toFraction: Double?
-    ) async throws -> (evidence: Evidence, barBefore: Double?, barAfter: Double?) {
+        toFraction: Double?,
+        window: WindowSelector = .init(),
+        areaIndex: Int? = nil,
+        exact: Bool = false
+    ) async throws -> (evidence: Evidence, barBefore: Double?, barAfter: Double?, area: ScrollAreaPick?) {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
-        let area = try resolveScrollArea(pid: pid, label: label, role: role)
+        let (area, pick) = try resolveScrollArea(
+            pid: pid, label: label, role: role, window: window, areaIndex: areaIndex, exact: exact,
+        )
         let target = "\(area.role) '\(area.label)'"
         // Chromium and Electron expose no AXScrollArea at all (measured on Discord: the
         // whole window is AXWebArea/AXList/AXGroup), so `bar` being nil is a normal state,
@@ -1480,7 +1536,7 @@ actor Engine {
         // press: a window with intrinsic motion (Discord animates constantly) cannot testify.
         var baseline: ScreenCapture.WindowCapture?
         var windowIsStill = false
-        if ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid) {
+        if ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid, window: window) {
             let windowRect = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
             baseline = try? await ScreenCapture.windowImage(ownedBy: pid, near: windowRect)
             if let baseline,
@@ -1520,7 +1576,7 @@ actor Engine {
                 action: "scroll(to: \(toFraction))", target: target, tentacle: .accessibility,
                 verdict: verdict, readback: readback, attempts: attempts,
                 cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
-            ), before, after)
+            ), before, after, pick)
         }
 
         // Tentacle 1 for a labeled target: ask the app to bring it into view. Measured to be
@@ -1532,7 +1588,7 @@ actor Engine {
         // and honoring disagree in both directions (measured 2026-08-24: SwiftUI static
         // text omits the action yet accepts the call — and does nothing; Mail's list rows
         // refuse it outright with -25205). The frame read-back below is the judge.
-        if let label, let element = try? resolveNamed(pid: pid, label: label, role: role) {
+        if let label, let element = try? resolveNamed(pid: pid, label: label, role: role, window: window, exact: exact) {
             let advertised = element.actionNames.contains("AXScrollToVisible")
             let before = element.frame
             let code = element.perform("AXScrollToVisible")
@@ -1548,7 +1604,7 @@ actor Engine {
                         readback: "element frame (\(Int(before.origin.x)),\(Int(before.origin.y))) → (\(Int(after.origin.x)),\(Int(after.origin.y)))",
                         attempts: attempts,
                         cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
-                    ), barBefore, bar?.numberValue)
+                    ), barBefore, bar?.numberValue, pick)
                 }
                 if let after, let frame = try? windowFrame(pid: pid),
                    CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height).contains(after) {
@@ -1557,7 +1613,7 @@ actor Engine {
                         action: "scroll(toVisible: '\(label)')", target: target, tentacle: .accessibility,
                         verdict: .confirmed, readback: "already visible", attempts: attempts,
                         cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
-                    ), barBefore, bar?.numberValue)
+                    ), barBefore, bar?.numberValue, pick)
                 }
             }
             attempts.append(.init(
@@ -1567,6 +1623,38 @@ actor Engine {
                     : "AXScrollToVisible failed (\(code.rawValue))"
                     + (advertised ? "" : " — the element does not advertise the action"),
             ))
+        }
+
+        // A relative scroll through the scroll bar: the pixel delta becomes a position step,
+        // sized from the thumb (its share of the track is the viewport's share of the
+        // document). Cursor-free and independent of what is under the pointer, which posted
+        // wheels are not — no toolkit measured honors those (2026-08-04).
+        if deltaY != 0, let bar, let before = barBefore, let step = barStep(forPixels: deltaY, bar: bar, area: area) {
+            let goal = min(1, max(0, before + step))
+            if abs(goal - before) > 0.0005 {
+                let code = bar.setValue(goal)
+                try? await Task.sleep(for: .milliseconds(250))
+                let after = bar.numberValue
+                cache.invalidate(pid: pid)
+                if let after, abs(after - before) > 0.0005 {
+                    attempts.append(.init(tentacle: .accessibility, outcome: "dy \(Int(deltaY)) written as a scroll-bar step; the bar moved"))
+                    return (await finishScroll(
+                        action: "scroll(dx: \(deltaX), dy: \(deltaY))", target: target, tentacle: .accessibility,
+                        verdict: .confirmed,
+                        readback: "scrollbar \(String(format: "%.3f", before)) → \(String(format: "%.3f", after))",
+                        attempts: attempts,
+                        cursorBefore: cursorBefore, frontBefore: frontBefore, area: area, pid: pid,
+                    ), before, after, pick)
+                }
+                attempts.append(.init(
+                    tentacle: .accessibility,
+                    outcome: code == .success
+                        ? "scroll-bar step reported success; the bar did not move"
+                        : "scroll-bar step failed (\(code.rawValue))",
+                ))
+            } else {
+                attempts.append(.init(tentacle: .accessibility, outcome: "the scroll bar is already at the \(deltaY > 0 ? "end" : "top")"))
+            }
         }
 
         // Posted wheel events, aimed at the area's midpoint — kept as the fall-through and
@@ -1615,7 +1703,25 @@ actor Engine {
                 delta: ScreenDiff.changedFraction(from: baseline.image, to: after.image),
             )
         }
-        return (evidence, barBefore, barAfter)
+        return (evidence, barBefore, barAfter, pick)
+    }
+
+    /// Which scroll area of how many a label-less scroll aimed at — the reply's `scrollArea`.
+    struct ScrollAreaPick: Sendable {
+        let index: Int
+        let count: Int
+        let frame: ElementDescriptor.Frame?
+    }
+
+    /// A pixel delta as a scroll-bar position step: the thumb's share of its track is the
+    /// viewport's share of the document, so the scrollable distance is
+    /// `viewport / thumb - viewport`. Nil when the bar hides its thumb or the document fits.
+    private func barStep(forPixels pixels: Double, bar: AXElement, area: AXElement) -> Double? {
+        guard let thumb = thumbFraction(of: bar), thumb < 0.999,
+              let viewport = area.frame?.height ?? bar.frame?.height, viewport > 0 else { return nil }
+        let scrollable = viewport / thumb - viewport
+        guard scrollable > 1 else { return nil }
+        return pixels / scrollable
     }
 
     struct ScrollSearchResult: Sendable {
@@ -1627,6 +1733,7 @@ actor Engine {
         let foundAt: ElementDescriptor.Frame?
         /// The step budget ran out with more document left — call again to keep looking.
         let callAgain: Bool
+        let area: ScrollAreaPick?
     }
 
     /// Scrolls until OCR sights `needle` in the frame — deterministic where pixel deltas
@@ -1647,7 +1754,10 @@ actor Engine {
         role: String?,
         needle: String,
         deltaY: Double,
-        maxSteps: Int
+        maxSteps: Int,
+        window: WindowSelector = .init(),
+        areaIndex: Int? = nil,
+        exact: Bool = false
     ) async throws -> ScrollSearchResult {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         guard ScreenCapture.isPermitted else {
@@ -1658,7 +1768,9 @@ actor Engine {
         AXElement(pid: pid).enableManualAccessibility()
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
-        let area = try resolveScrollArea(pid: pid, label: label, role: role)
+        let (area, pick) = try resolveScrollArea(
+            pid: pid, label: label, role: role, window: window, areaIndex: areaIndex, exact: exact,
+        )
         let target = "\(area.role) '\(area.label)'"
         let areaFrame = area.frame
         let bar = verticalScrollBar(of: area)
@@ -1678,7 +1790,7 @@ actor Engine {
         var reachedEnd = false
 
         while steps < maxSteps, !Task.isCancelled, !EmergencyStop.isHalted {
-            guard let frame = try? windowFrame(pid: pid),
+            guard let frame = try? windowFrame(pid: pid, window: window),
                   let capture = try? await ScreenCapture.windowImage(
                       ownedBy: pid,
                       near: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height),
@@ -1720,6 +1832,7 @@ actor Engine {
                     barBefore: barBefore, barAfter: bar?.numberValue, steps: steps,
                     foundAt: .init(x: rect.origin.x, y: rect.origin.y, width: rect.width, height: rect.height),
                     callAgain: false,
+                    area: pick,
                 )
             }
 
@@ -1787,6 +1900,7 @@ actor Engine {
             barBefore: barBefore, barAfter: barAfter, steps: steps,
             foundAt: nil,
             callAgain: exhausted,
+            area: pick,
         )
     }
 
@@ -1839,31 +1953,50 @@ actor Engine {
         )
     }
 
-    /// The element to aim a scroll at: an `AXScrollArea` when one exists (its scroll bar is
-    /// the best read-back available), else the web area, else the labeled element or window
-    /// itself. The fallbacks exist because Chromium and Electron expose **no scroll areas at
-    /// all** (measured on Discord — the content is AXWebArea/AXList/AXGroup throughout), and
-    /// refusing to scroll them would fail exactly the apps that need scrolling most.
-    private func resolveScrollArea(pid: pid_t, label: String?, role: String? = nil) throws -> AXElement {
+    /// The element to aim a scroll at. With a label: the labelled element's enclosing
+    /// `AXScrollArea` (it is the one to move), else one inside it, else the element itself.
+    /// Without: the window's scroll areas through `ScrollAreas.choose` (`areaIndex`, else the
+    /// largest that can scroll), else the web area, else the window. The fallbacks exist
+    /// because Chromium and Electron expose **no scroll areas at all** (measured on Discord —
+    /// the content is AXWebArea/AXList/AXGroup throughout), and refusing to scroll them would
+    /// fail exactly the apps that need scrolling most.
+    private func resolveScrollArea(
+        pid: pid_t, label: String?, role: String? = nil, window selector: WindowSelector = .init(),
+        areaIndex: Int? = nil, exact: Bool = false
+    ) throws -> (AXElement, ScrollAreaPick?) {
         if let label {
-            let element = try resolveNamed(pid: pid, label: label, role: role)
-            if element.role == "AXScrollArea" { return element }
+            let element = try resolveNamed(pid: pid, label: label, role: role, window: selector, exact: exact)
+            if element.role == "AXScrollArea" { return (element, nil) }
             var current = element
             for _ in 0 ..< 30 {
                 guard let parent = current.parent else { break }
-                if parent.role == "AXScrollArea" { return parent }
+                if parent.role == "AXScrollArea" { return (parent, nil) }
                 current = parent
             }
             // No enclosing scroll area: aim at the element itself — wheel events land on
             // whatever is under the point, and its scroll container need not be in the tree.
-            return firstDescendant(role: "AXScrollArea", under: element) ?? element
+            return (firstDescendant(role: "AXScrollArea", under: element) ?? element, nil)
         }
-        guard let window = primaryWindow(of: AXElement(pid: pid)) else {
+        guard let window = try (selector.isSpecified ? windowElement(pid: pid, selector: selector) : nil)
+            ?? primaryWindow(of: AXElement(pid: pid)) else {
             throw EngineError.notFound("a window for pid \(pid)")
         }
-        return firstDescendant(role: "AXScrollArea", under: window)
-            ?? firstDescendant(role: "AXWebArea", under: window)
-            ?? window
+        let areas = ScrollAreas.all(under: window)
+        let candidates = areas.map { area in
+            ScrollAreas.Candidate(frame: area.frame, scrollable: verticalScrollBar(of: area)?.numberValue != nil)
+        }
+        switch ScrollAreas.choose(candidates, requested: areaIndex) {
+        case let .index(index):
+            let pick = ScrollAreaPick(
+                index: index, count: areas.count,
+                frame: areas[index].frame.map { .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height) },
+            )
+            return (areas[index], pick)
+        case let .outOfRange(count):
+            throw EngineError.notFound("scroll area \(areaIndex ?? 0) — the window has \(count) (0-based)")
+        case .none:
+            return (firstDescendant(role: "AXWebArea", under: window) ?? window, nil)
+        }
     }
 
     /// The vertical scroll bar of an area, by attribute or by role walk.
@@ -1980,10 +2113,11 @@ actor Engine {
         var groundingResult: GroundingResult?
         var effectiveLocator = locator
         var element: AXElement
+        lastMatchedBy = nil
         do {
             element = try resolve(locator, pid: pid)
         } catch let error as EngineError where error.isNotFound {
-            if case let .named(label, _, _) = locator {
+            if case let .named(label, _, _, _) = locator {
                 let result = try await ground(instruction: label, pid: pid)
                 groundingResult = result
                 effectiveLocator = .point(x: result.point.x, y: result.point.y)
@@ -1992,9 +2126,12 @@ actor Engine {
                 throw error
             }
         }
+        let matchedBy = lastMatchedBy
         let wantsPress = if case .setText = action { false } else { true }
-        if wantsPress, case .point = effectiveLocator {
-            element = ascendToPressable(element)
+        switch effectiveLocator {
+        case .point, .mapped:
+            if wantsPress { element = ascendToPressable(element) }
+        default: break
         }
         // How the reach recovers when the handle dies mid-action (Electron rebuilds elements
         // on focus): re-run the *original* locator and accept the answer only when its role
@@ -2021,11 +2158,15 @@ actor Engine {
                 accept(ElementQuery.hitTest(CGPoint(x: x, y: y), pid: pid).map {
                     wantsPress ? self.ascendToPressable($0) : $0
                 })
-            case let .named(label, role, window):
+            case let .named(label, role, window, exact):
                 {
-                    let matches = ElementQuery.named(label, role: role, pid: pid, window: window).matches
-                    return matches.count == 1 ? accept(matches[0].element) : nil
+                    let matches = ElementQuery.named(label, role: role, pid: pid, window: window, exact: exact).matches
+                    return accept(ElementQuery.pickOne(matches, exact: exact).match?.element)
                 }()
+            case let .mapped(mapped):
+                accept((try? self.resolveMapped(mapped, pid: pid)).map {
+                    wantsPress ? self.ascendToPressable($0) : $0
+                })
             }
         }
         // Window-level visual evidence for click-shaped actions, exactly as the menu press
@@ -2036,7 +2177,11 @@ actor Engine {
         // control; a window animating on its own cannot testify.
         // When the original locator named a window, evidence is scoped to it: the pixel
         // baseline and the tree walk both aim at that window rather than the primary one.
-        let window: WindowSelector = if case let .named(_, _, selector) = locator { selector } else { .init() }
+        let window: WindowSelector = switch locator {
+        case let .named(_, _, selector, _): selector
+        case let .mapped(mapped): mapped.window
+        default: .init()
+        }
         var baseline: ScreenCapture.WindowCapture?
         var windowIsStill = false
         if wantsPress, ScreenCapture.isPermitted, let frame = try? windowFrame(pid: pid, window: window) {
@@ -2058,7 +2203,16 @@ actor Engine {
         let reach = GhostReach(
             allowHardwareInput: allowHardwareInput, foreground: foreground, clickOptions: clickOptions,
         )
-        var evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
+        // A list row has no press action; selecting it is the click. Ghost and verified by the
+        // selection read-back, so it runs ahead of the ladder and only a confirmed selection
+        // short-circuits it.
+        var evidence: Evidence
+        if case .click = action, clickOptions.isPlainLeftClick, !foreground,
+           let selected = await RowSelection.click(element, pid: pid) {
+            evidence = selected
+        } else {
+            evidence = await reach.perform(action, on: element, pid: pid, refetch: refetch)
+        }
         // The interface just changed; anything cached about this process is now suspect.
         cache.invalidate(pid: pid)
 
@@ -2096,7 +2250,37 @@ actor Engine {
         if let grounding = groundingResult {
             evidence.groundedBy = grounding.groundedBy
         }
+        evidence.matchedBy = matchedBy
         return evidence
+    }
+
+    /// Re-finds a `map`-numbered element by what the legend recorded (same role, a frame within
+    /// two points, the same name when it had one), so `click --box` presses the element itself.
+    /// A hit test at the box's center answers with the deepest element there, which on web
+    /// content is routinely a parent group with no press action (measured on bilibili in
+    /// Refrax: the box fell to a posted click on the group and nothing happened). Falls back to
+    /// that hit test when the element cannot be re-found uniquely. Nonisolated: the reach's
+    /// refetch closure calls it off the actor.
+    nonisolated func resolveMapped(_ mapped: MappedElement, pid: pid_t) throws -> AXElement {
+        if let element = Self.refindMapped(mapped, pid: pid) { return element }
+        let center = CGPoint(x: mapped.frame.midX, y: mapped.frame.midY)
+        guard let hit = ElementQuery.hitTest(center, pid: pid) else {
+            throw EngineError.notFound("the mapped \(mapped.role) at (\(Int(center.x)), \(Int(center.y)))")
+        }
+        return hit
+    }
+
+    /// The element a `map` legend row describes, when exactly one in its window still fits it.
+    nonisolated static func refindMapped(_ mapped: MappedElement, pid: pid_t) -> AXElement? {
+        let tolerance: CGFloat = 2
+        let matches = ElementQuery.search(pid: pid, window: mapped.window) { element in
+            guard element.role == mapped.role, let frame = element.frame else { return false }
+            guard abs(frame.minX - mapped.frame.minX) <= tolerance, abs(frame.minY - mapped.frame.minY) <= tolerance,
+                  abs(frame.width - mapped.frame.width) <= tolerance, abs(frame.height - mapped.frame.height) <= tolerance
+            else { return false }
+            return mapped.label.isEmpty || element.title == mapped.label || element.derivedLabel?.text == mapped.label
+        }.matches
+        return matches.count == 1 ? matches[0].element : nil
     }
 
     // MARK: - Vision rows
@@ -2279,6 +2463,7 @@ actor Engine {
         restoreCursor: Bool,
         window: WindowSelector = .init(),
         dwell: Duration? = nil,
+        exact: Bool = false,
     ) async throws -> TraceResult {
         // The tree is only consulted for a labeled endpoint, but an asleep display voids
         // the gesture's entire purpose too: nothing tracks a cursor nobody can see.
@@ -2297,7 +2482,7 @@ actor Engine {
             guard let pid else {
                 throw EngineError.pathRefused("A labeled destination needs --app to search in.")
             }
-            let element = try resolveNamed(pid: pid, label: label, role: role, window: window)
+            let element = try resolveNamed(pid: pid, label: label, role: role, window: window, exact: exact)
             guard let frame = element.frame, frame.width >= 1, frame.height >= 1 else {
                 throw EngineError.pathRefused("'\(label)' has no on-screen frame to move to.")
             }
@@ -2420,24 +2605,43 @@ actor Engine {
 
     /// One key shape for every label walk, so a find-then-read-then-act chain over the same
     /// query costs one walk however the verbs are mixed.
-    private nonisolated func cacheKey(_ query: String?, role: String?, window: WindowSelector = .init()) -> String {
-        "find:\(window.cacheToken):\(role ?? "*"):\(query ?? "*")"
+    private nonisolated func cacheKey(_ query: String?, role: String?, window: WindowSelector = .init(), exact: Bool = false) -> String {
+        "find:\(window.cacheToken):\(role ?? "*"):\(exact ? "=" : "")\(query ?? "*")"
     }
 
     /// Label to element, through the cache, with the ambiguity refusal every verb shares:
     /// acting on (or reading) whichever lookalike sorted first would be a coin flip. The
     /// refusal names each candidate's role, so the caller's next move is `role:`, not
     /// coordinates.
-    private func resolveNamed(pid: pid_t, label: String, role: String? = nil, window: WindowSelector = .init()) throws -> AXElement {
+    ///
+    /// Several substring matches of which exactly one matches whole resolve to that one
+    /// (`LabelMatching.pick`); the rule that chose is left in `lastMatchedBy` for the reply.
+    private func resolveNamed(
+        pid: pid_t, label: String, role: String? = nil, window: WindowSelector = .init(), exact: Bool = false
+    ) throws -> AXElement {
         if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
-        let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window)) {
-            ElementQuery.named(label, role: role, pid: pid, window: window)
+        let matches = cache.results(for: pid, key: cacheKey(label, role: role, window: window, exact: exact)) {
+            ElementQuery.named(label, role: role, pid: pid, window: window, exact: exact)
         }.matches
-        guard matches.count <= 1 else {
-            throw EngineError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
+        return try pickNamed(label, from: matches, exact: exact)
+    }
+
+    /// The shared tail of every label resolution: one match, the one exact match among
+    /// several, or the ambiguity refusal naming each candidate.
+    private func pickNamed(_ label: String, from matches: [ElementQuery.Match], exact: Bool) throws -> AXElement {
+        let picked = ElementQuery.pickOne(matches, exact: exact)
+        if let match = picked.match {
+            lastMatchedBy = picked.matchedBy
+            return match.element
         }
-        guard let match = matches.first else { throw EngineError.notFound("'\(label)'") }
-        return match.element
+        guard picked.ambiguous.isEmpty else {
+            throw EngineError.ambiguous(label, picked.ambiguous.map { candidate in
+                let name = candidate.element.derivedLabel?.text ?? candidate.element.label
+                let value = candidate.classification?.tier == .value ? " = '\((candidate.element.value ?? "").prefix(40))'" : ""
+                return "\(candidate.element.role) '\(name)'\(value)"
+            })
+        }
+        throw EngineError.notFound("'\(label)'" + (exact ? " (exact match)" : ""))
     }
 
     private func resolve(_ locator: Locator, pid: pid_t) throws -> AXElement {
@@ -2454,24 +2658,32 @@ actor Engine {
             }
             return element
 
-        case let .named(label, role, window):
+        case let .named(label, role, window, exact):
             if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
-            let matches = ElementQuery.named(label, role: role, pid: pid, window: window).matches
+            let matches = ElementQuery.named(label, role: role, pid: pid, window: window, exact: exact).matches
             // Matching is by substring, so "delete" can name several controls. Acting on
-            // whichever sorted first would be a coin flip on a possibly destructive button.
-            guard matches.count <= 1 else {
-                throw EngineError.ambiguous(label, matches.map { "\($0.element.role) '\($0.element.label)'" })
+            // whichever sorted first would be a coin flip on a possibly destructive button —
+            // unless exactly one of them matches whole, which is what the caller typed.
+            return try pickNamed(label, from: matches, exact: exact)
+
+        case let .mapped(mapped):
+            // Which way the box resolved rides out as `matchedBy`: the element itself, or the
+            // hit test at its center when the element could not be re-found uniquely.
+            if let element = Self.refindMapped(mapped, pid: pid) {
+                lastMatchedBy = "box-element"
+                return element
             }
-            guard let first = matches.first else { throw EngineError.notFound("'\(label)'") }
-            return first.element
+            lastMatchedBy = "box-point"
+            return try resolve(.point(x: mapped.frame.midX, y: mapped.frame.midY), pid: pid)
         }
     }
 
     private func descriptor(for element: AXElement, depth: Int) -> ElementDescriptor {
         let title = element.title
+        let derived = title.isEmpty ? element.derivedLabel : nil
         return ElementDescriptor(
             role: element.role,
-            label: title,
+            label: title.isEmpty ? (derived?.text ?? "") : title,
             roleDescription: element.roleDescription,
             help: element.help,
             identifier: element.identifier,
@@ -2482,7 +2694,8 @@ actor Engine {
                 .init(x: $0.origin.x, y: $0.origin.y, width: $0.width, height: $0.height)
             },
             // Only for the unnamed rows, and only from siblings — see the helper's note.
-            near: title.isEmpty ? nearestLabelledSibling(of: element) : nil,
+            near: title.isEmpty && derived == nil ? nearestLabelledSibling(of: element) : nil,
+            labelSource: derived == nil ? nil : "row",
         )
     }
 

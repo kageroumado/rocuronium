@@ -72,6 +72,9 @@ final class DemoStageModel {
     var sliderValue = 30.0
     var hoverCount = 0
     var dropCount = 0
+    var pane: String? = "General"
+    var ghostMode = false
+    var answer = "none"
 }
 
 private struct DemoStageView: View {
@@ -119,6 +122,37 @@ private struct DemoStageView: View {
                     .background(AlwaysHoverTracker { model.hoverCount += 1 })
                 Text("hovers: \(model.hoverCount)")
                     .font(.body.monospacedDigit())
+            }
+
+            HStack(alignment: .top, spacing: Theme.Space.md) {
+                // A sidebar List: its rows have no press action, so a click is a selection.
+                List(selection: $model.pane) {
+                    ForEach(["General", "Graphics", "Audio"], id: \.self) { Text($0) }
+                }
+                .listStyle(.sidebar)
+                .frame(width: 140, height: 84)
+                VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                    Text("pane: \(model.pane ?? "none")")
+                        .font(.body.monospacedDigit())
+                    HStack(spacing: Theme.Space.sm) {
+                        // A Form row's shape: the switch names nothing itself; its row's text does.
+                        HStack(spacing: Theme.Space.sm) {
+                            Text("Ghost Mode")
+                            Toggle("", isOn: $model.ghostMode)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                        }
+                        .accessibilityElement(children: .contain)
+                        Text("ghost: \(model.ghostMode ? "on" : "off")")
+                            .font(.body.monospacedDigit())
+                    }
+                    HStack(spacing: Theme.Space.sm) {
+                        // Labels where one contains the other: `--label 符合` must pick 符合.
+                        Button("符合") { model.answer = "符合" }
+                        Button("不符合") { model.answer = "不符合" }
+                        Text("answer: \(model.answer)")
+                    }
+                }
             }
 
             Divider()
