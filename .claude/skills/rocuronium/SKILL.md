@@ -1,6 +1,6 @@
 ---
 name: rocuronium
-description: Drive this Mac's UI from an agent — read the screen as text, map a window's layout as ASCII, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, see where a window's controls sit, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, map, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan).
+description: Drive this Mac's UI from an agent — read the screen as text, map a window's layout as ASCII, click, type, scroll, drag, press menus, capture windows — without taking the cursor or changing the frontmost app, with evidence on every action. Use when asked to control macOS, read/click/type in a Mac app, automate a desktop workflow, inspect the accessibility tree, see where a window's controls sit, screenshot or wait on a window, park a window on a virtual display, or run any rocuronium verb (status, read, find, map, click, type, key, menu, shortcut, scroll, wait, screenshot, move, drag, park, plan). Games take hardware input only: activate, then type/key with --allow-hardware-input.
 ---
 
 # rocuronium

@@ -21,6 +21,9 @@ nonisolated enum HardwareInput {
         /// Ordinary application windows. Higher layers are the Dock and menu bar, whose
         /// full-screen backing windows would otherwise look like they cover everything.
         static let normalWindowLayer = 0
+        /// `kCGDockWindowLevel`: the Dock, and above it the menu bar, status items and
+        /// pop-up menus. Floating panels and utility windows sit between this and layer 0.
+        static let dockWindowLayer = 20
         /// Elasticity: cursor movement below this between two of our samples is rounding
         /// noise, not a hand.
         static let humanNoiseFloor = 1.0
@@ -39,7 +42,35 @@ nonisolated enum HardwareInput {
         static let excessDecay = 0.9
     }
 
-    /// Who owns the frontmost ordinary window at `point`.
+    /// One on-screen window as the occlusion check sees it: who owns it, its stacking layer,
+    /// its frame in global top-left points, and its alpha.
+    struct WindowSlot: Equatable, Sendable {
+        let pid: pid_t
+        let layer: Int
+        let frame: CGRect
+        var alpha: Double = 1
+    }
+
+    /// The on-screen windows, front to back, as `CGWindowListCopyWindowInfo` orders them.
+    static func onScreenWindowSlots() -> [WindowSlot] {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
+        ) as? [[String: Any]] else { return [] }
+        return windows.compactMap { window in
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+            else { return nil }
+            return WindowSlot(
+                pid: pid, layer: layer, frame: frame,
+                alpha: (window[kCGWindowAlpha as String] as? Double) ?? 1,
+            )
+        }
+    }
+
+    /// Who would receive a real click at `point` instead of `target`, or nil when the target
+    /// would.
     ///
     /// This check exists because the hardware tentacle differs from every other tentacle in a way
     /// that is easy to miss: `postToPid` delivers to a *process* regardless of stacking, but
@@ -47,20 +78,33 @@ nonisolated enum HardwareInput {
     /// on this Mac: fifteen windows overlapped a single test point. Clicking an occluded
     /// target would silently click a different app — with the user's own cursor, at a
     /// coordinate the caller believed belonged to its target.
-    static func ownerOfWindow(at point: CGPoint) -> pid_t? {
-        guard let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID,
-        ) as? [[String: Any]] else { return nil }
-        // The list is front-to-back, so the first hit is the one that would receive the click.
-        for window in windows {
-            guard (window[kCGWindowLayer as String] as? Int) == Constants.normalWindowLayer,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  frame.contains(point)
-            else { continue }
-            return (window[kCGWindowOwnerPID as String] as? pid_t)
+    static func occluder(at point: CGPoint, target: pid_t?) -> pid_t? {
+        occluder(at: point, target: target, ownPID: getpid(), windows: onScreenWindowSlots())
+    }
+
+    /// The z-order rule, pure so it can be tested on synthetic window lists.
+    ///
+    /// Only windows **above the target's own topmost window at the point** can occlude it. The
+    /// target's layer is not assumed to be 0: a fullscreen game can sit on a raised level, and
+    /// a layer-0 filter skips it and blames whatever ordinary window is behind it. Above the target, an occluder is an
+    /// application-band window (layer 0 up to the Dock's level) or one on the target's own
+    /// layer; the Dock's and menu bar's full-screen backing windows sit above every layer-0
+    /// window and would otherwise cover everything. Our own windows (the presence overlay) and
+    /// fully transparent windows never count. When the target has no window at the point, the
+    /// topmost application-band window there decides.
+    static func occluder(at point: CGPoint, target: pid_t?, ownPID: pid_t, windows: [WindowSlot]) -> pid_t? {
+        let hits = windows.filter {
+            $0.frame.contains(point) && $0.alpha > 0 && ($0.pid != ownPID || $0.pid == target)
         }
-        return nil
+        func isApplicationBand(_ layer: Int) -> Bool {
+            (Constants.normalWindowLayer ..< Constants.dockWindowLayer).contains(layer)
+        }
+        if let target, let targetIndex = hits.firstIndex(where: { $0.pid == target }) {
+            let targetLayer = hits[targetIndex].layer
+            return hits[..<targetIndex].first { isApplicationBand($0.layer) || $0.layer == targetLayer }?.pid
+        }
+        guard let topmost = hits.first(where: { isApplicationBand($0.layer) }) else { return nil }
+        return topmost.pid == target ? nil : topmost.pid
     }
 
     /// Moves the pointer to `point`, clicks, and puts the pointer back where it was.
@@ -441,15 +485,25 @@ nonisolated enum HardwareInput {
     static func type(_ text: String) async -> String {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
+        let layout = await MainActor.run { KeyLayout.currentMap() }
         var delivered = ""
         // Per-scalar UTF-16 payloads, not `UniChar(scalar.value)` — that truncating
         // conversion traps on any non-BMP scalar. See `EventPoster.utf16Payloads`.
         let scalars = Array(text.unicodeScalars)
         for (index, var units) in EventPoster.utf16Payloads(of: text).enumerated() {
             guard consoleIsStillOurs else { return delivered }
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+            // The real key for the character, so keycode readers (games, Wine) see the key a
+            // human would press; a character no key types keeps keycode 0 and relies on the
+            // payload alone.
+            let stroke = KeyLayout.stroke(for: String(scalars[index]), in: layout)
+            let keyCode = stroke?.keyCode ?? 0
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
             else { continue }
+            if stroke?.shift == true {
+                down.flags = .maskShift
+                up.flags = .maskShift
+            }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.post(tap: SessionContext.eventTap)

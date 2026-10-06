@@ -33,4 +33,4 @@ Refusals are rails, not failures. Each names the flag that permits the act; pass
 | park destination on no display | `park` | pick a visible point | the window would be unreachable |
 | ambiguous app or element | any | `--pid`, bundle id, `--role` | a coin flip on somebody's windows |
 
-`--allow-hardware-input` on `type`, `click`, and `key` permits the sting: legitimate when nobody is present and the ghost tentacles have demonstrably failed. The reply will say `cursorMovedByUs: true`, and the engine still refuses if another window covers the target.
+`--allow-hardware-input` on `type`, `click`, and `key` permits the sting: legitimate when nobody is present and the ghost tentacles have demonstrably failed. The reply will say `cursorMovedByUs: true`, and the engine still refuses if another window covers the target — tested at the aim point, against windows stacked above the target's own window there.

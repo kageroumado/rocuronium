@@ -191,7 +191,9 @@ enum MCPServer {
             the focused element unless `label` is given. Control characters are refused \
             unless `submit` is true, so a newline cannot send a message by accident. Pass \
             empty text explicitly to clear a field. Electron accepts unicode keystrokes and \
-            ignores keycodes.
+            ignores keycodes. Games read hardware keys only: `activate` first, then pass \
+            `allowHardwareInput` — a target with no readable value is typed once on the \
+            console with real keycodes, without a focusing click when it is already frontmost.
             """,
             properties: [
                 "app": ["type": "string"],
