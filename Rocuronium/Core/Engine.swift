@@ -205,12 +205,13 @@ actor Engine {
                     + candidates.map { $0.summary }.joined(separator: ", ")
                     + ". Pick one with --window-index <n> (0-based) or --window-at <x,y>."
             case let .unparseableShortcut(keys):
-                "Could not parse '\(keys)' — use forms like cmd+a, cmd+shift+z, cmd+left."
+                "Could not parse '\(keys)' — use forms like cmd+a, cmd+shift+z, cmd+left, cmd+=, cmd+plus."
             case let .unparseableKey(keys):
-                "Could not parse '\(keys)' as a named key. 'key' sends "
+                "Could not parse '\(keys)' as a key chord. 'key' sends a named key — "
                     + "escape, return, tab, space, delete, forwarddelete, left/right/up/down, "
-                    + "home, end, pageup, pagedown — with optional modifiers, e.g. shift+tab. "
-                    + "For printable characters use 'type'; for letter shortcuts use 'shortcut'."
+                    + "home, end, pageup, pagedown, f1–f12 — or one printable character (a, =, "
+                    + "plus, minus, comma…), with optional cmd/shift/opt/ctrl modifiers joined by "
+                    + "'+', e.g. shift+tab or cmd+=. For text use 'type'."
             case let .hazardousShortcut(path, consequence):
                 "That shortcut resolves to '\(path)', which \(consequence). Pass confirm:true if that is genuinely intended. (Every app's menu bar includes the Apple menu, so session-wide items are reachable from any target.)"
             case let .menuPathNotFound(component, available):
@@ -656,9 +657,27 @@ actor Engine {
     /// while the actual page content never appears. Only an element that is actually a
     /// window counts; `AXWindows` answered correctly in the same state and is the fallback.
     private func primaryWindow(of application: AXElement) -> AXElement? {
-        let windowRoles = ["AXWindow", "AXSheet", "AXDialog", "AXDrawer"]
-        if let main = application.mainWindow, windowRoles.contains(main.role) { return main }
-        return application.windows.first { windowRoles.contains($0.role) }
+        if let main = application.mainWindow, Self.windowRoles.contains(main.role) { return main }
+        let windows = application.windows
+        let index = Self.primaryWindowIndex(windows.map { (role: $0.role, subrole: $0.subrole) })
+        return index.map { windows[$0] }
+    }
+
+    private nonisolated static let windowRoles: Set<String> = ["AXWindow", "AXSheet", "AXDialog", "AXDrawer"]
+
+    /// Which of an app's `AXWindows` stands in for a main window the app does not report.
+    ///
+    /// `AXWindows` is front-to-back, so a borderless overlay at a high window level sorts first.
+    /// An accessory app whose windows were ordered in without activation answers
+    /// `AXMainWindow` with nil, and in Rocuronium itself the first window is then the
+    /// full-screen presence overlay above the demo stage: every evidence channel scoped to
+    /// "the window" would watch the overlay, and a press that ticks 'clicks: 0' → 'clicks: 1'
+    /// would read `treeChanges: 0`. Borderless windows report subrole `AXUnknown`, so a window
+    /// with a real subrole (standard, dialog, floating) wins, and an app whose every window is
+    /// borderless (games, frameless shells) still gets its frontmost one.
+    nonisolated static func primaryWindowIndex(_ windows: [(role: String, subrole: String?)]) -> Int? {
+        let candidates = windows.indices.filter { windowRoles.contains(windows[$0].role) }
+        return candidates.first { (windows[$0].subrole ?? "AXUnknown") != "AXUnknown" } ?? candidates.first
     }
 
     /// Resolves exactly one window from a `WindowSelector`, with the ambiguity rule every
@@ -1314,7 +1333,7 @@ actor Engine {
         return (evidence, itemName)
     }
 
-    /// Posts a bare named key (Escape, Return, arrows…) to the process — the verb for keys
+    /// Posts a key chord (Escape, Return, arrows, ⌘=…) to the process — the verb for keys
     /// that are neither text (`type`) nor menu-reachable (`shortcut`). The measured need:
     /// dismissing a native file-picker dialog wants a plain Escape, which no other verb
     /// could send (trial log, 2026-08-06).
@@ -1334,7 +1353,8 @@ actor Engine {
 
     func pressKey(pid: pid_t, keys: String, delivery: KeyDelivery = .process) async throws -> Evidence {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        guard let chord = EventPoster.KeyChord.parse(keys) else {
+        let layout = await MainActor.run { KeyboardLayout.current() }
+        guard let chord = EventPoster.KeyChord.parse(keys, layout: layout) else {
             throw EngineError.unparseableKey(keys)
         }
 
@@ -1362,7 +1382,7 @@ actor Engine {
         let windowsBefore = onScreenWindowCount(pid)
         switch delivery {
         case .process:
-            await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, pid: pid)
+            await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, character: chord.character, pid: pid)
         case .session:
             await HardwareInput.pressKey(chord)
         }
@@ -1930,6 +1950,11 @@ actor Engine {
     private func treeEvidenceBaseline(pid: pid_t, observe: Bool, window: WindowSelector = .init()) -> [TreeSnapshot.Node]? {
         guard let nodes = windowNodes(pid: pid, window: window) else { return nil }
         guard observe || nodes.count <= Constants.treeEvidenceMaxElements else { return nil }
+        // The same intrinsic-motion control the window-pixel channel takes: a second walk with
+        // nothing in between. A tree that changes by itself — a terminal printing, a clock, a
+        // progress label — would otherwise upgrade every no-op press to `.confirmed`.
+        guard let control = windowNodes(pid: pid, window: window),
+              TreeDelta.compute(from: nodes, to: control).isEmpty else { return nil }
         return nodes
     }
 

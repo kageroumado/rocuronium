@@ -35,7 +35,8 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
   type       --app <a> --text <t> [--label <t>] [--role <r>] [--submit]
   click      --app <a> (--label <t> [--role <r>] | --x <n> --y <n> | --box <n> --token <t>) [--observe]
              [--button left|right] [--count 2] [--modifiers cmd,shift] [--foreground]
-  key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|…>
+  key        --app <a> --keys <escape|return|tab|shift+tab|cmd+down|cmd+=|f5|r|…>   a named key or
+             one character (posted at its key on the current layout), with modifiers
   shortcut   --app <a> --keys <cmd+a> [--resolve-only] [--confirm] [--observe]   presses the menu item;
              cmd+a/c/x/v do select-all/copy/cut/paste via accessibility + clipboard, with a verdict
   menu       --app <a> --path "File > Export" [--resolve-only] [--confirm] [--observe]
@@ -126,6 +127,11 @@ guard let command = arguments.first, !command.hasPrefix("-"), !helpWords.contain
     exit(arguments.isEmpty || helpWords.contains(arguments[0]) ? 0 : 2)
 }
 arguments.removeFirst()
+// `rocuronium key --help` asks for help, not for a request the daemon would refuse.
+if arguments.contains("--help") {
+    print(usage)
+    exit(0)
+}
 
 @MainActor
 func value(for flag: String) -> String? {
@@ -210,6 +216,21 @@ for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", 
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
+// `key`/`shortcut` take the chord as --keys, and also as --key or a bare trailing word
+// (`key --app X escape`) — the two spellings callers reach for besides the documented one.
+if command == "key" || command == "shortcut", payload["keys"] == nil {
+    if let found = value(for: "key") {
+        payload["keys"] = found
+    } else if let last = arguments.last, !last.hasPrefix("--") {
+        // A bare word is positional unless it is the value of the flag before it; the flags
+        // these two verbs take without a value are the only flags it may follow.
+        let switches: Set<String> = ["--allow-hardware-input", "--confirm", "--resolve-only", "--observe", "--json"]
+        let previous = arguments.count >= 2 ? arguments[arguments.count - 2] : nil
+        if previous.map({ !$0.hasPrefix("--") || switches.contains($0) }) ?? true {
+            payload["keys"] = last
+        }
+    }
+}
 if let found = value(for: "until-text") { payload["untilText"] = found }
 if let found = value(for: "window-at") { payload["windowAt"] = found }
 // `wait --for` carries a JSON guard object, forwarded as `expect` — the same grammar a

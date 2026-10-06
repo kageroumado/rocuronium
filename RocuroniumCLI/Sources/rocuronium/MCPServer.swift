@@ -270,7 +270,7 @@ enum MCPServer {
             """,
             properties: [
                 "app": ["type": "string"],
-                "keys": ["type": "string", "description": "cmd+a, cmd+shift+z, cmd+left, ..."],
+                "keys": ["type": "string", "description": "cmd+a, cmd+shift+z, cmd+left, cmd+= (finds an item stored as ⌘+ too), cmd+plus, ..."],
                 "resolveOnly": ["type": "boolean", "description": "Report the menu item without pressing it"],
                 "confirm": ["type": "boolean", "description": "Permit a session- or data-destroying item. Asserts that the human approved it elsewhere; never pass it to get past a refusal"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
@@ -340,9 +340,12 @@ enum MCPServer {
         tool(
             "key",
             """
-            Post a bare named key — escape, return, enter, tab, space, delete, forwarddelete, \
-            left/right/up/down, home, end, pageup, pagedown — with optional modifiers \
-            ('shift+tab', 'cmd+down'). The gap the other input verbs leave: `type` sends text \
+            Post a key chord — a named key (escape, return, enter, tab, space, delete, \
+            forwarddelete, left/right/up/down, home, end, pageup, pagedown, f1–f12) or one \
+            printable character ('r', '=', 'plus', 'minus', 'comma'), with optional modifiers \
+            ('shift+tab', 'cmd+down', 'cmd+='). A character is posted at its key on the current \
+            keyboard layout, with the character as the unicode payload; a character that needs \
+            shift ('+') adds it. The gap the other input verbs leave: `type` sends text \
             only and `shortcut` reaches only keys a menu item carries. Delivered per-pid \
             without touching cursor or focus. Measured reach: lands in the app's focused \
             text control (`return` in an address bar commits navigation) — but sheet \
@@ -352,12 +355,12 @@ enum MCPServer {
             console pipeline — gated like all hardware input (a present human refuses it \
             without confirm; locked screen always refuses) and only when the target is \
             frontmost, since it lands in global focus. Electron/Chromium ignore posted \
-            keycodes entirely. For printable characters use `type`; for letter shortcuts \
-            use `shortcut`.
+            keycodes entirely. For text use `type`; for a chord a menu item carries prefer \
+            `shortcut`, which works on Chromium too.
             """,
             properties: [
                 "app": ["type": "string"],
-                "keys": ["type": "string", "description": "escape, shift+tab, cmd+down, ..."],
+                "keys": ["type": "string", "description": "escape, shift+tab, cmd+down, cmd+=, f5, r, ..."],
                 "allowHardwareInput": ["type": "boolean", "description": "Deliver session-level on the console pipeline (reaches key-equivalent dispatch; target must be frontmost)"],
                 "confirm": ["type": "boolean", "description": "With allowHardwareInput: proceed although a human is present"],
             ], required: ["app", "keys"],

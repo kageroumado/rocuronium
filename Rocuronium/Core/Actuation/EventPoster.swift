@@ -59,48 +59,66 @@ nonisolated enum EventPoster {
         return delivered
     }
 
-    /// A bare keystroke for the `key` verb: a named key plus modifier flags.
+    /// A keystroke for the `key` verb: a named key or a printable character, plus modifier
+    /// flags — "escape", "shift+tab", "cmd+=", "cmd+shift+z", or a bare "r" for a game.
     ///
-    /// Named keys only, deliberately. A printable character belongs to `type` (which posts
-    /// the unicode payload every toolkit honors), and a modifier-plus-letter chord belongs to
-    /// `shortcut` (which presses the menu item and therefore works on Chromium). This parser
-    /// covers the remaining gap: the keys that are neither text nor menu-reachable — Escape
-    /// on a file-picker dialog was the trial-week case that had no verb at all.
+    /// A printable character is posted as its key position on the current layout, with the
+    /// character also set as the event's unicode payload. Plain text still belongs to `type`,
+    /// and a chord that a menu item carries is better sent with `shortcut` (which presses the
+    /// item and therefore works on Chromium); this verb is for the keys neither reaches —
+    /// Escape on a file-picker dialog, a terminal's own ⌘= binding, a game's hotkey.
     struct KeyChord {
         let keyCode: CGKeyCode
         let flags: CGEventFlags
         /// Canonical "cmd+escape" spelling, for the evidence.
         let name: String
+        /// The character a printable key types, carried as the unicode payload. Nil for
+        /// named keys.
+        var character: String? = nil
 
-        /// Parses "escape", "cmd+down", "shift+tab". Returns nil for unknown keys and
-        /// unknown modifiers — including printable characters, which have better verbs.
-        static func parse(_ text: String) -> KeyChord? {
-            var tokens = text.lowercased().split(separator: "+", omittingEmptySubsequences: true).map(String.init)
-            guard let key = tokens.popLast(), let keyCode = MenuQuery.Shortcut.namedKeys[key] else { return nil }
+        /// Parses "escape", "cmd+down", "shift+tab", "cmd+=", "cmd++", "cmd+plus". Returns nil
+        /// for unknown modifiers and for characters the layout has no key for.
+        static func parse(_ text: String, layout: KeyboardLayout = .ansi) -> KeyChord? {
+            guard let (key, mask) = MenuQuery.Shortcut.tokenize(text) else { return nil }
             var flags: CGEventFlags = []
-            for token in tokens {
-                switch token {
-                case "cmd", "command", "⌘": flags.insert(.maskCommand)
-                case "shift", "⇧": flags.insert(.maskShift)
-                case "opt", "option", "alt", "⌥": flags.insert(.maskAlternate)
-                case "ctrl", "control", "⌃": flags.insert(.maskControl)
-                default: return nil
-                }
+            if mask & 8 == 0 { flags.insert(.maskCommand) }
+            if mask & 1 != 0 { flags.insert(.maskShift) }
+            if mask & 2 != 0 { flags.insert(.maskAlternate) }
+            if mask & 4 != 0 { flags.insert(.maskControl) }
+            func spelled(_ flags: CGEventFlags, _ key: String) -> String {
+                let names: [(CGEventFlags, String)] = [
+                    (.maskControl, "ctrl"), (.maskAlternate, "opt"), (.maskShift, "shift"), (.maskCommand, "cmd"),
+                ]
+                return (names.filter { flags.contains($0.0) }.map(\.1) + [key]).joined(separator: "+")
             }
-            return KeyChord(keyCode: CGKeyCode(keyCode), flags: flags, name: (tokens + [key]).joined(separator: "+"))
+            if let keyCode = MenuQuery.Shortcut.namedKeys[key] {
+                return KeyChord(keyCode: CGKeyCode(keyCode), flags: flags, name: spelled(flags, key))
+            }
+            let text = MenuQuery.Shortcut.characterNames[key] ?? key
+            guard text.count == 1, let character = text.first, let physical = layout.key(for: character) else {
+                return nil
+            }
+            // "+" is shift-"=": the shift the character needs is part of the chord.
+            if physical.shift { flags.insert(.maskShift) }
+            return KeyChord(keyCode: physical.keyCode, flags: flags, name: spelled(flags, text), character: text)
         }
     }
 
-    /// Sends a keycode with optional modifiers.
+    /// Sends a keycode with optional modifiers, and the typed character as the unicode
+    /// payload when the key is a printable one.
     ///
     /// Works for AppKit targets. **Does not work for Electron** — measured: Backspace and
     /// Cmd+A posted to Discord had no effect whatsoever while unicode text worked.
-    static func sendKey(_ keyCode: CGKeyCode, modifiers: CGEventFlags = [], pid: pid_t) async {
+    static func sendKey(_ keyCode: CGKeyCode, modifiers: CGEventFlags = [], character: String? = nil, pid: pid_t) async {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .privateState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         else { return }
+        if var units = character.map({ Array($0.utf16) }), !units.isEmpty {
+            down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+        }
         down.flags = modifiers
         up.flags = modifiers
         down.postToPid(pid)
