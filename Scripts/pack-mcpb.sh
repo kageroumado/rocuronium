@@ -98,13 +98,43 @@ manifest["tools"] = [
     for tool in tools
 ]
 json.dump(manifest, open(output, "w"), indent=2, ensure_ascii=False)
+json.dump(tools, open(output + ".tools", "w"), ensure_ascii=False)
 print(f"   {len(tools)} tools")
 PY
 
 echo "==> Packing $ASSET"
 npx -y "$MCPB_CLI" validate "$STAGE/manifest.json"
+TOOLS_FILE="$WORK/tools.json"
+mv "$STAGE/manifest.json.tools" "$TOOLS_FILE"
 npx -y "$MCPB_CLI" pack "$STAGE" "$WORK/$ASSET"
 SHA="$(shasum -a 256 "$WORK/$ASSET" | cut -d' ' -f1)"
+
+echo "==> Packing the Smithery variant"
+# Smithery reads the bundle's tool list as MCP tools and requires each one's inputSchema, which
+# the MCPB manifest schema rejects. This copy carries the schemas; it goes to Smithery only, never
+# onto the GitHub release that the registry entry points at.
+SMITHERY_ASSET="rocuronium-$VERSION-smithery.mcpb"
+python3 - "$STAGE" "$TOOLS_FILE" "$WORK/$SMITHERY_ASSET" <<'PY'
+import json, os, sys, zipfile
+
+stage, tools_file, output = sys.argv[1:]
+manifest = json.load(open(os.path.join(stage, "manifest.json")))
+schemas = {tool["name"]: tool["inputSchema"] for tool in json.load(open(tools_file))}
+for tool in manifest["tools"]:
+    tool["inputSchema"] = schemas[tool["name"]]
+with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as bundle:
+    bundle.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+    for root, _, files in os.walk(stage):
+        for name in files:
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, stage)
+            if rel == "manifest.json":
+                continue
+            info = zipfile.ZipInfo.from_file(path, rel)  # keeps the CLI's executable bit
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(path, "rb") as file:
+                bundle.writestr(info, file.read())
+PY
 
 echo "==> Pointing server.json at it"
 python3 - "$PROJECT_DIR/server.json" "$SEMVER" "v$VERSION/$ASSET" "$SHA" <<'PY'
@@ -125,5 +155,6 @@ PY
 echo
 echo "Bundle:  $WORK/$ASSET"
 echo "SHA-256: $SHA"
+echo "Smithery: $WORK/$SMITHERY_ASSET (npx -y @smithery/cli@4.11.1 mcp publish it -n kageroumado/rocuronium)"
 echo "Next:    gh release upload v$VERSION \"$WORK/$ASSET\" -R kageroumado/rocuronium"
 echo "         mcp-publisher validate && mcp-publisher publish"
