@@ -1288,17 +1288,30 @@ final class CommandRouter {
         // A chord reaches the app's key-equivalent dispatch, which fires the menu item that
         // carries it — so `key cmd+shift+q` is Apple ▸ Log Out and `key cmd+delete` is Move to
         // Trash. The `shortcut` rail applies here too: a chord a hazardous item carries is
-        // refused without `confirm`.
-        if request.confirm != true,
-           let hazard = try? await engine.pressShortcut(pid: pid, keys: keys, mode: .resolveOnly)
-        {
-            if let consequence = hazard.hazard {
+        // refused without `confirm`. The check fails closed: only "no menu item carries this
+        // chord" lets the key through; a resolve that cannot run (display asleep, a menu bar
+        // that will not answer) is not evidence the chord is harmless.
+        if request.confirm != true {
+            do {
+                let resolved = try await engine.pressShortcut(pid: pid, keys: keys, mode: .resolveOnly)
+                if let consequence = resolved.hazard {
+                    return [
+                        "ok": false,
+                        "error": "'\(keys)' is the key equivalent of '\(resolved.menuPath)', which \(consequence). "
+                            + "Pass confirm:true if that is genuinely intended.",
+                        "menuItem": resolved.menuPath,
+                        "hazard": consequence,
+                        "requiresConfirm": true,
+                        "presence": presenceBlock(),
+                    ]
+                }
+            } catch let error as Engine.EngineError where error.isNotFound {
+                // No menu item carries the chord, so key-equivalent dispatch fires no item.
+            } catch {
                 return [
                     "ok": false,
-                    "error": "'\(keys)' is the key equivalent of '\(hazard.menuPath)', which \(consequence). "
-                        + "Pass confirm:true if that is genuinely intended.",
-                    "menuItem": hazard.menuPath,
-                    "hazard": consequence,
+                    "error": "could not check whether '\(keys)' is a hazardous menu item's key equivalent "
+                        + "(\(error.localizedDescription)). Pass confirm:true to send it anyway.",
                     "requiresConfirm": true,
                     "presence": presenceBlock(),
                 ]
