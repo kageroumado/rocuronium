@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -18,12 +19,10 @@ nonisolated enum HardwareInput {
         static let clickHoldDuration: Duration = .milliseconds(30)
         static let perCharacterDelay: Duration = .milliseconds(12)
         static let settleDelay: Duration = .milliseconds(80)
-        /// Ordinary application windows. Higher layers are the Dock and menu bar, whose
-        /// full-screen backing windows would otherwise look like they cover everything.
-        static let normalWindowLayer = 0
-        /// `kCGDockWindowLevel`: the Dock, and above it the menu bar, status items and
-        /// pop-up menus. Floating panels and utility windows sit between this and layer 0.
-        static let dockWindowLayer = 20
+        /// Owners of the whole-display backing windows stacked above every ordinary window
+        /// (the Dock's, at the Dock level). The menu bar strip, also the window server's, is
+        /// not a whole display and stays an occluder.
+        static let backdropOwners: Set<String> = ["Dock", "Window Server"]
         /// Elasticity: cursor movement below this between two of our samples is rounding
         /// noise, not a hand.
         static let humanNoiseFloor = 1.0
@@ -46,6 +45,7 @@ nonisolated enum HardwareInput {
     /// its frame in global top-left points, and its alpha.
     struct WindowSlot: Equatable, Sendable {
         let pid: pid_t
+        var owner: String = ""
         let layer: Int
         let frame: CGRect
         var alpha: Double = 1
@@ -63,10 +63,20 @@ nonisolated enum HardwareInput {
                   let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
             else { return nil }
             return WindowSlot(
-                pid: pid, layer: layer, frame: frame,
+                pid: pid, owner: (window[kCGWindowOwnerName as String] as? String) ?? "",
+                layer: layer, frame: frame,
                 alpha: (window[kCGWindowAlpha as String] as? Double) ?? 1,
             )
         }
+    }
+
+    /// The active displays' bounds, in the same global top-left points as window frames.
+    static func displayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map(CGDisplayBounds)
     }
 
     /// Who would receive a real click at `point` instead of `target`, or nil when the target
@@ -79,32 +89,39 @@ nonisolated enum HardwareInput {
     /// target would silently click a different app — with the user's own cursor, at a
     /// coordinate the caller believed belonged to its target.
     static func occluder(at point: CGPoint, target: pid_t?) -> pid_t? {
-        occluder(at: point, target: target, ownPID: getpid(), windows: onScreenWindowSlots())
+        occluder(
+            at: point, target: target, ownPID: getpid(),
+            windows: onScreenWindowSlots(), displays: displayBounds(),
+        )
     }
 
-    /// The z-order rule, pure so it can be tested on synthetic window lists.
+    /// The z-order rule, pure so it can be tested on synthetic window lists. It fails closed:
+    /// anything that might take the click counts.
     ///
-    /// Only windows **above the target's own topmost window at the point** can occlude it. The
-    /// target's layer is not assumed to be 0: a fullscreen game can sit on a raised level, and
-    /// a layer-0 filter skips it and blames whatever ordinary window is behind it. Above the target, an occluder is an
-    /// application-band window (layer 0 up to the Dock's level) or one on the target's own
-    /// layer; the Dock's and menu bar's full-screen backing windows sit above every layer-0
-    /// window and would otherwise cover everything. Our own windows (the presence overlay) and
-    /// fully transparent windows never count. When the target has no window at the point, the
-    /// topmost application-band window there decides.
-    static func occluder(at point: CGPoint, target: pid_t?, ownPID: pid_t, windows: [WindowSlot]) -> pid_t? {
+    /// Every visible window stacked **above the target's own topmost window at the point**
+    /// occludes it, on any layer — a pop-up menu, a notification banner, an authorization
+    /// dialog, the menu bar strip. The target's layer is not assumed to be 0: a fullscreen game
+    /// can sit on a raised level, and a layer filter blames whatever is behind it. Exempt are
+    /// only our own windows (the presence overlay), fully transparent windows, and the Dock's
+    /// and the window server's whole-display backing windows, which sit above every ordinary
+    /// window and are recognized by owner *and* a frame equal to a display — never by layer.
+    /// When the target has no window at the point, anything else there occludes it.
+    static func occluder(
+        at point: CGPoint, target: pid_t?, ownPID: pid_t, windows: [WindowSlot], displays: [CGRect],
+    ) -> pid_t? {
+        func isBackdrop(_ slot: WindowSlot) -> Bool {
+            Constants.backdropOwners.contains(slot.owner) && displays.contains(slot.frame)
+        }
         let hits = windows.filter {
-            $0.frame.contains(point) && $0.alpha > 0 && ($0.pid != ownPID || $0.pid == target)
+            $0.frame.contains(point) && $0.alpha > 0
+                && ($0.pid != ownPID || $0.pid == target) && !isBackdrop($0)
         }
-        func isApplicationBand(_ layer: Int) -> Bool {
-            (Constants.normalWindowLayer ..< Constants.dockWindowLayer).contains(layer)
+        let above = if let target, let targetIndex = hits.firstIndex(where: { $0.pid == target }) {
+            hits[..<targetIndex]
+        } else {
+            hits[...]
         }
-        if let target, let targetIndex = hits.firstIndex(where: { $0.pid == target }) {
-            let targetLayer = hits[targetIndex].layer
-            return hits[..<targetIndex].first { isApplicationBand($0.layer) || $0.layer == targetLayer }?.pid
-        }
-        guard let topmost = hits.first(where: { isApplicationBand($0.layer) }) else { return nil }
-        return topmost.pid == target ? nil : topmost.pid
+        return above.first { $0.pid != target }?.pid
     }
 
     /// Moves the pointer to `point`, clicks, and puts the pointer back where it was.
@@ -481,8 +498,12 @@ nonisolated enum HardwareInput {
 
     /// Returns how much of `text` was actually delivered, so a run cut short is reported
     /// rather than assumed complete.
+    ///
+    /// `target` is re-verified as the frontmost process before every character: these
+    /// keystrokes land in whatever holds the keyboard, and a ⌘-Tab, a launching app or a modal
+    /// from elsewhere mid-payload would otherwise receive the rest of it.
     @discardableResult
-    static func type(_ text: String) async -> String {
+    static func type(_ text: String, onlyWhileFrontmost target: pid_t) async -> String {
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
         let layout = await MainActor.run { KeyLayout.currentMap() }
@@ -492,6 +513,8 @@ nonisolated enum HardwareInput {
         let scalars = Array(text.unicodeScalars)
         for (index, var units) in EventPoster.utf16Payloads(of: text).enumerated() {
             guard consoleIsStillOurs else { return delivered }
+            let frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+            guard frontmost == target else { return delivered }
             // The real key for the character, so keycode readers (games, Wine) see the key a
             // human would press; a character no key types keeps keycode 0 and relies on the
             // payload alone.

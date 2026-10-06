@@ -84,11 +84,16 @@ nonisolated struct GhostReach {
 
     /// Where a posted or hardware click lands: the caller's point, else the frame's center.
     /// Nil for a missing or zero-area frame when no point was named — a closed menu item
-    /// reports a non-nil 0×0 rect at the screen's bottom-left corner.
+    /// reports a non-nil 0×0 rect at the screen's bottom-left corner — and nil for a named
+    /// point outside the element's usable frame, where the click would land on something the
+    /// hit test did not answer for.
     static func aim(at point: CGPoint?, frame: CGRect?) -> CGPoint? {
-        if let point { return point }
-        guard let frame, frame.width >= 1, frame.height >= 1 else { return nil }
-        return CGPoint(x: frame.midX, y: frame.midY)
+        let usable = frame.flatMap { $0.width >= 1 && $0.height >= 1 ? $0 : nil }
+        if let point {
+            if let usable, !usable.contains(point) { return nil }
+            return point
+        }
+        return usable.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
 
     func perform(
@@ -307,14 +312,18 @@ nonisolated struct GhostReach {
         }
 
         let live = element.isValid ? element : (refetch() ?? element)
-        let (targetBundle, frontBundle) = await MainActor.run {
-            (NSRunningApplication(processIdentifier: pid)?.bundleIdentifier, EventPoster.frontmostBundleID)
-        }
         // Typing into the focused element of the app that already holds the keyboard needs no
         // click, so it needs no aim and cannot be occluded: keystrokes go to the frontmost app.
-        let typesWithoutClick: Bool = if case .setText = action {
-            typesIntoFocus && targetBundle != nil && frontBundle == targetBundle
-        } else { false }
+        // Both identities are exact — the frontmost *process* (two instances of one bundle, a
+        // release and a debug build, share a bundle id) and the very element (`CFEqual`), so
+        // focus that moved to another field since resolution takes the clicking path instead.
+        func focusIsTarget() async -> Bool {
+            let frontPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+            guard frontPID == pid, let focused = ElementQuery.focused(pid: pid) else { return false }
+            return CFEqual(focused.raw, live.raw)
+        }
+        var typesWithoutClick = false
+        if case .setText = action, typesIntoFocus { typesWithoutClick = await focusIsTarget() }
         // A zero-area frame is not a frame. Measured across Finder, Safari, TextEdit and
         // others: a closed menu item reports a *non-nil* (0, screen-bottom) 0×0 rect, so a
         // plain nil-check passes and the midpoint lands one pixel below the bottom-left
@@ -323,7 +332,12 @@ nonisolated struct GhostReach {
         guard let aim = Self.aim(at: aimPoint, frame: live.frame)
             ?? (typesWithoutClick ? EventPoster.cursorLocation : nil)
         else {
-            attempts.append(.init(tentacle: .hardwareInput, outcome: "element has no frame to aim the real cursor at"))
+            attempts.append(.init(
+                tentacle: .hardwareInput,
+                outcome: aimPoint == nil
+                    ? "element has no frame to aim the real cursor at"
+                    : "refused: the named point lies outside the element found there — a real click could land on something else",
+            ))
             // Tagged with the last tentacle that actually posted anything: nothing was delivered
             // here, and a `hardwareInput` tag would falsely warn that the cursor was taken.
             return await finish(
@@ -378,6 +392,18 @@ nonisolated struct GhostReach {
                 )
             }
             if typesWithoutClick {
+                // Re-checked after the wind-up, which is long enough for focus to move.
+                guard await focusIsTarget() else {
+                    attempts.append(.init(
+                        tentacle: .hardwareInput,
+                        outcome: "refused: focus left the target during the charge-up — nothing was typed",
+                    ))
+                    return await finish(
+                        action, element, .postedEvent, .noEffect, nil, nil,
+                        focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                        cursorBefore, frontBefore, attempts, pid, referral: referral,
+                    )
+                }
                 attempts.append(.init(
                     tentacle: .hardwareInput,
                     outcome: "the target is frontmost and its focused element is the target — typing without a focusing click",
@@ -392,8 +418,11 @@ nonisolated struct GhostReach {
             // modal from elsewhere to take the console. Unlike tentacle 2's `postToPid`, these
             // keystrokes go wherever the system's focus now is, so a payload with `submit`
             // could be a line run in a terminal or a message sent in an unrelated app.
-            let frontNow = await MainActor.run { EventPoster.frontmostBundleID }
-            guard frontNow == targetBundle else {
+            let (frontPID, frontNow) = await MainActor.run {
+                let front = NSWorkspace.shared.frontmostApplication
+                return (front?.processIdentifier, front?.bundleIdentifier ?? "?")
+            }
+            guard frontPID == pid else {
                 attempts.append(.init(
                     tentacle: .hardwareInput,
                     outcome: "clicked, but '\(frontNow)' holds the keyboard instead of the target — refusing to type into it",
@@ -404,12 +433,19 @@ nonisolated struct GhostReach {
                     cursorBefore, frontBefore, attempts, pid, referral: referral,
                 )
             }
-            let delivered = await HardwareInput.type(text)
+            let delivered = await HardwareInput.type(text, onlyWhileFrontmost: pid)
             if delivered != text {
-                // The console was revoked partway through — a lock, a cancel, or ⌃⌥⇧⎋. Say how
-                // far it got rather than letting a partial write be judged as if the whole
-                // payload had been attempted.
-                let cause = EmergencyStop.isHalted ? "the human halted it (⌃⌥⇧⎋)" : "the screen locked mid-run"
+                // The console was revoked partway through — a lock, a cancel, ⌃⌥⇧⎋, or another
+                // app taking the keyboard. Say how far it got rather than letting a partial write
+                // be judged as if the whole payload had been attempted.
+                let frontPIDAfter = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+                let cause = if EmergencyStop.isHalted {
+                    "the human halted it (⌃⌥⇧⎋)"
+                } else if frontPIDAfter != pid {
+                    "another app took the keyboard"
+                } else {
+                    "the screen locked mid-run"
+                }
                 attempts.append(.init(
                     tentacle: .hardwareInput,
                     outcome: "typing stopped after \(delivered.count) of \(text.count) characters — \(cause)",
@@ -681,7 +717,10 @@ nonisolated struct GhostReach {
             // Zero-area counts as no frame — see the note on the hardware tentacle; a closed menu
             // item reports a 0×0 rect at the screen corner rather than nothing at all.
             guard let aim = Self.aim(at: aimPoint, frame: element.frame) else {
-                attempts.append(.init(tentacle: .postedEvent, outcome: "element has no usable frame to click"))
+                attempts.append(.init(
+                    tentacle: .postedEvent,
+                    outcome: aimPoint == nil ? "element has no usable frame to click" : "the named point lies outside the element found there — not posting",
+                ))
                 return nil
             }
             let click: GhostReach.ClickOptions = if case .click = action { clickOptions } else { .init() }

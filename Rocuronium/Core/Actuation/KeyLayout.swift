@@ -14,13 +14,27 @@ nonisolated enum KeyLayout {
         let shift: Bool
     }
 
-    /// The stroke for one character; a line feed is typed with Return, which layouts report
-    /// as a carriage return.
+    /// The stroke for one printable character. Control characters never get one: a real
+    /// Return, Tab, Escape or Delete submits, moves focus, cancels or erases, and `type` admits
+    /// a newline only behind `--submit` — so they keep the keycode-0 + unicode-payload path,
+    /// whose meaning is the toolkit's to interpret.
     static func stroke(for character: String, in map: [String: Stroke]) -> Stroke? {
-        map[character == "\n" ? "\r" : character]
+        isPrintable(character) ? map[character] : nil
     }
 
-    /// Character → stroke for the current layout, preferring unshifted keys and lower keycodes
+    /// Every scalar is visible text or a space: no control (Cc), format (Cf), surrogate,
+    /// private-use, unassigned, or line/paragraph separator scalars.
+    static func isPrintable(_ character: String) -> Bool {
+        !character.isEmpty && character.unicodeScalars.allSatisfy { scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format, .surrogate, .privateUse, .unassigned,
+                 .lineSeparator, .paragraphSeparator: false
+            default: true
+            }
+        }
+    }
+
+    /// Printable character → stroke for the current layout, preferring unshifted keys and lower keycodes
     /// (the main block before the keypad). Empty when the layout exposes no Unicode table,
     /// which leaves callers on their keycode-0 fallback.
     ///
@@ -50,7 +64,7 @@ nonisolated enum KeyLayout {
                     )
                     guard status == noErr, length > 0 else { continue }
                     let character = String(utf16CodeUnits: characters, count: length)
-                    if map[character] == nil {
+                    if isPrintable(character), map[character] == nil {
                         map[character] = Stroke(keyCode: CGKeyCode(code), shift: shift)
                     }
                 }

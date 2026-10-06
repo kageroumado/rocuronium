@@ -10,13 +10,22 @@ struct HardwareAimTests {
     private let terminal: pid_t = 200
     private let dock: pid_t = 300
     private let us: pid_t = 400
+    private let windowServer: pid_t = 500
+    private let security: pid_t = 600
     private let fullScreen = CGRect(x: 0, y: 0, width: 2560, height: 1440)
+    private let virtualDisplay = CGRect(x: 2560, y: 0, width: 1920, height: 1080)
+    private let menuBar = CGRect(x: 0, y: 0, width: 2560, height: 30)
 
     private func occluder(_ point: CGPoint, target: pid_t?, _ windows: [Slot]) -> pid_t? {
-        HardwareInput.occluder(at: point, target: target, ownPID: us, windows: windows)
+        HardwareInput.occluder(
+            at: point, target: target, ownPID: us, windows: windows, displays: [fullScreen, virtualDisplay],
+        )
     }
 
-    // MARK: - Occlusion: z-order relative to the target
+    private var dockBackdrop: Slot { Slot(pid: dock, owner: "Dock", layer: 20, frame: fullScreen) }
+    private var menuBarStrip: Slot { Slot(pid: windowServer, owner: "Window Server", layer: 24, frame: menuBar) }
+
+    // MARK: - Occlusion: z-order relative to the target, failing closed
 
     /// The measured refusal: a fullscreen game on a raised level, frontmost, with an ordinary
     /// window behind it. The window behind must not be blamed.
@@ -47,30 +56,44 @@ struct HardwareAimTests {
         #expect(occluder(CGPoint(x: 1500, y: 900), target: game, windows) == nil)
     }
 
-    /// The Dock and menu bar keep full-screen backing windows above every layer-0 window;
-    /// counting them would refuse every hardware click.
-    @Test func systemBackingWindowsAboveTheTargetDoNotOcclude() {
-        let windows = [
-            Slot(pid: dock, layer: 24, frame: CGRect(x: 0, y: 0, width: 2560, height: 30)),
-            Slot(pid: dock, layer: 20, frame: fullScreen),
-            Slot(pid: terminal, layer: 0, frame: fullScreen),
-        ]
+    /// The Dock's whole-display backing window sits above every layer-0 window; counting it
+    /// would refuse every hardware click.
+    @Test func dockBackdropDoesNotOcclude() {
+        let windows = [menuBarStrip, dockBackdrop, Slot(pid: terminal, layer: 0, frame: fullScreen)]
         #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, windows) == nil)
     }
 
-    /// A floating panel (layer 3) is in the application band and does cover what is below it.
-    @Test func floatingPanelAboveTheTargetOccludes() {
-        let windows = [
-            Slot(pid: game, layer: 3, frame: CGRect(x: 300, y: 300, width: 200, height: 200)),
-            Slot(pid: terminal, layer: 0, frame: fullScreen),
-        ]
-        #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, windows) == game)
+    /// The exemption is owner *and* whole-display frame: a Dock window that is not a display's
+    /// size, or a whole-display window from anyone else, still occludes.
+    @Test func backdropExemptionNeedsOwnerAndDisplayFrame() {
+        let target = Slot(pid: terminal, layer: 0, frame: fullScreen)
+        let dockTile = Slot(pid: dock, owner: "Dock", layer: 20, frame: CGRect(x: 300, y: 1300, width: 800, height: 140))
+        #expect(occluder(CGPoint(x: 400, y: 1350), target: terminal, [dockTile, target]) == dock)
+        let shield = Slot(pid: security, owner: "SecurityAgent", layer: 2000, frame: fullScreen)
+        #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, [shield, target]) == security)
+    }
+
+    /// The menu bar strip is the window server's but not a whole display: a point in it
+    /// would click the menu bar.
+    @Test func menuBarStripAtThePointOccludes() {
+        let windows = [menuBarStrip, dockBackdrop, Slot(pid: terminal, layer: 0, frame: fullScreen)]
+        #expect(occluder(CGPoint(x: 400, y: 10), target: terminal, windows) == windowServer)
+    }
+
+    /// High-layer windows above the target take the click: a pop-up menu, a notification
+    /// banner, an authorization dialog.
+    @Test func highLayerWindowsAboveTheTargetOcclude() {
+        let target = Slot(pid: terminal, layer: 0, frame: fullScreen)
+        let popup = Slot(pid: game, layer: 101, frame: CGRect(x: 300, y: 300, width: 200, height: 200))
+        #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, [popup, dockBackdrop, target]) == game)
+        let panel = Slot(pid: game, layer: 3, frame: CGRect(x: 300, y: 300, width: 200, height: 200))
+        #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, [panel, target]) == game)
     }
 
     @Test func ourOverlayAndTransparentWindowsNeverOcclude() {
         let windows = [
-            Slot(pid: us, layer: 0, frame: fullScreen),
-            Slot(pid: dock, layer: 0, frame: fullScreen, alpha: 0),
+            Slot(pid: us, layer: 1000, frame: fullScreen),
+            Slot(pid: game, layer: 101, frame: fullScreen, alpha: 0),
             Slot(pid: terminal, layer: 0, frame: fullScreen),
         ]
         #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, windows) == nil)
@@ -94,13 +117,13 @@ struct HardwareAimTests {
         #expect(occluder(CGPoint(x: 200, y: 200), target: game, windows) == nil)
     }
 
-    @Test func withoutATargetWindowTheTopmostApplicationWindowDecides() {
-        let windows = [
-            Slot(pid: dock, layer: 20, frame: fullScreen),
-            Slot(pid: terminal, layer: 0, frame: fullScreen),
-        ]
+    /// No target window at the point: anything there, at any layer, takes the click; only an
+    /// empty point (after the exemptions) passes.
+    @Test func withoutATargetWindowAnythingThereOccludes() {
+        let windows = [dockBackdrop, Slot(pid: terminal, layer: 0, frame: fullScreen)]
         #expect(occluder(CGPoint(x: 400, y: 400), target: game, windows) == terminal)
-        #expect(occluder(CGPoint(x: 400, y: 400), target: terminal, []) == nil)
+        #expect(occluder(CGPoint(x: 400, y: 10), target: game, [menuBarStrip]) == windowServer)
+        #expect(occluder(CGPoint(x: 400, y: 400), target: game, [dockBackdrop]) == nil)
         #expect(occluder(CGPoint(x: 400, y: 400), target: nil, windows) == terminal)
     }
 
@@ -112,6 +135,15 @@ struct HardwareAimTests {
         let webView = CGRect(x: 995, y: 100, width: 1330, height: 1200)
         let aim = GhostReach.aim(at: CGPoint(x: 1083, y: 737), frame: webView)
         #expect(aim == CGPoint(x: 1083, y: 737))
+    }
+
+    /// A named point outside the element the hit test answered with is no aim: the click
+    /// would land on something nobody resolved.
+    @Test func namedPointOutsideTheElementIsNoAim() {
+        let button = CGRect(x: 100, y: 100, width: 80, height: 30)
+        #expect(GhostReach.aim(at: CGPoint(x: 400, y: 400), frame: button) == nil)
+        #expect(GhostReach.aim(at: CGPoint(x: 120, y: 110), frame: button) == CGPoint(x: 120, y: 110))
+        #expect(GhostReach.aim(at: CGPoint(x: 400, y: 400), frame: nil) == CGPoint(x: 400, y: 400))
     }
 
     @Test func aimFallsBackToTheFrameCenter() {
@@ -127,19 +159,32 @@ struct HardwareAimTests {
 
     // MARK: - Keys
 
-    @Test func lineFeedTypesWithReturn() {
-        let map = ["\r": KeyLayout.Stroke(keyCode: 36, shift: false), "r": .init(keyCode: 15, shift: false)]
-        #expect(KeyLayout.stroke(for: "\n", in: map)?.keyCode == 36)
+    /// A real Return, Tab, Escape or Delete would submit, move focus, cancel or erase past the
+    /// `--submit` rail, so control characters get no stroke even from a map that has one.
+    @Test func controlCharactersGetNoStroke() {
+        let map: [String: KeyLayout.Stroke] = [
+            "\r": .init(keyCode: 36, shift: false), "\t": .init(keyCode: 48, shift: false),
+            "\u{1b}": .init(keyCode: 53, shift: false), "\u{8}": .init(keyCode: 51, shift: false),
+            "\u{7f}": .init(keyCode: 117, shift: false), "r": .init(keyCode: 15, shift: false),
+        ]
+        for control in ["\n", "\r", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{2028}", "\u{200b}"] {
+            #expect(KeyLayout.stroke(for: control, in: map) == nil)
+        }
         #expect(KeyLayout.stroke(for: "r", in: map)?.keyCode == 15)
         #expect(KeyLayout.stroke(for: "👍", in: map) == nil)
     }
 
-    /// The live layout: whatever is selected, letters and Return map to real keys.
+    /// The live layout: letters and space map to real keys, and no control character is in
+    /// the map at all.
     @MainActor
-    @Test func currentLayoutMapsLettersAndReturn() {
+    @Test func currentLayoutMapsPrintableCharactersOnly() {
         let map = KeyLayout.currentMap()
         #expect(!map.isEmpty)
-        #expect(KeyLayout.stroke(for: "\n", in: map)?.keyCode == 36)
+        #expect(map.keys.allSatisfy(KeyLayout.isPrintable))
+        for control in ["\r", "\n", "\t", "\u{1b}", "\u{8}", "\u{7f}", "\u{3}"] {
+            #expect(map[control] == nil)
+        }
+        #expect(map[" "] != nil)
         #expect(map["r"] != nil)
         #expect(map["R"]?.shift == true)
     }
