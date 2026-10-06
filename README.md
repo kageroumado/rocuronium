@@ -62,6 +62,8 @@ brew install kageroumado/tap/rocuronium
 
 Or [download the DMG](https://kagerou.glass/get/rocuronium?from=readme) of the latest release.
 
+Requires macOS 26.5 or later on Apple silicon; tested on macOS 26 and 27.
+
 Grant **Accessibility** (required) and **Screen Recording** (for screenshots and
 `scroll --until-text` OCR) in System Settings > Privacy & Security.
 
