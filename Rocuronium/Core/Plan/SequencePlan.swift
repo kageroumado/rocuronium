@@ -67,6 +67,8 @@ struct SequencePlan: Decodable, Sendable {
         /// find paging.
         let limit: Double?
         let offset: Double?
+        /// The step's purpose, shown to the human like a top-level `--why`.
+        let why: String?
 
         let expect: PlanGuard?
         let onFail: FailurePolicy?
@@ -105,6 +107,7 @@ struct SequencePlan: Decodable, Sendable {
             set("dwell", dwell)
             set("observe", observe); set("ocr", ocr); set("all", all)
             set("limit", limit); set("offset", offset)
+            set("why", why)
             if profile == .ghost, allowHardwareInput == nil {
                 dict["allowHardwareInput"] = false
             } else {

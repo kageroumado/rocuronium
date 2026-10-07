@@ -263,11 +263,12 @@ final class OverlayModel {
     func resolveConsent(_ answer: ConsentAnswer, at now: Date) {
         consent = nil
         consentHold = nil
-        result = PanelResult(kind: .refused, message: switch answer {
+        let message = switch answer {
         case .approve: "Approved"
         case .approveForAWhile: "Approved for \(StandingApproval.minutes) minutes"
         case .decline: "Declined"
-        })
+        }
+        result = PanelResult(kind: .refused, message: message)
         resultAt = now
         lastActivity = now
     }

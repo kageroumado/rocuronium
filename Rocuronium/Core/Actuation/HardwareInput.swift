@@ -128,10 +128,15 @@ nonisolated enum HardwareInput {
     ///
     /// The restore is courtesy, not concealment: `Evidence.cursorMovedByUs` reports true for
     /// every hardware-tentacle action regardless, because the takeover happened even when undone.
+    ///
+    /// Returns false when the human used the mouse or keyboard before the button went down: the
+    /// press is withheld, and the cursor is left where the hand put it.
+    @discardableResult
     static func click(
         at point: CGPoint,
         button: CGMouseButton = .left, count: Int = 1, modifiers: CGEventFlags = []
-    ) async {
+    ) async -> Bool {
+        HumanInputMonitor.shared.armHardware()
         // Hardware events reset HIDIdleTime like any human input; record them so presence
         // detection is not fooled by our own hands.
         InputAttribution.shared.noteSyntheticInput()
@@ -144,16 +149,17 @@ nonisolated enum HardwareInput {
         CGEvent(
             mouseEventSource: source, mouseType: .mouseMoved,
             mouseCursorPosition: point, mouseButton: button,
-        )?.post(tap: SessionContext.eventTap)
+        )?.postTagged(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.settleDelay)
         for clickState in 1 ... min(max(count, 1), 3) {
+            guard !HumanInputMonitor.shared.shouldYield() else { return false }
             let down = CGEvent(
                 mouseEventSource: source, mouseType: downType,
                 mouseCursorPosition: point, mouseButton: button,
             )
             down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
             if !modifiers.isEmpty { down?.flags = modifiers }
-            down?.post(tap: SessionContext.eventTap)
+            down?.postTagged(tap: SessionContext.eventTap)
             try? await Task.sleep(for: Constants.clickHoldDuration)
             let up = CGEvent(
                 mouseEventSource: source, mouseType: upType,
@@ -161,7 +167,7 @@ nonisolated enum HardwareInput {
             )
             up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
             if !modifiers.isEmpty { up?.flags = modifiers }
-            up?.post(tap: SessionContext.eventTap)
+            up?.postTagged(tap: SessionContext.eventTap)
         }
 
         if let restore {
@@ -169,8 +175,9 @@ nonisolated enum HardwareInput {
             CGEvent(
                 mouseEventSource: source, mouseType: .mouseMoved,
                 mouseCursorPosition: restore, mouseButton: .left,
-            )?.post(tap: SessionContext.eventTap)
+            )?.postTagged(tap: SessionContext.eventTap)
         }
+        return true
     }
 
     enum MouseButton: String, Sendable {
@@ -226,6 +233,7 @@ nonisolated enum HardwareInput {
     static func trace(
         _ plan: PathPlan, button: MouseButton?, restoreCursor: Bool,
     ) async -> TraceOutcome {
+        HumanInputMonitor.shared.armHardware()
         InputAttribution.shared.noteSyntheticInput()
         let restore = CGEvent(source: nil)?.location
 
@@ -256,7 +264,7 @@ nonisolated enum HardwareInput {
             CGEvent(
                 mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: .mouseMoved,
                 mouseCursorPosition: restore, mouseButton: .left,
-            )?.post(tap: SessionContext.eventTap)
+            )?.postTagged(tap: SessionContext.eventTap)
         }
         // The window server publishes the pointer a frame or two behind a 120 Hz post
         // stream, and the lag varies — an immediate read reported the cursor ~13 pt short
@@ -308,7 +316,7 @@ nonisolated enum HardwareInput {
                 event.setDoubleValueField(.mouseEventDeltaY, value: point.y - previous.y)
             }
             if type == button?.down { event.setIntegerValueField(.mouseEventClickState, value: 1) }
-            event.post(tap: SessionContext.eventTap)
+            event.postTagged(tap: SessionContext.eventTap)
             previous = point
         }
 
@@ -349,7 +357,8 @@ nonisolated enum HardwareInput {
             // Cheap flags every frame; the screen-lock read (~1 ms of session queries) every
             // ~130 ms — a lock cannot matter faster than that, and per-frame it taxes the rate.
             lockCountdown -= 1
-            var revoked = cancelled.isCancelled || EmergencyStop.isHalted
+            let humanTookOver = HumanInputMonitor.shared.shouldYield()
+            var revoked = cancelled.isCancelled || EmergencyStop.isHalted || humanTookOver
             if !revoked, lockCountdown <= 0 {
                 lockCountdown = 16
                 // Off-console the lock flag only tracks whether a viewer is attached, and a
@@ -363,6 +372,8 @@ nonisolated enum HardwareInput {
                     "halted by the human (⌃⌥⇧⎋) mid-path"
                 } else if cancelled.isCancelled {
                     "the request was cancelled mid-path"
+                } else if humanTookOver {
+                    "the human used the mouse or keyboard mid-path — stopped"
                 } else {
                     "the screen locked mid-path"
                 }
@@ -467,13 +478,15 @@ nonisolated enum HardwareInput {
     ///   a tool built on "the evidence matches reality" must never do.
     /// - The human presses ⌃⌥⇧⎋. That is the fastest stop path in the system — the next sample
     ///   or character observes the flag, a held button is released, and the hands are theirs.
+    /// - The human touches the mouse or keyboard. `HumanInputMonitor` sees their untagged input,
+    ///   and the remaining payload yields to them.
     ///
     /// The lock clause applies to the console only. An off-console session reports itself
     /// locked whenever no viewer is attached, which is its ordinary resting state rather than
     /// a human engaging a lock — gating on it there would refuse every keystroke in exactly
     /// the session the engine is meant to drive, and there is no login window to mistype into.
     private static var consoleIsStillOurs: Bool {
-        guard !Task.isCancelled, !EmergencyStop.isHalted else { return false }
+        guard !Task.isCancelled, !EmergencyStop.isHalted, !HumanInputMonitor.shared.shouldYield() else { return false }
         return SessionContext.isOffConsole || !UserPresence.read().screenLocked
     }
 
@@ -482,18 +495,22 @@ nonisolated enum HardwareInput {
     /// run their own event handling). The cursor is untouched, but the keystroke lands in
     /// the frontmost app's first responder like any human keypress, which is why the router
     /// only reaches this when the target is frontmost and the hardware gates are passed.
-    static func pressKey(_ chord: EventPoster.KeyChord) async {
-        guard consoleIsStillOurs else { return }
+    /// Returns false when the console was not ours to press on, and nothing was pressed.
+    @discardableResult
+    static func pressKey(_ chord: EventPoster.KeyChord) async -> Bool {
+        HumanInputMonitor.shared.armHardware()
+        guard consoleIsStillOurs else { return false }
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: false)
-        else { return }
+        else { return false }
         down.flags = chord.flags
         up.flags = chord.flags
-        down.post(tap: SessionContext.eventTap)
+        down.postTagged(tap: SessionContext.eventTap)
         try? await Task.sleep(for: Constants.clickHoldDuration)
-        up.post(tap: SessionContext.eventTap)
+        up.postTagged(tap: SessionContext.eventTap)
+        return true
     }
 
     /// Returns how much of `text` was actually delivered, so a run cut short is reported
@@ -504,6 +521,7 @@ nonisolated enum HardwareInput {
     /// from elsewhere mid-payload would otherwise receive the rest of it.
     @discardableResult
     static func type(_ text: String, onlyWhileFrontmost target: pid_t) async -> String {
+        HumanInputMonitor.shared.armHardware()
         InputAttribution.shared.noteSyntheticInput()
         let source = CGEventSource(stateID: .hidSystemState)
         let layout = await MainActor.run { KeyboardLayout.current(asciiCapable: false) }
@@ -529,8 +547,8 @@ nonisolated enum HardwareInput {
             }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-            down.post(tap: SessionContext.eventTap)
-            up.post(tap: SessionContext.eventTap)
+            down.postTagged(tap: SessionContext.eventTap)
+            up.postTagged(tap: SessionContext.eventTap)
             delivered.unicodeScalars.append(scalars[index])
             try? await Task.sleep(for: Constants.perCharacterDelay)
         }

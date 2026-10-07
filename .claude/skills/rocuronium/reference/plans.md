@@ -1,6 +1,6 @@
 # Sequence plans
 
-`plan` executes a list of steps as one daemon-side operation, no round-trips between steps, so the world cannot change between them. Each step is an existing verb with its arguments plus an optional `expect` guard, an `onFail` policy, and a `refs` map that feeds a field from an earlier step's reply.
+`plan` executes a list of steps as one daemon-side operation, no round-trips between steps, so the world cannot change between them. Each step is an existing verb with its arguments (a `why` included) plus an optional `expect` guard, an `onFail` policy, and a `refs` map that feeds a field from an earlier step's reply.
 
     rocuronium plan --file steps.json      (or pipe JSON to stdin)
     { "profile": "ghost", "steps": [

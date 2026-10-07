@@ -137,8 +137,20 @@ final class CommandRouter {
         var submit: Bool?
         /// Subcommand for verbs that have one (`display acquire|release|status`, `busy on|off`).
         var action: String?
-        /// For `busy`: the line shown under the mark while the agent holds the work bracket.
+        /// For `busy on`: an alias for `goal`.
         var note: String?
+        /// For `busy on`: what the agent is trying to do, in its own words — the panel's headline.
+        var goal: String?
+        /// For `busy step`: "next", or the 1-based step number to move to.
+        var step: StepPointer?
+        /// For `busy wait`: what the agent is waiting on.
+        var `for`: String?
+        /// For `busy wait`: how long the wait is expected to take, 0…3600 seconds.
+        var seconds: Double?
+        /// For `busy off`: the outcome line shown as the panel closes.
+        var result: String?
+        /// On any acting verb: the purpose of this one action, shown to the human.
+        var why: String?
         /// Why a virtual display lease is being taken; recorded on the lease.
         var reason: String?
         /// Lease duration. The bridge's 30-minute backstop applies when absent.
@@ -239,10 +251,61 @@ final class CommandRouter {
         /// gesture revealed — long enough for a tooltip (AppKit shows them after ~1 s).
         var dwell: Double?
 
-        /// For `plan`: the step list.
-        var steps: [SequencePlan.Step]?
+        /// For `plan`: the command steps. For `busy on`: the step labels, as an array or "a|b|c".
+        var steps: StepList?
         /// For `plan`: ghost (default) or visible.
         var profile: String?
+
+        var planSteps: [SequencePlan.Step]? {
+            if case let .plan(steps) = steps { steps } else { nil }
+        }
+
+        var stepLabels: [String]? {
+            if case let .labels(labels) = steps { labels } else { nil }
+        }
+    }
+
+    /// The `steps` field's two shapes: a plan's command objects, or `busy on`'s step labels.
+    enum StepList: Decodable {
+        case plan([SequencePlan.Step])
+        case labels([String])
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let joined = try? container.decode(String.self) {
+                self = .labels(joined.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) })
+            } else if let labels = try? container.decode([String].self) {
+                self = .labels(labels.map { $0.trimmingCharacters(in: .whitespaces) })
+            } else {
+                // Last, so a malformed plan step reports its own decoding error.
+                self = .plan(try container.decode([SequencePlan.Step].self))
+            }
+        }
+    }
+
+    /// `busy step`'s argument: "next" or a 1-based number, sent as a string or a number.
+    struct StepPointer: Decodable {
+        let raw: String
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let number = try? container.decode(Double.self) {
+                raw = number.isFinite && number == number.rounded() ? String(Int(number)) : String(number)
+            } else {
+                raw = try container.decode(String.self)
+            }
+        }
+    }
+
+    /// Text limits for the panel-facing fields. Each line has to stay a glanceable line.
+    enum PanelLimits {
+        static let why = 120
+        static let goal = 120
+        static let result = 120
+        static let waitFor = 120
+        static let stepLabel = 80
+        static let stepCount = 20
+        static let waitSeconds = 3600.0
     }
 
     /// Bounds every number that arrives over the socket, before it reaches arithmetic that
@@ -280,6 +343,60 @@ final class CommandRouter {
         if let minutes = request.minutes {
             guard let minutes = Self.finite(minutes, limit: Bounds.leaseMinutes), minutes > 0 else {
                 return "'minutes' must be between 0 and \(Int(Bounds.leaseMinutes))"
+            }
+        }
+        return Self.validatePanelFields(request, declaredStepCount: busyStepCount)
+    }
+
+    /// How many steps the current `busy on` declared — the bound `busy step <n>` is checked against.
+    @ObservationIgnored private var busyStepCount = 0
+
+    /// Checks the fields the presence panel shows: lengths, the step list, the wait's duration,
+    /// and a `busy step` target against the steps declared. Pure, for the tests.
+    static func validatePanelFields(_ request: Request, declaredStepCount: Int) -> String? {
+        let texts: [(String, String?, Int)] = [
+            ("why", request.why, PanelLimits.why),
+            ("goal", request.goal, PanelLimits.goal),
+            ("note", request.note, PanelLimits.goal),
+            ("result", request.result, PanelLimits.result),
+            ("for", request.for, PanelLimits.waitFor),
+        ]
+        for (name, value, limit) in texts {
+            if let value, value.count > limit {
+                return "'\(name)' is \(value.count) characters — keep it to \(limit), one glanceable line"
+            }
+        }
+        if request.command == "plan", request.stepLabels != nil {
+            return "'plan' steps must be command objects — step labels belong to `busy on --steps`"
+        }
+        if request.command == "busy", request.planSteps != nil {
+            return "'busy' steps are labels — an array of strings or \"a|b|c\""
+        }
+        if let labels = request.stepLabels {
+            if labels.count > PanelLimits.stepCount {
+                return "\(labels.count) steps declared — at most \(PanelLimits.stepCount)"
+            }
+            if let blank = labels.firstIndex(where: \.isEmpty) {
+                return "step \(blank + 1) is empty — every step needs a label"
+            }
+            if let long = labels.firstIndex(where: { $0.count > PanelLimits.stepLabel }) {
+                return "step \(long + 1) is \(labels[long].count) characters — keep each to \(PanelLimits.stepLabel)"
+            }
+        }
+        if let seconds = request.seconds {
+            guard seconds.isFinite, (0 ... PanelLimits.waitSeconds).contains(seconds) else {
+                return "'seconds' must be between 0 and \(Int(PanelLimits.waitSeconds))"
+            }
+        }
+        if let raw = request.step?.raw, raw != "next" {
+            guard let number = Int(raw) else {
+                return "'step' must be 'next' or a step number, got '\(raw)'"
+            }
+            guard declaredStepCount > 0 else {
+                return "no steps declared — pass --steps to `busy on` before moving to step \(number)"
+            }
+            guard (1 ... declaredStepCount).contains(number) else {
+                return "step \(number) is out of range — \(declaredStepCount) step\(declaredStepCount == 1 ? "" : "s") declared, numbered from 1"
             }
         }
         return nil
@@ -392,7 +509,7 @@ final class CommandRouter {
         if Self.actingVerbs.contains(request.command), cursorTaking || overlay.model.showForAllActions {
             // Hands-off work turns the panel amber before the pointer moves, so the warning
             // precedes the motion; ghost work narrates in the background.
-            overlay.begin(action: request.panelAction(cursorTaking: cursorTaking))
+            overlay.begin(action: Self.panelAction(for: request, cursorTaking: cursorTaking))
         }
         if request.command == "plan" {
             return try await plan(request)
@@ -400,9 +517,61 @@ final class CommandRouter {
         return try await dispatch(request)
     }
 
-    /// The raw command switch — no overlay, no activity tracking, no halt check.
-    /// Called directly by both `execute()` (with its wrappers) and the plan executor.
+    /// What the panel needs to phrase an acting command, in the request's own words.
+    static func panelAction(for request: Request, cursorTaking: Bool) -> PanelAction {
+        let point: CGPoint? = if let x = request.x, let y = request.y { CGPoint(x: x, y: y) } else { nil }
+        return PanelAction(
+            verb: request.command,
+            app: request.app,
+            label: request.label,
+            text: request.text,
+            point: point,
+            keys: request.keys,
+            menuPath: request.command == "menu" ? request.path : nil,
+            why: request.why.flatMap { $0.isEmpty ? nil : $0 },
+            cursorTaking: cursorTaking,
+            destination: request.end,
+            direction: scrollDirection(request),
+            untilText: request.untilText,
+            strokePoints: request.via.map { via in
+                via.split(whereSeparator: { $0 == " " || $0 == ";" }).count + (request.end == nil ? 1 : 2)
+            },
+            size: request.w.flatMap { w in request.h.map { CGSize(width: w, height: $0) } },
+        )
+    }
+
+    /// Which way a `scroll` goes, in the panel's words: an absolute `--to` 0 or 1 is the top or
+    /// bottom edge; otherwise the sign of the larger delta.
+    private static func scrollDirection(_ request: Request) -> String? {
+        guard request.command == "scroll" else { return nil }
+        if let to = request.to {
+            return to <= 0 ? "top" : to >= 1 ? "bottom" : nil
+        }
+        let dy = request.dy ?? 0, dx = request.dx ?? 0
+        if dy == 0, dx == 0 { return nil }
+        if abs(dy) >= abs(dx) { return dy > 0 ? "down" : "up" }
+        return dx > 0 ? "right" : "left"
+    }
+
+    /// The command switch, with human input watched around every acting verb: the reply gains
+    /// `humanInput`, and `attribution` when it carries a verdict. No overlay, no activity
+    /// tracking, no halt check. Called by both `execute()` (with its wrappers) and the plan
+    /// executor, so plan steps are watched too.
     func dispatch(_ request: Request) async throws -> [String: Any] {
+        guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
+        let monitor = HumanInputMonitor.shared
+        monitor.begin(targetPid: try? resolve(request))
+        let reply: [String: Any]
+        do {
+            reply = try await dispatchCommand(request)
+        } catch {
+            _ = monitor.end()
+            throw error
+        }
+        return reply.merging(monitor.end().replyFields(verdict: reply["verdict"] as? String)) { current, _ in current }
+    }
+
+    private func dispatchCommand(_ request: Request) async throws -> [String: Any] {
         return switch request.command {
         case "status": status()
         case "diag": await diagnose()
@@ -446,29 +615,52 @@ final class CommandRouter {
     /// Opens (reset), re-shows, or hides the demo stage. The reply carries the window's
     /// fixed frame in the same top-left coordinates every other verb speaks, so a test can
     /// aim at the stage without a `windows` round-trip.
-    /// Raise or drop the agent's work bracket on the presence overlay. `busy on` (the default)
-    /// holds the creature up through the thinking and waiting between commands; `busy off`
-    /// releases it so it settles away. Visual only, and only when the human is watching every
-    /// action — it never gates or changes what the engine does.
+    /// The agent's work bracket on the presence panel. `busy on` declares the goal (and optionally
+    /// the steps) and holds the panel up through the thinking between commands; `busy step` moves
+    /// the step pointer; `busy wait` says the agent is waiting on something; `busy off` closes the
+    /// bracket with an optional result line. Visual only — it never gates or changes what the
+    /// engine does.
     private func busy(_ request: Request) -> [String: Any] {
         let action = request.action ?? "on"
+        let shown = overlay.model.showForAllActions
         switch action {
         case "on":
-            overlay.beginHold(goal: request.note ?? "", steps: [])
+            let goal = request.goal ?? request.note ?? ""
+            let steps = request.stepLabels ?? []
+            busyStepCount = steps.count
+            overlay.beginHold(goal: goal, steps: steps)
+            var summary = goal.isEmpty ? "holding the panel up until `busy off`" : "holding the panel up until `busy off` — goal shown: '\(goal)'"
+            if !steps.isEmpty { summary += " · \(steps.count) step\(steps.count == 1 ? "" : "s"), on step 1" }
+            var reply: [String: Any] = ["ok": true, "busy": true, "shown": shown, "summary": summary]
+            if !steps.isEmpty { reply["steps"] = steps.count }
+            return reply
+        case "step":
+            guard busyStepCount > 0 else {
+                return ["ok": false, "error": "no steps declared — pass --steps to `busy on` first"]
+            }
+            let raw = request.step?.raw ?? "next"
+            let target = raw == "next" ? nil : Int(raw)
+            overlay.advanceStep(to: target)
             return [
-                "ok": true, "busy": true,
-                "shown": overlay.model.showForAllActions,
-                "summary": overlay.model.showForAllActions
-                    ? ((request.note ?? "").isEmpty
-                        ? "holding the overlay up until `busy off`"
-                        : "holding the overlay up until `busy off` — reason shown to the human: '\(request.note!.prefix(PanelText.Constants.goalLimit))'")
-                    : "noted — the overlay only shows when 'show for every action' is on",
+                "ok": true, "busy": true, "shown": shown,
+                "summary": target.map { "moved to step \($0) of \(busyStepCount)" } ?? "advanced to the next step",
+            ]
+        case "wait":
+            guard let what = request.for, !what.isEmpty else {
+                return ["ok": false, "error": "'busy wait' requires --for \"<what you are waiting on>\""]
+            }
+            overlay.beginWait(what: what, seconds: request.seconds)
+            let expected = request.seconds.map { " (~\(Int($0.rounded())) s)" } ?? ""
+            return [
+                "ok": true, "busy": true, "shown": shown,
+                "summary": "waiting on \(what)\(expected) — the next acting command ends the wait",
             ]
         case "off":
-            overlay.endHold(result: nil)
-            return ["ok": true, "busy": false, "summary": "released the overlay hold"]
+            busyStepCount = 0
+            overlay.endHold(result: request.result.flatMap { $0.isEmpty ? nil : $0 })
+            return ["ok": true, "busy": false, "summary": "released the panel hold"]
         default:
-            return ["ok": false, "error": "unknown busy action '\(action)' — use on or off"]
+            return ["ok": false, "error": "unknown busy action '\(action)' — use on, step, wait, or off"]
         }
     }
 
@@ -1992,7 +2184,7 @@ final class CommandRouter {
     // MARK: - Sequence plans
 
     private func plan(_ request: Request) async throws -> [String: Any] {
-        guard let steps = request.steps, !steps.isEmpty else {
+        guard let steps = request.planSteps, !steps.isEmpty else {
             return ["ok": false, "error": "'plan' requires 'steps' — a JSON array of command steps"]
         }
         let profile: SequencePlan.Profile

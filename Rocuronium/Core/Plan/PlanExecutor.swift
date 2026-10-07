@@ -54,9 +54,9 @@ final class PlanExecutor {
         var priorReplies: [Int: [String: Any]] = [:]
 
         if plan.profile == .visible {
-            overlay?.begin(
-                action: "Plan: \(plan.steps.count) step\(plan.steps.count == 1 ? "" : "s")",
-                deferAppearance: true,
+            overlay?.beginHold(
+                goal: "Running a \(plan.steps.count)-step plan",
+                steps: plan.steps.map(\.intent),
             )
         }
 
@@ -67,14 +67,18 @@ final class PlanExecutor {
             }
 
             if plan.profile == .visible {
-                overlay?.begin(
-                    action: "Step \(index + 1)/\(plan.steps.count): \(step.intent)",
-                    deferAppearance: true,
-                )
+                overlay?.advanceStep(to: index + 1)
+                overlay?.begin(action: PanelAction(
+                    verb: step.command, app: step.app, label: step.label, text: step.text,
+                    point: step.x.flatMap { x in step.y.map { CGPoint(x: x, y: $0) } },
+                    keys: step.keys, menuPath: step.command == "menu" ? step.path : nil,
+                    why: step.why ?? step.intent, cursorTaking: false,
+                ))
             }
 
             let (reply, resolvedPid) = await executeStep(step, profile: plan.profile, priorReplies: priorReplies)
             priorReplies[index + 1] = reply
+            if plan.profile == .visible { overlay?.commandFinished(reply) }
 
             var guardResult: PlanGuard.Result?
             if let expect = step.expect {
@@ -155,7 +159,7 @@ final class PlanExecutor {
         }
 
         if plan.profile == .visible {
-            overlay?.commandFinished(buildTranscriptReply(results: results, abortReason: abortReason))
+            overlay?.endHold(result: abortReason.map { "Plan stopped: \($0)" })
         }
 
         activityLog.append(
@@ -225,7 +229,7 @@ final class PlanExecutor {
 
     private func pauseForHuman(reason: String) async {
         EmergencyStop.halt(reason: "Plan paused: \(reason) — resume from the Rocuronium menu bar")
-        overlay?.begin(action: reason, deferAppearance: false)
+        overlay?.beginWait(what: "you to resume from the menu bar — \(reason)", seconds: nil)
         await withCheckedContinuation { continuation in
             pauseContinuation = continuation
         }

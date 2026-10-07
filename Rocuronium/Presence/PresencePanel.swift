@@ -28,7 +28,6 @@ final class PresencePanel: NSPanel {
         animationBehavior = .none
         isMovable = true
         isReleasedWhenClosed = false
-        allowsCursorRectsWhenInactive = true
         acceptsMouseMovedEvents = true
         self.contentView = contentView
     }

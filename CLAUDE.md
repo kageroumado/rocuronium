@@ -14,11 +14,11 @@ Rocuronium/                     the .app (menu-bar daemon, holds TCC)
     Engine.swift  the actor; all AXUIElement work lives behind it
     Perception/   AXElement, ElementQuery, MenuQuery, ScreenCapture, TextDump,
                   TreeCache, TreeDelta, FrameStore, FrameDiff, WebContent
-    Actuation/    GhostReach (the ladder), EventPoster, HardwareInput, PathPlan
+    Actuation/    GhostReach (the ladder), EventPoster, HardwareInput, PathPlan, SyntheticInput
     Evidence/     Evidence (verdict), ScreenDiff
     Environment/  UserPresence, EmergencyStop, SessionContext, Foreground, DisplayWake,
                   AdrafinilBridge, VirtualDisplayManager, VirtualDisplayBridge, ParkLedger,
-                  PresenceRelay, InputAttribution
+                  PresenceRelay, InputAttribution, HumanInputMonitor
     Plan/         SequencePlan, PlanExecutor, PlanGuard
   Vision/         GroundingBackend (protocol), MLXBackend, DetectorBackend,
                   FoundationModelsBackend, TextSighting
@@ -76,6 +76,8 @@ Signals feeding the verdict: read-back (`element.value` after write), pixel delt
 2. **Every action returns evidence** (above).
 
 `EmergencyStop` is a process-global atomic checked per-element in walks and per-sample (~8 ms) in cursor traces — ⌃⌥⇧⎢ halts mid-payload. **Resume is popover-only: no socket verb clears the halt**, so an agent cannot un-halt itself. `Core` never imports `Presence/`; the engine telegraphs hardware actions through `PresenceRelay`'s static hooks.
+
+**Every synthesized event carries a mark** (`SyntheticInput.tag` in `eventSourceUserData`, applied by `postTagged` — the only way the app posts; a test fails on a raw `post(tap:)`/`postToPid`). While an acting verb runs, `HumanInputMonitor` holds a listen-only session tap and records the input *without* the mark: the human's. Once the hardware tentacle arms, any of it stops the remaining payload (`shouldYield`, consulted alongside `consoleIsStillOurs`); during ghost work, a click/key/scroll in the target app turns a `confirmed` reply's `attribution` to `mixed`. The tap exists only between `begin` and `end` in `CommandRouter.dispatch`.
 
 ## Off-console / event tap
 

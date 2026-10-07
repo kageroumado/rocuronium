@@ -68,9 +68,11 @@ Windows
                         real Mission Control Spaces; switch is presence-gated like activate
 
 Meta
-  busy       [on|off] [--note <t>]           hold the presence overlay up while you work;
-                                             --note is the human-visible reason (bezel headline,
-                                             ≤64 chars), so "creature gone" means "nothing coming"
+  busy       on --goal <t> [--steps "a|b|c"]   declare what you are doing; the panel headline
+                                             (--note is an alias for --goal; ≤120 chars, ≤20 steps)
+             step [next|<n>]                 move the step pointer (n is 1-based)
+             wait --for <t> [--seconds <n>]  say what you are waiting on (0–3600 s expected)
+             off [--result <t>]              close the bracket; "panel gone" means "nothing coming"
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
@@ -101,6 +103,8 @@ Options
                             for apps whose tree is empty. Text rows come back groundedBy ocr;
                             with the UI Detector model installed, control boxes (icon buttons
                             included) come back groundedBy detector (needs Screen Recording)
+  --why <purpose>           on any acting verb: why this one action, shown to the human
+                            (≤120 chars) — e.g. --why "open the login page"
   --json                    print the raw reply
 
 Nine things to know:
@@ -193,6 +197,11 @@ if command == "display" || command == "demo" || command == "busy" || command == 
    let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
+    // `busy step 3` / `busy step next`: the step pointer is the next positional word.
+    if command == "busy", action == "step", let step = arguments.first, !step.hasPrefix("-") {
+        payload["step"] = step
+        arguments.removeFirst()
+    }
 }
 // `plan` reads its step list from --file <path> or stdin.
 if command == "plan" {
@@ -221,7 +230,8 @@ if command == "plan" {
         exit(2)
     }
 }
-for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note", "token", "fullscreen"] {
+for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note", "token", "fullscreen",
+             "goal", "steps", "result", "why"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
@@ -246,8 +256,10 @@ if command == "key" || command == "shortcut", payload["keys"] == nil {
 if let found = value(for: "until-text") { payload["untilText"] = found }
 if let found = value(for: "window-at") { payload["windowAt"] = found }
 // `wait --for` carries a JSON guard object, forwarded as `expect` — the same grammar a
-// plan step's `expect` uses.
-if let guardJSON = value(for: "for") {
+// plan step's `expect` uses. `busy wait --for` is plain text: what the agent is waiting on.
+if command == "busy" {
+    if let found = value(for: "for") { payload["for"] = found }
+} else if let guardJSON = value(for: "for") {
     guard let object = try? JSONSerialization.jsonObject(with: Data(guardJSON.utf8)) as? [String: Any] else {
         FileHandle.standardError.write(Data(
             "rocuronium wait: --for expects a JSON guard object, e.g. --for '{\"type\":\"quiet\",\"ms\":800}'\n".utf8))
@@ -262,7 +274,7 @@ if pathVerb {
     if let found = value(for: "from") { payload["start"] = found }
     if let found = value(for: "to") { payload["end"] = found }
 }
-for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset", "box", "area"] + (pathVerb ? [] : ["to"]) {
+for flag in ["x", "y", "w", "h", "minutes", "timeout", "dx", "dy", "duration", "pid", "dwell", "count", "limit", "offset", "box", "area", "seconds"] + (pathVerb ? [] : ["to"]) {
     guard let found = value(for: flag) else { continue }
     // `Double("inf")` and `Double("nan")` parse happily, and `JSONSerialization` then raises
     // an *uncatchable* ObjC exception ("Invalid number value (infinite) in JSON write") that
@@ -387,6 +399,17 @@ if let consent = reply["consent"] as? String, consent == "approved" || consent =
 // Several running apps answered to --app and one was taken; say which, so the pick is never silent.
 if let resolution = reply["appResolution"] as? String {
     FileHandle.standardError.write(Data("rocuronium: \(resolution)\n".utf8))
+}
+// Human input during the action changes what the verdict can be trusted for; say so on every
+// acting verb, whatever the per-verb printing below shows.
+if let humanInput = reply["humanInput"] as? [String: Any] {
+    if humanInput["stopped"] as? Bool == true {
+        FileHandle.standardError.write(Data("rocuronium: the human used the mouse or keyboard — the hardware payload stopped\n".utf8))
+    }
+    if reply["attribution"] as? String == "mixed" {
+        FileHandle.standardError.write(Data(
+            "rocuronium: attribution mixed — the human clicked, typed, or scrolled in the target meanwhile; the confirmation may be theirs\n".utf8))
+    }
 }
 
 switch command {
