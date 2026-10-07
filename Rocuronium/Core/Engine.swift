@@ -1450,11 +1450,12 @@ actor Engine {
         }
 
         let windowsBefore = onScreenWindowCount(pid)
+        var pressed = true
         switch delivery {
         case .process:
             await EventPoster.sendKey(chord.keyCode, modifiers: chord.flags, character: chord.character, pid: pid)
         case .session:
-            await HardwareInput.pressKey(chord)
+            pressed = await HardwareInput.pressKey(chord)
         }
         try? await Task.sleep(for: .milliseconds(300))
         cache.invalidate(pid: pid)
@@ -1462,11 +1463,17 @@ actor Engine {
         let tentacle: Evidence.Tentacle = delivery == .session ? .hardwareInput : .postedEvent
         let focusAfter = ElementQuery.focused(pid: pid)?.signature
         let focusChanged = focusAfter != focusBefore
-        let outcome = switch (delivery, focusChanged) {
-        case (.process, true): "key posted; the focused element changed"
-        case (.process, false): "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)"
-        case (.session, true): "key pressed on the console pipeline; the focused element changed"
-        case (.session, false): "key pressed on the console pipeline (reaches key-equivalent dispatch in the frontmost app)"
+        let outcome = if !pressed {
+            HumanInputMonitor.shared.humanInterruptedHardware
+                ? "not pressed: the human used the mouse or keyboard first — the hands are theirs"
+                : "not pressed: the console stopped being ours (a lock, a cancelled request, or ⌃⌥⇧⎋)"
+        } else {
+            switch (delivery, focusChanged) {
+            case (.process, true): "key posted; the focused element changed"
+            case (.process, false): "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)"
+            case (.session, true): "key pressed on the console pipeline; the focused element changed"
+            case (.session, false): "key pressed on the console pipeline (reaches key-equivalent dispatch in the frontmost app)"
+            }
         }
         let attempts: [Evidence.Attempt] = [.init(tentacle: tentacle, outcome: outcome)]
 
@@ -2558,6 +2565,7 @@ actor Engine {
         // destination). When the overlay is visible this waits out the wind-up — the window
         // in which ⌃⌥⇧⎋ lands before any motion starts; the per-sample halt check inside the
         // trace covers everything after.
+        HumanInputMonitor.shared.armHardware()
         await PresenceRelay.telegraph(actionPoint)
         let outcome = await HardwareInput.trace(plan, button: button, restoreCursor: restoreCursor)
         // Give hover-intent timers and flyout animations a beat before reading — the Steam

@@ -452,21 +452,29 @@ enum MCPServer {
         tool(
             "busy",
             """
-            Hold the presence overlay up while you work, and declare WHY. Call `busy` with \
-            action 'on' and a `note` when you START a chain of steps, and 'off' when you FINISH \
-            — the jellyfish then stays visible through the thinking and waiting between \
-            commands, and vanishing means 'nothing more is coming', so the person can stop \
-            guarding their mouse. The `note` is the human-visible reason: it becomes the \
-            bezel's headline (capped at 64 characters), with the mechanical per-action summary \
-            beneath it — so a watching human reads what you are trying to do, not just the last \
-            step. Set it whenever you begin real work; 'off' clears it. Renewable: any acting \
-            command renews the hold, and it self-releases after ~90 s if you go silent. Visual \
-            only, and only when the person has 'show overlay for every action' on — it never \
-            changes what the engine does.
+            Tell the person at the Mac what you are doing, on the presence panel. Call action \
+            'on' with a `goal` when you START a chain of work (and `steps` when you know them), \
+            'step' as you move through them, 'wait' with `for` when you are waiting on something \
+            outside the UI (a build, a download), and 'off' when you FINISH, optionally with a \
+            `result`. The panel stays up through the thinking between commands, and its \
+            vanishing means 'nothing more is coming', so the person can stop guarding their \
+            mouse. The goal is the headline: say what you are trying to do, not the mechanical \
+            step — each acting command's `why` covers that. Any acting command renews the hold \
+            and ends a wait; the hold self-releases after ~90 s of silence. Visual only — it \
+            never changes what the engine does.
             """,
             properties: [
-                "action": ["type": "string", "enum": ["on", "off"], "description": "'on' (default) raises the hold; 'off' releases it and clears the reason"],
-                "note": ["type": "string", "description": "The human-visible reason for the work — the bezel headline (capped at 64 chars), e.g. 'tidying the Downloads folder'. Say what you're trying to do, not the mechanical step"],
+                "action": ["type": "string", "enum": ["on", "off", "step", "wait"], "description": "'on' (default) declares the goal and raises the hold; 'step' moves the step pointer; 'wait' declares a wait; 'off' releases the hold"],
+                "goal": ["type": "string", "description": "For 'on': what you are trying to do, ≤120 chars — the panel headline, e.g. 'testing the new login flow'"],
+                "note": ["type": "string", "description": "For 'on': an alias for goal"],
+                "steps": [
+                    "description": "For 'on': the steps of the goal, in order — an array of short labels (≤20, each ≤80 chars) or one string 'a|b|c'",
+                    "anyOf": [["type": "array", "items": ["type": "string"]], ["type": "string"]],
+                ],
+                "step": ["type": "string", "description": "For 'step': 'next' (default) or the 1-based number of the step now underway"],
+                "for": ["type": "string", "description": "For 'wait': what you are waiting on, ≤120 chars, e.g. 'the Xcode build'"],
+                "seconds": ["type": "number", "description": "For 'wait': how long the wait is expected to take, 0–3600"],
+                "result": ["type": "string", "description": "For 'off': the outcome line shown as the panel closes, ≤120 chars"],
             ], required: [],
         ),
         tool(
@@ -646,6 +654,13 @@ enum MCPServer {
         "find", "read", "map", "click", "type", "wait", "screenshot", "move", "drag", "park", "resize", "window", "space", "scroll",
     ]
 
+    /// The verbs that act on the machine — the router's `actingVerbs`. Each accepts `why`, added
+    /// centrally like `window`.
+    static let actingTools: Set<String> = [
+        "type", "click", "scroll", "shortcut", "menu", "key",
+        "move", "drag", "launch", "activate", "park", "resize", "window", "statusitem",
+    ]
+
     private static func tool(
         _ name: String, _ description: String,
         properties: [String: Any], required: [String]
@@ -664,6 +679,12 @@ enum MCPServer {
             properties["pid"] = [
                 "type": "number",
                 "description": "Target this process id directly (overrides 'app') — for when two running instances share a name or bundle id",
+            ]
+        }
+        if actingTools.contains(name), properties["why"] == nil {
+            properties["why"] = [
+                "type": "string",
+                "description": "Why this one action, ≤120 chars — shown to the person at the Mac on the presence panel, e.g. 'open the login page'",
             ]
         }
         if windowScopedTools.contains(name), properties["window"] == nil {

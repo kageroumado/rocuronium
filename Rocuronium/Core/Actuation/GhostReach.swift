@@ -378,7 +378,9 @@ nonisolated struct GhostReach {
         switch action {
         case let .setText(text):
             // The charge-up ring: when the overlay is visible this waits out the wind-up,
-            // which is the deliberate window in which ⌃⌥⇧⎋ can land before the click does.
+            // which is the deliberate window in which ⌃⌥⇧⎋ can land before the click does. A human
+            // reaching for the mouse during it also wins: the monitor is armed from here.
+            HumanInputMonitor.shared.armHardware()
             await PresenceRelay.telegraph(aim)
             guard !EmergencyStop.isHalted else {
                 attempts.append(.init(
@@ -409,7 +411,14 @@ nonisolated struct GhostReach {
                     outcome: "the target is frontmost and its focused element is the target — typing without a focusing click",
                 ))
             } else {
-                await HardwareInput.click(at: aim)
+                guard await HardwareInput.click(at: aim) else {
+                    attempts.append(.init(tentacle: .hardwareInput, outcome: Self.yieldedOutcome))
+                    return await finish(
+                        action, element, .postedEvent, .unverifiable, nil, nil,
+                        focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                        cursorBefore, frontBefore, attempts, pid, referral: referral,
+                    )
+                }
                 PresenceRelay.impact(aim)
                 try? await Task.sleep(for: .milliseconds(200))
             }
@@ -441,6 +450,8 @@ nonisolated struct GhostReach {
                 let frontPIDAfter = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
                 let cause = if EmergencyStop.isHalted {
                     "the human halted it (⌃⌥⇧⎋)"
+                } else if HumanInputMonitor.shared.humanInterruptedHardware {
+                    "the human used the mouse or keyboard — the rest yielded to them"
                 } else if frontPIDAfter != pid {
                     "another app took the keyboard"
                 } else {
@@ -474,6 +485,7 @@ nonisolated struct GhostReach {
             ))
 
         case .click, .press:
+            HumanInputMonitor.shared.armHardware()
             await PresenceRelay.telegraph(aim)
             guard !EmergencyStop.isHalted else {
                 attempts.append(.init(
@@ -487,10 +499,18 @@ nonisolated struct GhostReach {
                 )
             }
             let hwClick: GhostReach.ClickOptions = if case .click = action { clickOptions } else { .init() }
-            await HardwareInput.click(
+            let pressed = await HardwareInput.click(
                 at: aim, button: hwClick.button == .right ? .right : .left,
                 count: hwClick.count, modifiers: hwClick.modifiers,
             )
+            guard pressed else {
+                attempts.append(.init(tentacle: .hardwareInput, outcome: Self.yieldedOutcome))
+                return await finish(
+                    action, element, .postedEvent, .unverifiable, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                )
+            }
             PresenceRelay.impact(aim)
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
@@ -504,6 +524,11 @@ nonisolated struct GhostReach {
             ))
         }
     }
+
+    /// The attempt line for a hardware click withheld because the human took the mouse or
+    /// keyboard first.
+    private static let yieldedOutcome =
+        "stopped: the human used the mouse or keyboard before the press — nothing was clicked, the hands are theirs"
 
     // MARK: - Tentacles
 

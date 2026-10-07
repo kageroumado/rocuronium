@@ -51,8 +51,8 @@ nonisolated enum EventPoster {
             else { continue }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-            down.postToPid(pid)
-            up.postToPid(pid)
+            down.postTagged(toPid: pid)
+            up.postTagged(toPid: pid)
             delivered.unicodeScalars.append(scalars[index])
             try? await Task.sleep(for: Constants.perCharacterDelay)
         }
@@ -121,9 +121,9 @@ nonisolated enum EventPoster {
         }
         down.flags = modifiers
         up.flags = modifiers
-        down.postToPid(pid)
+        down.postTagged(toPid: pid)
         try? await Task.sleep(for: Constants.clickHoldDuration)
-        up.postToPid(pid)
+        up.postTagged(toPid: pid)
     }
 
     /// Clicks a screen point inside one process. The pointer is not moved: the coordinate
@@ -153,9 +153,9 @@ nonisolated enum EventPoster {
             down.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
             up.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
             if !modifiers.isEmpty { down.flags = modifiers; up.flags = modifiers }
-            down.postToPid(pid)
+            down.postTagged(toPid: pid)
             try? await Task.sleep(for: Constants.clickHoldDuration)
-            up.postToPid(pid)
+            up.postTagged(toPid: pid)
         }
     }
 
@@ -192,7 +192,7 @@ nonisolated enum EventPoster {
             // Scroll events land on whatever is under the event's own location — the
             // pointer is not consulted and not moved.
             event.location = point
-            event.postToPid(pid)
+            event.postTagged(toPid: pid)
             try? await Task.sleep(for: Constants.scrollChunkDelay)
         }
     }
