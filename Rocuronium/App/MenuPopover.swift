@@ -381,6 +381,8 @@ struct MenuPopover: View {
                 .help("Settings — models, preferences")
             FooterIconButton("Demo Stage", systemImage: "theatermasks") { engine.showDemoStage() }
                 .help("Open the demo stage — deterministic targets for every verb")
+            FooterIconButton("Overlay Showcase", systemImage: "play.rectangle") { engine.showShowcase() }
+                .help("Open the overlay showcase — scripted scenes of the presence panel")
             // `xmark`, not `power`: a power glyph in a Mac context reads as "shut down the
             // Mac" — the wrong mental model for quitting the app.
             FooterIconButton("Quit Rocuronium", systemImage: "xmark") { NSApplication.shared.terminate(nil) }

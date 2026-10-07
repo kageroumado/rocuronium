@@ -64,7 +64,7 @@ enum PanelPalette {
 /// offline renderer pass `fixedNow` (scene time), so every frame is reproducible.
 struct PanelView: View {
     enum Constants {
-        static let width: CGFloat = 540
+        static let width: CGFloat = 560
         /// Apple's capture bar radius.
         static let cornerRadius: CGFloat = 15
         static let markSize = CGSize(width: 26, height: 34)
@@ -142,7 +142,6 @@ private struct PanelContent: View {
                         .truncationMode(.tail)
                     Spacer(minLength: Theme.Space.sm)
                     ModeChip(lines: lines)
-                    StopChip()
                 }
                 HStack(spacing: 6) {
                     Text(lines.now)
@@ -154,6 +153,7 @@ private struct PanelContent: View {
                     Text(lines.clock)
                         .font(.system(size: PanelView.Constants.chipSize).monospacedDigit())
                         .foregroundStyle(.tertiary)
+                    StopChip()
                     if !model.steps.isEmpty {
                         ExpandButton(model: model)
                     }
@@ -348,6 +348,7 @@ private struct StepList: View {
             }
         }
         .padding(.top, Theme.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) {
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
         }

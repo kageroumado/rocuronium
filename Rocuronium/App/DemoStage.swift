@@ -182,6 +182,10 @@ private struct DemoStageView: View {
                         .frame(width: 74, height: 74)
                     Text("sigil").font(.caption2).foregroundStyle(.white.opacity(0.65))
                 }
+                // Below the instrumented controls on purpose: adding it here moves no aim point.
+                Button("Showcase…") { ShowcaseWindowController.shared.show() }
+                    .controlSize(.small)
+                    .help("Scripted scenes of the presence panel")
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, Theme.Space.xs)

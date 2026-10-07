@@ -54,9 +54,15 @@ struct PanelLines: Equatable {
             return withStep(model, model.steps[index])
         }
         if mode == .thinking { return "Deciding what to do next" }
+        // Without a hold, nothing more is promised: say so rather than repeat line 3.
+        if !model.holdActive, model.lastAction != nil { return "Finished — nothing else is running" }
         if let last = model.lastAction {
             let phrase = PanelText.phrase(for: last, resolved: model.resolved)
-            return phrase.joined(phrase.past)
+            // Past tense only for what evidently happened; a stopped or failed action was tried.
+            switch model.result?.kind {
+            case .confirmed?, .unverified?, nil: return phrase.joined(phrase.past)
+            default: return phrase.joined("Tried to \(phrase.infinitive)")
+            }
         }
         return "Starting"
     }
@@ -83,8 +89,9 @@ struct PanelLines: Equatable {
         case .background:
             return ("Background", "keep working", nil)
         case .handsOff:
-            let start = model.handsOffStart ?? model.actionStart ?? date
-            return ("Hands off", PanelText.clock(date.timeIntervalSince(start)), nil)
+            // Which hand is borrowed, not a second clock: the elapsed time is already on line 2.
+            let hand = model.action.map { PanelText.phrase(for: $0).hardware == .keyboard ? "keyboard" : "mouse" } ?? "mouse"
+            return ("Hands off", hand, nil)
         case .waiting:
             guard let wait = model.wait else { return ("Waiting", "", nil) }
             let elapsed = date.timeIntervalSince(wait.start)

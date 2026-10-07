@@ -19,10 +19,10 @@ enum EffectsRenderer {
         /// The jellyfish's box beside the pointer.
         static let jellySize = CGSize(width: 46, height: 60)
         /// The escort rides a hand's width above-left of the pointer.
-        static let escortOffset = CGPoint(x: -44, y: -62)
+        static let escortOffset = CGPoint(x: -66, y: -80)
         /// The border eases in over this once hands-off begins.
         static let borderFadeIn: TimeInterval = 0.25
-        static let borderWidth: CGFloat = 4
+        static let borderWidth: CGFloat = 3
         /// Matches the rounded corners of a built-in display.
         static let borderCornerRadius: CGFloat = 10
         static let rippleStartRadius: CGFloat = 11
@@ -42,7 +42,7 @@ enum EffectsRenderer {
         escort: EscortPose?, trail: [TrailDot], style: JellyStyle,
     ) {
         let time = now.timeIntervalSinceReferenceDate
-        if let start = model.handsOffStart, model.action?.cursorTaking == true {
+        if let start = model.handsOffStart, model.action?.cursorTaking == true, model.consent == nil {
             let fade = min(1, max(0, now.timeIntervalSince(start) / Constants.borderFadeIn))
             drawBorder(in: context, size: size, strength: fade, time: time)
         }
@@ -89,7 +89,7 @@ enum EffectsRenderer {
     /// breathing slowly so it reads as live rather than as a stuck highlight.
     private static func drawBorder(in context: GraphicsContext, size: CGSize, strength: Double, time: TimeInterval) {
         let breathe = 0.85 + 0.15 * sin(time * 2 * .pi / 1.6)
-        let glows: [(width: CGFloat, opacity: Double)] = [(22, 0.10), (12, 0.18), (Constants.borderWidth, 0.95)]
+        let glows: [(width: CGFloat, opacity: Double)] = [(12, 0.07), (7, 0.14), (Constants.borderWidth, 0.95)]
         for glow in glows {
             let inset = glow.width / 2
             let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
@@ -121,7 +121,7 @@ struct OverlayEffectsView: View {
                 // so flipping through the view height lands in view space.
                 let mouse = NSEvent.mouseLocation
                 let cursor = CGPoint(x: mouse.x, y: size.height - mouse.y)
-                let escorting = model.action?.cursorTaking == true
+                let escorting = model.action?.cursorTaking == true && model.consent == nil
                 let offset = EffectsRenderer.Constants.escortOffset
                 let target = CGPoint(x: cursor.x + offset.x, y: cursor.y + offset.y)
                 let seconds = now.timeIntervalSinceReferenceDate

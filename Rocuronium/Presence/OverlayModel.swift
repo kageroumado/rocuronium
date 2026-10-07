@@ -359,7 +359,8 @@ final class OverlayModel {
     /// The full-screen layer is up only while it has something to show: a hands-off action,
     /// a charging ring, or a ripple still spreading. Never while idle.
     func effectsVisible(at now: Date) -> Bool {
-        if action?.cursorTaking == true { return true }
+        // While the human is being asked, nothing has their hardware yet.
+        if action?.cursorTaking == true, consent == nil { return true }
         if chargeRing != nil { return true }
         return ripples.contains { now.timeIntervalSince($0.start) < Constants.rippleLife }
     }

@@ -8,7 +8,8 @@ This file is the map for working *on* the code. Grep the tree and read the sourc
 
 ```
 Rocuronium/                     the .app (menu-bar daemon, holds TCC)
-  App/            RocuroniumApp, MenuPopover, SettingsWindow, ModelSettingsView, DemoStage, Theme
+  App/            RocuroniumApp, MenuPopover, SettingsWindow, ModelSettingsView, DemoStage, Theme,
+                  Showcase/ (scripted presence scenes on a mock desktop + offline PNG renderer)
   Control/        ControlServer (unix socket), CommandRouter (verb dispatch)
   Core/
     Engine.swift  the actor; all AXUIElement work lives behind it
@@ -22,8 +23,9 @@ Rocuronium/                     the .app (menu-bar daemon, holds TCC)
     Plan/         SequencePlan, PlanExecutor, PlanGuard
   Vision/         GroundingBackend (protocol), MLXBackend, DetectorBackend,
                   FoundationModelsBackend, TextSighting
-  Presence/       PresenceOverlayController, OverlayViews, HotkeyMonitor, ActivityLog,
-                  ConsentView, MenuBarGlyph, + jelly art
+  Presence/       PresenceOverlayController, OverlayModel (state + lifecycle as a pure function
+                  of time), PanelText/PanelLines (the words), PanelView, PresencePanel (window),
+                  EffectsLayer, HotkeyMonitor, ActivityLog, ConsentView, MenuBarGlyph, + jelly art
 RocuroniumCLI/    thin client: main.swift (CLI + `mcp` stdio server), MCPServer.swift
 RocuroniumTests/  unit tests
 ```
@@ -93,6 +95,7 @@ A plan is a JSON step list, not a program: `PlanExecutor` runs steps sequentiall
 
 ## Build / test loop
 
+- **The Debug configuration is the showcase only** (bundle id `glass.kagerou.rocuronium.debug`): no socket, no hotkeys or taps, no TCC prompts — it opens the Overlay Showcase, so it can run beside the installed daemon. `Rocuronium --render-showcase <dir>` writes every scene's key moments as PNGs and exits. Tests run against it.
 - **Debug is build-sign-install**: the socket verifies the peer's Developer ID signature, so an unsigned `.build/debug` binary is refused. Run `./Scripts/install.sh` (builds + signs the bundle, no version bump, notarization skipped), then use `/Applications/Rocuronium.app/Contents/Resources/rocuronium`.
 - **The embedded CLI lives in `Contents/Resources`, never `Contents/MacOS`** — the filesystem is case-insensitive and `rocuronium` there would overwrite the app's own `Rocuronium` executable.
 - **A command or flag change lands in four places**: the router's `dispatch`, the CLI `usage`, `MCPServer.tools`, and the skill (`.claude/skills/rocuronium`). `DocsConsistencyTests` proves the first three stay in sync — add a verb to the router and to its `commands` set or the build fails.

@@ -3,6 +3,22 @@ import SwiftUI
 
 @main
 struct RocuroniumApp: App {
+    #if DEBUG
+    /// Debug builds are the showcase only: no socket, no hotkeys, no event taps, no TCC
+    /// prompts, a separate bundle id — so one can run beside the installed daemon without
+    /// either noticing the other.
+    @NSApplicationDelegateAdaptor(ShowcaseOnlyAppDelegate.self) private var delegate
+
+    var body: some Scene {
+        MenuBarExtra {
+            Button("Overlay Showcase") { ShowcaseWindowController.shared.show() }
+            Divider()
+            Button("Quit") { NSApplication.shared.terminate(nil) }
+        } label: {
+            Text("ROC DEBUG")
+        }
+    }
+    #else
     @State private var engine = EngineHost()
 
     var body: some Scene {
@@ -23,7 +39,30 @@ struct RocuroniumApp: App {
             }
         }
     }
+    #endif
 }
+
+#if DEBUG
+/// Starts a Debug build as the showcase: renders the scenes and exits when launched with
+/// `--render-showcase <dir>`, otherwise opens the showcase window. Under unit tests it does
+/// neither, so the test host starts quietly.
+final class ShowcaseOnlyAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_: Notification) {
+        if let directory = ShowcaseRenderer.requestedDirectory() {
+            do {
+                let files = try ShowcaseRenderer.render(to: directory)
+                print("rendered \(files.count) frames to \(directory.path)")
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("render failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        ShowcaseWindowController.shared.show()
+    }
+}
+#endif
 
 /// Owns the control socket and the shared engine state for the app's lifetime.
 @MainActor
@@ -53,6 +92,10 @@ final class EngineHost {
 
     func showDemoStage() {
         router.demoStage.show(reset: true)
+    }
+
+    func showShowcase() {
+        ShowcaseWindowController.shared.show()
     }
 
     private let settingsWindow = SettingsWindowController()
