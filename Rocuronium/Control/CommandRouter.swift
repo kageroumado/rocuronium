@@ -390,13 +390,9 @@ final class CommandRouter {
         let cursorTaking = request.allowHardwareInput == true || request.foreground == true
             || request.command == "move" || request.command == "drag"
         if Self.actingVerbs.contains(request.command), cursorTaking || overlay.model.showForAllActions {
-            // Cursor-taking work surfaces the chrome on the motion itself (the charge ring),
-            // not on router entry seconds earlier; a ghost verb merely being watched surfaces
-            // now, since the bezel is the only cue some of those raise.
-            overlay.begin(
-                action: "\(request.command) \(Self.target(of: request))…",
-                deferAppearance: cursorTaking,
-            )
+            // Hands-off work turns the panel amber before the pointer moves, so the warning
+            // precedes the motion; ghost work narrates in the background.
+            overlay.begin(action: request.panelAction(cursorTaking: cursorTaking))
         }
         if request.command == "plan" {
             return try await plan(request)
@@ -458,18 +454,18 @@ final class CommandRouter {
         let action = request.action ?? "on"
         switch action {
         case "on":
-            overlay.beginHold(note: request.note ?? "")
+            overlay.beginHold(goal: request.note ?? "", steps: [])
             return [
                 "ok": true, "busy": true,
                 "shown": overlay.model.showForAllActions,
                 "summary": overlay.model.showForAllActions
                     ? ((request.note ?? "").isEmpty
                         ? "holding the overlay up until `busy off`"
-                        : "holding the overlay up until `busy off` — reason shown to the human: '\(request.note!.prefix(OverlayModel.intentCap))'")
+                        : "holding the overlay up until `busy off` — reason shown to the human: '\(request.note!.prefix(PanelText.Constants.goalLimit))'")
                     : "noted — the overlay only shows when 'show for every action' is on",
             ]
         case "off":
-            overlay.endHold()
+            overlay.endHold(result: nil)
             return ["ok": true, "busy": false, "summary": "released the overlay hold"]
         default:
             return ["ok": false, "error": "unknown busy action '\(action)' — use on or off"]

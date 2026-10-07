@@ -1,12 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Owns the overlay window and the session lifecycle: fade in on the first visible action,
-/// linger briefly after the last, and vanish instantly on ⌃⌥⇧⎋.
+/// Owns the presence surfaces and their lifecycle: the panel, the full-screen effects layer and
+/// the consent card.
 ///
-/// One borderless window on the primary screen (v1). It ignores every mouse event and sits
-/// above normal windows but below the lock screen, joining all Spaces so the session cue
-/// survives a Space switch mid-task.
+/// The model decides what is shown at any instant (`OverlayModel.presentation(at:)`); this
+/// controller turns that into windows. The panel is up while a command is in flight, a hold or a
+/// wait is declared, or consent is pending, and fades once none of those is true. The effects
+/// layer is up only while it has something to draw — a hands-off action, a charging ring, a
+/// ripple — and never while idle. ⌃⌥⇧⎋ removes everything at once.
 @MainActor
 final class PresenceOverlayController {
     /// The relay hooks are `@Sendable` and cannot capture this MainActor object, so they
@@ -17,165 +19,110 @@ final class PresenceOverlayController {
     /// Fires after ⌃⌥⇧⎋ has halted the engine and removed the chrome; the router logs it.
     var onEmergencyStop: (@MainActor () -> Void)?
 
-    private var window: NSWindow?
-    private var bezelWindow: NSWindow?
+    private var panelWindow: PresencePanel?
+    private var panelHost: NSHostingView<AnyView>?
+    private var effectsWindow: NSWindow?
     private var consentWindow: NSWindow?
-    private var bezelMoveObserver: (any NSObjectProtocol)?
     private let hotkey = HotkeyMonitor()
     private let consentKeys = ConsentHotkeys()
     private var consentContinuation: CheckedContinuation<ConsentAnswer, Never>?
-    private var lingerTask: Task<Void, Never>?
-    /// True between `beginHold` and `endHold`: the agent has declared a work bracket, so the
-    /// chrome stays up through the thinking and waiting between commands — not just for the
-    /// 15 s after one. Each command renews a `holdSafety` window instead of the short linger.
-    private var holdActive = false
+    private var tickTask: Task<Void, Never>?
+    private var panelFading = false
+    private var effectsShown = false
+    private var moveObserver: (any NSObjectProtocol)?
+    /// True while the controller itself moves the panel, so only the human's drags are remembered.
+    private var placingPanel = false
 
-    // Nonisolated so `restartLinger`'s default argument, evaluated at the call site, can
-    // read it without an actor hop.
+    // Nonisolated so the relay hook, which runs off the main actor, can read the wind-up.
     private nonisolated enum Constants {
-        /// The chrome eases in over this once the action actually begins — brisk, so the
-        /// creature is present for the click that summoned it rather than still arriving.
-        static let fadeIn: TimeInterval = 0.3
-        static let fadeOut: TimeInterval = 0.8
-        /// How long the session chrome outlives the last command before fading.
-        static let linger: TimeInterval = 15
-        /// After a cursor-taking action the user saw what happened — fade sooner.
-        static let shortLinger: TimeInterval = 3
-        /// While the agent holds a `busy` bracket, how long the chrome may outlive the last
-        /// command before the safety fade assumes the agent is gone. Long enough to cover a
-        /// think between tool calls; short enough that a crashed agent does not strand the cue.
-        static let holdSafety: TimeInterval = 90
-        /// The charge-up ring's wind-up — the visible interrupt window before each click.
+        static let fadeIn: TimeInterval = 0.2
+        static let effectsFade: TimeInterval = 0.2
+        /// How often the lifecycle is re-evaluated while anything is up.
+        static let tick: Duration = .milliseconds(200)
+        /// The charge-up ring's wind-up — the visible interrupt window before each hardware click.
         static let charge: TimeInterval = 0.6
         /// How long a consent prompt waits for the human before it cancels itself — well
         /// inside the socket's 30 s so the caller gets a clean "declined", not a dead call.
         static let consentTimeout: TimeInterval = 25
-        /// Vertical clearance kept between the consent prompt's bottom edge and the bezel's
-        /// top edge when both are up, so the two share the bottom-center without overlapping.
-        static let consentBezelGap: CGFloat = 16
+        /// Space kept between the consent card's bottom edge and the panel's top edge.
+        static let consentGap: CGFloat = 12
+        /// Transparent room around the panel inside its window, so the entry swell and the
+        /// shadow are never clipped by the window edge.
+        static let panelMargin: CGFloat = 18
     }
 
     init() {
         hotkey.onHalt = { [weak self] in self?.emergencyStop() }
     }
 
-    var isSessionVisible: Bool { model.phase != .hidden }
+    var isSessionVisible: Bool { model.sessionStart != nil }
 
-    // MARK: - Session lifecycle (called by the router)
+    // MARK: - Commands (called by the router)
 
-    /// A visible command is starting: prime the intent and narrate it.
-    ///
-    /// `deferAppearance` holds the chrome back until the action actually happens. A cursor-taking
-    /// verb moves the pointer seconds after the call enters the router, and a creature that
-    /// surfaces on router entry idles on-screen for that whole gap — a premature cue; there the
-    /// charge ring and impact ping surface it on the motion itself. A ghost verb only ever being
-    /// *watched* (the show-for-all-actions toggle) has no such cursor to be early about, and some
-    /// of those verbs raise no effect to hook, so the bezel comes up now to narrate the work.
-    func begin(action: String, deferAppearance: Bool) {
-        if model.sessionStart == nil { model.sessionStart = Date() }
-        model.phase = .thinking
-        model.narration = action
-        model.settleStart = nil
-        model.lastEngagement = Date()
-        if !deferAppearance { appearForAction() }
-        restartLinger()
+    /// An acting command is starting. Its action phrase becomes line 2 at once; a hands-off
+    /// command turns the panel amber before the pointer moves, so the warning precedes the motion.
+    func begin(action: PanelAction) {
+        model.begin(action, at: Date())
+        appear()
     }
 
-    /// The command's reply is in: narrate the verdict and settle back to idle — or to the
-    /// amber needs-human posture when the refusal names a flag only a human should pass.
+    /// The command's reply is in: line 3 says what it came to.
     func commandFinished(_ reply: [String: Any]) {
         guard isSessionVisible else { return }
-        model.chargeRing = nil
-        let error = reply["error"] as? String
-        model.phase = error?.localizedCaseInsensitiveContains("confirm") == true ? .needsHuman : .idle
-        model.narration = Self.narration(for: reply)
-        model.lastEngagement = Date()
-        let cursorTaking = reply["cursorMovedByUs"] as? Bool == true
-        // The settle beat: a deliberate finish rather than a silent flip to idle. A cursor
-        // action holds where it last escorted and settles there; everything else eases home
-        // to the perch. Only when the chrome is actually on screen — a session primed but
-        // never surfaced has nothing to settle.
-        if isSessionVisible {
-            model.settleStart = Date()
-            model.settleInPlace = cursorTaking
-        }
-        restartLinger(seconds: cursorTaking ? Constants.shortLinger : Constants.linger)
+        model.finish(reply: reply, at: Date())
+        evaluate()
     }
 
-    // MARK: - Agent work bracket
+    // MARK: - The agent's declarations (`busy`)
 
-    /// The agent declares it is actively working — acting, waiting on a result, or thinking
-    /// mid-chain — so the chrome should stay up until it says otherwise. Only ever shown when
-    /// the human asked to watch every action; the bracket is a cue, not a safety gate.
-    ///
-    /// Renewable: calling it again refreshes the safety window and the note. Every acting
-    /// command also renews the window (through `restartLinger`), so a steady stream of work
-    /// keeps the creature lit through the gaps; a single call carries a lone think across them.
-    func beginHold(note: String) {
-        guard model.showForAllActions else { return }
-        holdActive = true
-        if model.sessionStart == nil { model.sessionStart = Date() }
-        appearForAction()
-        model.phase = .thinking
-        model.settleStart = nil
-        // The note is the human-visible reason for the work bracket — it becomes the bezel's
-        // headline (the "why"), which the per-action narration then sits beneath. Capped so it
-        // stays a glanceable line.
-        if !note.isEmpty { model.intent = String(note.prefix(OverlayModel.intentCap)) }
-        model.lastEngagement = Date()
-        restartLinger()
+    /// The agent declares a bracket of work with a goal and, optionally, its steps. Shown only
+    /// when the human asked to watch every action; a cue, never a gate.
+    func beginHold(goal: String, steps: [String]) {
+        guard model.showForAllActions || isSessionVisible else { return }
+        model.beginHold(goal: goal, steps: steps, at: Date())
+        appear()
     }
 
-    /// The agent is done: drop the bracket and let the chrome settle away on the short linger,
-    /// so "creature gone" means "nothing is coming". A no-op when no bracket is held.
-    func endHold() {
-        guard holdActive else { return }
-        holdActive = false
-        // The declared reason belongs to the bracket that is ending; a stale intent must not
-        // headline the next unrelated command.
-        model.intent = ""
-        model.settleStart = Date()
-        model.settleInPlace = false
-        restartLinger(seconds: Constants.shortLinger)
+    /// Moves the step pointer: `nil` = next, otherwise 1-based.
+    func advanceStep(to step: Int?) {
+        guard isSessionVisible else { return }
+        model.advanceStep(to: step, at: Date())
+        evaluate()
     }
 
-    /// One line of evidence-verdict language for the bezel.
-    static func narration(for reply: [String: Any]) -> String {
-        if let verdict = reply["verdict"] as? String {
-            let readback = (reply["readback"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            switch verdict {
-            case "confirmed": return "Evidence: \(readback ?? "confirmed") ✓"
-            case "noEffect": return "Evidence: no observable effect"
-            default: return "Evidence: unverifiable"
-            }
-        }
-        if let error = reply["error"] as? String { return error }
-        return reply["summary"] as? String ?? "done"
+    /// The agent is waiting on something: the panel shows what, and for how long.
+    func beginWait(what: String, seconds: TimeInterval?) {
+        guard model.showForAllActions || isSessionVisible else { return }
+        model.beginWait(what: what, seconds: seconds, at: Date())
+        appear()
+    }
+
+    /// The agent is done: the summary shows for two seconds, then everything fades, so
+    /// "panel gone" means "nothing is coming".
+    func endHold(result: String?) {
+        guard isSessionVisible else { return }
+        model.endHold(result: result, at: Date())
+        evaluate()
     }
 
     // MARK: - Consent
 
     /// Ask the human at the machine to approve a disruptive action, and block on the answer.
-    /// The socket call awaits this, so the whole point is that it resolves quickly: a one-second
-    /// hold on **Y** or **N**, or the timeout (treated as no) well inside the socket's 30 s.
+    /// The socket call awaits this, so it resolves quickly: a one-second hold on **Y** or **N**,
+    /// or the timeout (treated as no) well inside the socket's 30 s.
     func requestConsent(prompt: String, detail: String) async -> ConsentAnswer {
         // Resolve any prompt already standing (only one at a time) as a decline before opening
         // the new one — a stale continuation must never be abandoned unresumed.
         if consentContinuation != nil { resolveConsent(.decline) }
 
-        appearForAction()
-        model.phase = .needsHuman
-        model.narration = prompt
-        model.consent = OverlayModel.ConsentRequest(prompt: prompt, detail: detail)
-        model.consentHold = nil
-        model.lastEngagement = Date()
-        // Hold the chrome up for the whole wait; the linger would otherwise fade it mid-decision.
-        lingerTask?.cancel()
+        model.presentConsent(prompt: prompt, detail: detail, at: Date())
+        appear()
 
         if consentWindow == nil { consentWindow = makeConsentWindow() }
         positionConsentWindow()
         consentWindow?.alphaValue = 1
         consentWindow?.orderFrontRegardless()
+        if let number = consentWindow?.windowNumber { ScreenCapture.excludeFromCaptures(windowNumber: number) }
 
         consentKeys.onProgress = { [weak self] answer, fraction in
             self?.model.consentHold = (answer, fraction)
@@ -202,92 +149,55 @@ final class PresenceOverlayController {
         consentContinuation = nil
         consentKeys.stop()
         consentWindow?.orderOut(nil)
-        model.consent = nil
-        model.consentHold = nil
-        model.phase = .idle
-        model.narration = switch answer {
-        case .approve: "Approved — proceeding"
-        case .approveForAWhile: "Approved for \(StandingApproval.minutes) minutes — proceeding"
-        case .decline: "Declined"
-        }
-        model.lastEngagement = Date()
-        restartLinger()
+        model.resolveConsent(answer, at: Date())
+        evaluate()
         continuation.resume(returning: answer)
     }
 
     private func positionConsentWindow() {
-        guard let consentWindow, let screen = NSScreen.screens.first else { return }
-        // Settle the card to its final size before placing it. NSHostingView resizes the
-        // window to fit its content *after* the view lays out, and that resize keeps the
-        // top-left corner — growing the window downward, into the bezel, after it was already
-        // positioned. Force layout and pin the content size first, so the bottom edge set
-        // below is the last word and cannot drift down onto the bezel.
+        guard let consentWindow else { return }
+        // Settle the card to its final size before placing it: NSHostingView resizes the window
+        // after layout keeping the top-left corner, which would push it down onto the panel.
         consentWindow.contentView?.layoutSubtreeIfNeeded()
         if let fitting = consentWindow.contentView?.fittingSize, fitting.height > 0 {
             consentWindow.setContentSize(fitting)
         }
-
-        let x = screen.frame.midX - consentWindow.frame.width / 2
-        // Default home: above the bezel's bottom-center perch.
-        var y = screen.frame.minY + 190
-        // The prompt and the bezel share the bottom-center. `requestConsent` always shows the
-        // bezel first, so whenever it is up, stack the prompt's bottom edge a fixed gap above
-        // the bezel's top edge — keyed off the bezel's live frame, so it holds at any bezel
-        // size or dragged position, and never depends on the prompt's own (not-yet-laid-out)
-        // height. `max` keeps the default home as a floor.
-        if let bezelWindow {
-            y = max(y, bezelWindow.frame.maxY + Constants.consentBezelGap)
+        let anchor = panelWindow?.frame.insetBy(dx: Constants.panelMargin, dy: Constants.panelMargin)
+        let screen = panelWindow?.screen ?? PanelPlacement.screenUnderPointer()
+        guard let anchor, let screen else { return }
+        var origin = CGPoint(x: anchor.midX - consentWindow.frame.width / 2, y: anchor.maxY + Constants.consentGap)
+        // A panel parked at the top of the screen gets the card underneath instead.
+        if origin.y + consentWindow.frame.height > screen.visibleFrame.maxY {
+            origin.y = anchor.minY - Constants.consentGap - consentWindow.frame.height
         }
-        consentWindow.setFrameOrigin(NSPoint(x: x, y: y))
+        consentWindow.setFrameOrigin(origin)
     }
 
     private func makeConsentWindow() -> NSWindow? {
-        let hosting = NSHostingView(rootView: ConsentView(model: model))
-        let size = hosting.fittingSize
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-        )
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
+        let hosting = NSHostingView(rootView: ConsentView(model: model).padding(Constants.panelMargin))
+        let window = PresencePanel(contentView: hosting)
         window.ignoresMouseEvents = true
-        window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
         return window
     }
 
     // MARK: - Effects (called through the relay)
 
     func showChargeRing(at point: CGPoint, duration: TimeInterval) {
-        appearForAction()
-        model.phase = .acting
-        model.settleStart = nil
-        model.chargeRing = OverlayModel.ChargeRing(point: point, start: Date(), duration: duration)
-        model.focus(at: point)
-        model.lastEngagement = Date()
+        model.charge(at: point, duration: duration, now: Date())
+        appear()
     }
 
     func showRipple(at point: CGPoint) {
-        appearForAction()
-        model.chargeRing = nil
-        model.addRipple(at: point)
-        model.focus(at: point)
-        model.lastEngagement = Date()
+        model.addRipple(at: point, now: Date())
+        appear()
     }
 
-    /// A ghost (cursor-free) action landed at `point` and the human is here to see it: surface
-    /// the chrome and ripple at the click, so where an invisible action struck is visible
-    /// without any cursor-take. The action stays a ghost — only this effect appears.
+    /// A ghost (cursor-free) action landed at `point` and the human is here to see it: a ripple
+    /// where it struck, and nothing else — the action stays a ghost.
     func showGhostPing(at point: CGPoint) {
-        appearForAction()
-        model.addRipple(at: point)
-        model.focus(at: point)
-        model.lastEngagement = Date()
+        guard isSessionVisible else { return }
+        model.addRipple(at: point, now: Date())
+        evaluate()
     }
 
     /// Installs the Core-side hooks. Called once at launch, after `shared` is set.
@@ -311,9 +221,8 @@ final class PresenceOverlayController {
             }
         }
         PresenceRelay.ghostImpact = { point in
-            // A ghost click is invisible by design. It gets a ping only when the human asked to
-            // watch every action (`showForAllActions`) and is actually here to see it — never
-            // over a locked or sleeping screen, where there is no viewer and no cursor to spare.
+            // A ghost click gets a ping only when the human asked to watch every action and is
+            // actually here to see it — never over a locked or sleeping screen.
             let presence = UserPresence.read()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -327,93 +236,198 @@ final class PresenceOverlayController {
 
     // MARK: - The emergency stop
 
-    /// ⌃⌥⇧⎋: halt the engine, then just stop and quietly remove the chrome — no ceremony.
+    /// ⌃⌥⇧⎋: halt the engine, then remove every surface at once — no fade, no ceremony.
     private func emergencyStop() {
         EmergencyStop.halt(reason: "⌃⌥⇧⎋ pressed while the overlay was visible")
-        holdActive = false
-        lingerTask?.cancel()
-        hotkey.unregister()
-        model.phase = .hidden
-        model.sessionStart = nil
-        model.intent = ""
-        model.chargeRing = nil
-        model.settleStart = nil
-        for panel in [window, bezelWindow] {
-            panel?.orderOut(nil)
-            panel?.alphaValue = 0
-        }
+        if consentContinuation != nil { resolveConsent(.decline) }
+        model.reset()
+        hideEverything()
         onEmergencyStop?()
     }
 
-    // MARK: - Window
-
-    /// Surface the chrome for the action that is happening now — idempotent, so the charge
-    /// ring, the impact ping, and a consent prompt all call it and only the first fades
-    /// anything in. Kept off `begin` on purpose: the overlay belongs to the action, not to
-    /// the router entry that precedes it by seconds.
-    private func appearForAction() {
-        if window == nil { window = makeWindow() }
-        if bezelWindow == nil { bezelWindow = makeBezelWindow() }
-        for panel in [window, bezelWindow] {
-            guard let panel else { continue }
-            if !panel.isVisible {
-                panel.alphaValue = 0
-                panel.orderFrontRegardless()
-            }
-            if panel.alphaValue < 1 {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = Constants.fadeIn
-                    panel.animator().alphaValue = 1
-                }
-            }
+    private func hideEverything() {
+        tickTask?.cancel()
+        tickTask = nil
+        hotkey.unregister()
+        panelFading = false
+        effectsShown = false
+        for window in [panelWindow, effectsWindow, consentWindow] as [NSWindow?] {
+            window?.orderOut(nil)
+            window?.alphaValue = 0
         }
-        publishBezelFrame()
-        // The stop chord only exists while there is visibly something to stop.
-        hotkey.register()
     }
 
-    private func fadeOutAndHide() {
-        hotkey.unregister()
-        // The safety window may be what fired this — the agent went quiet without releasing.
-        // Clear the bracket so the next command starts from a clean idle, not a stale hold.
-        holdActive = false
-        model.phase = .hidden
-        model.sessionStart = nil
-        model.intent = ""
-        model.chargeRing = nil
-        model.settleStart = nil
-        for panel in [window, bezelWindow] {
-            guard let panel else { continue }
+    // MARK: - Lifecycle
+
+    /// Something happened that keeps the panel up: show it (or cancel a fade in progress),
+    /// arm the stop chord, and start re-evaluating.
+    private func appear() {
+        if panelWindow == nil { makePanelWindow() }
+        guard let panelWindow else { return }
+        if !panelWindow.isVisible {
+            fitPanel(anchorBottom: true)
+            placePanel()
+            panelWindow.alphaValue = 0
+            panelWindow.orderFrontRegardless()
+            ScreenCapture.excludeFromCaptures(windowNumber: panelWindow.windowNumber)
+        }
+        if panelWindow.alphaValue < 1 || panelFading {
+            panelFading = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Constants.fadeIn
+                panelWindow.animator().alphaValue = 1
+            }
+        }
+        // The stop chord exists only while there is visibly something to stop.
+        hotkey.register()
+        startTicking()
+        evaluate()
+    }
+
+    private func startTicking() {
+        guard tickTask == nil else { return }
+        tickTask = Task(name: "presence panel lifecycle") { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Constants.tick)
+                self?.evaluate()
+            }
+        }
+    }
+
+    /// Applies the model's presentation to the windows.
+    private func evaluate() {
+        let now = Date()
+        let presentation = model.presentation(at: now)
+        setEffects(visible: presentation.effectsVisible)
+        if !presentation.isUp || presentation.opacity < 1 {
+            fadePanelOut()
+        }
+    }
+
+    private func fadePanelOut() {
+        guard let panelWindow, !panelFading, panelWindow.isVisible else {
+            if panelWindow?.isVisible != true { finishSession() }
+            return
+        }
+        panelFading = true
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = OverlayModel.Constants.fadeOut
+            panelWindow.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // AppKit calls this on the main thread; the closure is typed Sendable, so assert
+            // rather than hop.
+            MainActor.assumeIsolated {
+                guard let self, self.panelFading else { return }
+                // A new command may have arrived during the fade; only end a session still down.
+                guard !self.model.presentation(at: Date()).isUp else {
+                    self.panelFading = false
+                    return
+                }
+                self.finishSession()
+            }
+        })
+    }
+
+    private func finishSession() {
+        model.reset()
+        hideEverything()
+    }
+
+    private func setEffects(visible: Bool) {
+        guard visible != effectsShown else { return }
+        effectsShown = visible
+        if visible {
+            if effectsWindow == nil { effectsWindow = makeEffectsWindow() }
+            guard let effectsWindow else { return }
+            effectsWindow.alphaValue = 0
+            effectsWindow.orderFrontRegardless()
+            ScreenCapture.excludeFromCaptures(windowNumber: effectsWindow.windowNumber)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Constants.effectsFade
+                effectsWindow.animator().alphaValue = 1
+            }
+        } else if let effectsWindow {
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = Constants.fadeOut
-                panel.animator().alphaValue = 0
+                context.duration = Constants.effectsFade
+                effectsWindow.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
-                // AppKit calls this on the main thread; the closure is typed Sendable, so
-                // assert rather than hop (assumeIsolated is near-free).
                 MainActor.assumeIsolated {
-                    // A new session may have begun during the fade; only order out while
-                    // still hidden.
-                    guard let self, self.model.phase == .hidden else { return }
-                    panel.orderOut(nil)
+                    guard let self, !self.effectsShown else { return }
+                    effectsWindow.orderOut(nil)
                 }
             })
         }
     }
 
-    private func restartLinger(seconds: TimeInterval = Constants.linger) {
-        lingerTask?.cancel()
-        // A held bracket owns the timer: any command renews the long safety window rather than
-        // the short per-command linger, so the chrome does not fade between two commands while
-        // the agent is still working. `endHold` is what clears the hold and hands the timer back.
-        let delay = holdActive ? Constants.holdSafety : seconds
-        lingerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled else { return }
-            self?.fadeOutAndHide()
+    // MARK: - Windows
+
+    private func makePanelWindow() {
+        let root = PanelView(model: model)
+            .environment(\.panelDraggable, true)
+            .padding(Constants.panelMargin)
+        let hosting = NSHostingView(rootView: AnyView(root))
+        // The controller sizes the window itself, so a change of height can keep whichever edge
+        // is nearer the screen's edge where it is.
+        hosting.sizingOptions = []
+        let window = PresencePanel(contentView: hosting)
+        panelHost = hosting
+        panelWindow = window
+        moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: window, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.placingPanel, let frame = self.panelWindow?.frame else { return }
+                PanelPlacement.remember(frame: frame)
+            }
+        }
+        observePanelSize()
+    }
+
+    /// The panel's height follows the step list; re-fit whenever what decides it changes.
+    private func observePanelSize() {
+        withObservationTracking {
+            _ = model.panelExpanded
+            _ = model.steps
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.fitPanel(anchorBottom: nil)
+                    self?.observePanelSize()
+                }
+            }
         }
     }
 
-    private func makeWindow() -> NSWindow? {
+    /// Sizes the window to the panel. `anchorBottom: nil` keeps the edge nearer its screen edge
+    /// fixed, so the step list opens upward from a panel at the bottom and downward from one
+    /// at the top.
+    private func fitPanel(anchorBottom: Bool?) {
+        guard let panelWindow, let panelHost else { return }
+        panelHost.layoutSubtreeIfNeeded()
+        let size = panelHost.fittingSize
+        guard size.width > 0, size.height > 0, size != panelWindow.frame.size else { return }
+        var frame = panelWindow.frame
+        let keepBottom = anchorBottom ?? {
+            guard let screen = panelWindow.screen else { return true }
+            return frame.midY < screen.frame.midY
+        }()
+        if !keepBottom { frame.origin.y = frame.maxY - size.height }
+        frame.size = size
+        placingPanel = true
+        panelWindow.setFrame(frame, display: true)
+        placingPanel = false
+    }
+
+    /// Puts the panel where the human last left it on the display they are looking at.
+    private func placePanel() {
+        guard let panelWindow, let screen = PanelPlacement.screenUnderPointer() else { return }
+        let origin = PanelPlacement.origin(size: panelWindow.frame.size, on: screen)
+        placingPanel = true
+        panelWindow.setFrameOrigin(origin)
+        placingPanel = false
+    }
+
+    private func makeEffectsWindow() -> NSWindow? {
         guard let screen = NSScreen.screens.first else { return nil }
         let window = NSWindow(
             contentRect: screen.frame,
@@ -426,67 +440,9 @@ final class PresenceOverlayController {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: OverlayRootView(model: model))
+        window.contentView = NSHostingView(rootView: OverlayEffectsView(model: model))
         return window
-    }
-
-    /// The bezel's own window: opaque chrome the human can drag anywhere, with the frame
-    /// remembered across sessions and launches. Separate from the effects window because
-    /// that one must stay mouse-transparent over the whole screen, while the bezel wants
-    /// exactly the opposite — a small surface that catches the drag.
-    private func makeBezelWindow() -> NSWindow? {
-        guard let screen = NSScreen.screens.first else { return nil }
-        let hosting = NSHostingView(rootView: BezelView(model: model))
-        let size = hosting.fittingSize
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-        )
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
-        window.ignoresMouseEvents = false
-        window.isMovableByWindowBackground = true
-        window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        // The saved position wins; the default sits bottom-center, high enough to clear
-        // the Dock. Only the origin is the human's — the size is ours, so a frame saved
-        // by an older layout must not shrink the current one.
-        if window.setFrameUsingName(Self.bezelFrameName) {
-            window.setContentSize(size)
-        } else {
-            window.setFrameOrigin(NSPoint(
-                x: screen.frame.midX - size.width / 2,
-                y: screen.frame.minY + 160,
-            ))
-        }
-        window.setFrameAutosaveName(Self.bezelFrameName)
-        bezelMoveObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification, object: window, queue: .main,
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.publishBezelFrame() }
-        }
-        return window
-    }
-
-    private static let bezelFrameName = "PresenceBezel"
-
-    /// Mirrors the bezel's frame into the model in the effects window's top-left
-    /// coordinates, so the jellyfish's perch follows the bezel wherever it is dragged.
-    private func publishBezelFrame() {
-        guard let bezelWindow, let screen = NSScreen.screens.first else { return }
-        let frame = bezelWindow.frame
-        model.bezelFrame = CGRect(
-            x: frame.minX,
-            y: screen.frame.height - frame.maxY,
-            width: frame.width,
-            height: frame.height,
-        )
     }
 }

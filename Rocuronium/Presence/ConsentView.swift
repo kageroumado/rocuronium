@@ -11,7 +11,7 @@ struct ConsentView: View {
             HStack(spacing: 8) {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(EffectsRenderer.amber)
                 Text("Approve this action?")
                     .font(.system(size: 13, weight: .semibold))
             }
@@ -44,11 +44,8 @@ struct ConsentView: View {
         }
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
         .frame(width: 360)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1),
-        )
+        // The panel's own surface, amber-edged: this card is the panel asking a question.
+        .modifier(PanelChrome(accent: EffectsRenderer.amber))
         .accessibilityHidden(true)
     }
 

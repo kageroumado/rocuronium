@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
+import Synchronization
 
 /// Captures a region of the screen so an action can be judged by its consequences.
 ///
@@ -62,7 +63,12 @@ nonisolated enum ScreenCapture {
         configuration.captureResolution = .best
         configuration.showsCursor = false  // a blinking cursor is not a change worth counting
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // Rocuronium's own chrome (the presence panel, the effects layer) is not evidence: a
+        // region capture that included it would read the agent's narration as the app changing.
+        let filter = SCContentFilter(
+            display: display,
+            excludingWindows: excluded(from: content.windows, id: \.windowID),
+        )
         return try await SCScreenshotManager.captureImage(
             contentFilter: filter, configuration: configuration,
         )
@@ -117,6 +123,23 @@ nonisolated enum ScreenCapture {
             contentFilter: filter, configuration: configuration,
         )
         return WindowCapture(image: image, windowTitle: window.title ?? "", windowFrame: window.frame)
+    }
+
+    /// Window numbers kept out of every display capture: the overlay registers its own windows.
+    /// They stay visible to the human's own screen recordings.
+    private static let excludedWindows = Mutex<Set<CGWindowID>>([])
+
+    static func excludeFromCaptures(windowNumber: Int) {
+        guard windowNumber > 0 else { return }
+        excludedWindows.withLock { _ = $0.insert(CGWindowID(windowNumber)) }
+    }
+
+    /// The members of `windows` registered for exclusion. Generic over the window type so the
+    /// selection is testable without a live `SCShareableContent`.
+    static func excluded<Window>(from windows: [Window], id: (Window) -> CGWindowID) -> [Window] {
+        let ids = excludedWindows.withLock { $0 }
+        guard !ids.isEmpty else { return [] }
+        return windows.filter { ids.contains(id($0)) }
     }
 
     /// Points-to-pixels for a display. `SCDisplay` reports its frame in points, while the
