@@ -353,6 +353,11 @@ final class CommandRouter {
 
     /// How many steps the current `busy on` declared — the bound `busy step <n>` is checked against.
     @ObservationIgnored private var busyStepCount = 0
+    /// Whether a `busy on` session is held — inside one, the agent already speaks the protocol.
+    @ObservationIgnored private var busyHeld = false
+    /// When the last action of a chain with no `busy on` ran, or nil once it ended with `--done`.
+    /// The first action of such a chain carries a `hint` reply key teaching the end signal.
+    @ObservationIgnored private var undeclaredChainAt: Date?
 
     /// Checks the fields the presence panel shows: lengths, the step list, the wait's duration,
     /// and a `busy step` target against the steps declared. Pure, for the tests.
@@ -433,6 +438,9 @@ final class CommandRouter {
             }
             if Self.narratedVerbs.contains(request.command) {
                 overlay.commandFinished(reply)
+            }
+            if Self.actingVerbs.contains(request.command), let hint = endSignalHint(for: request) {
+                reply["hint"] = hint
             }
             return encode(reply)
         } catch {
@@ -637,6 +645,26 @@ final class CommandRouter {
     /// the steps); `busy step` moves the step pointer; `busy wait` releases the screen while the
     /// agent waits on something that is not the UI; `busy off` ends the session with an optional
     /// result line. Visual only — it never gates or changes what the engine does.
+    /// The end-signal reminder for an agent that never called `busy on`: only it can end a
+    /// session on the presence panel, which reads Thinking between its calls until it does.
+    /// Sent on the first action of each such chain; a chain ends with `--done` or after the
+    /// panel's own silence limit.
+    private func endSignalHint(for request: Request) -> String? {
+        guard !busyHeld else { return nil }
+        if request.done == true {
+            undeclaredChainAt = nil
+            return nil
+        }
+        let now = Date()
+        defer { undeclaredChainAt = now }
+        if let last = undeclaredChainAt, now.timeIntervalSince(last) < OverlayModel.Constants.undeclaredSafety {
+            return nil
+        }
+        return "The presence panel shows \"Thinking\" between your calls until you end the session: "
+            + "pass --done on the last action of this chain (or call `busy off`). Declare the goal "
+            + "first with `busy on --goal \"…\"` so the human sees why."
+    }
+
     private func busy(_ request: Request) -> [String: Any] {
         let action = request.action ?? "on"
         let shown = overlay.model.showForAllActions
@@ -645,6 +673,8 @@ final class CommandRouter {
             let goal = request.goal ?? request.note ?? ""
             let steps = request.stepLabels ?? []
             busyStepCount = steps.count
+            busyHeld = true
+            undeclaredChainAt = nil
             overlay.beginHold(goal: goal, steps: steps)
             var summary = goal.isEmpty ? "holding the panel up until `busy off`" : "holding the panel up until `busy off` — goal shown: '\(goal)'"
             if !steps.isEmpty { summary += " · \(steps.count) step\(steps.count == 1 ? "" : "s"), on step 1" }
@@ -674,6 +704,8 @@ final class CommandRouter {
             ]
         case "off":
             busyStepCount = 0
+            busyHeld = false
+            undeclaredChainAt = nil
             overlay.endHold(result: request.result.flatMap { $0.isEmpty ? nil : $0 })
             return ["ok": true, "busy": false, "summary": "released the panel hold"]
         default:

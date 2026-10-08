@@ -12,6 +12,14 @@ import Foundation
 @MainActor
 enum MCPServer {
     private static let protocolVersion = "2024-11-05"
+    /// Sent once at `initialize`; MCP clients put it in the agent's context.
+    private static let instructions = """
+        Rocuronium drives this Mac's UI and shows a presence panel to the human at the machine. \
+        Only you can end a session on that panel; between your calls it reads "Thinking". \
+        Declare the goal first with `busy` (action on, goal "<what you're doing>"), batch a known \
+        sequence as one `plan`, and pass done: true on the last action of a chain (or call `busy` \
+        with action off) so the panel says Done and goes away.
+        """
 
     /// Tool definitions mirror the socket commands one-to-one. The descriptions carry the
     /// safety semantics — an agent picks tools by reading these, so the cursor and evidence
@@ -752,6 +760,7 @@ enum MCPServer {
                     "protocolVersion": protocolVersion,
                     "capabilities": ["tools": [String: Any]()],
                     "serverInfo": ["name": "rocuronium", "version": "1.0"],
+                    "instructions": instructions,
                 ])
             case "ping":
                 reply(id, result: [String: Any]())

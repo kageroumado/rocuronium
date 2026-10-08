@@ -50,8 +50,12 @@ final class OverlayModel {
     nonisolated enum Constants {
         /// A session this quiet warns that the agent may have stopped.
         static let quietWarningAfter: TimeInterval = 60
-        /// A session this quiet ends by itself, so a crashed agent never strands the panel.
+        /// A declared session (`busy on`) this quiet ends by itself, so a crashed agent never
+        /// strands the panel.
         static let holdSafety: TimeInterval = 90
+        /// An undeclared session this quiet ends by itself. Its agent never opted into the
+        /// protocol and may never send `--done` or `busy off`, so the wait is short.
+        static let undeclaredSafety: TimeInterval = 20
         /// How long a session that went quiet says so before it fades.
         static let endedShown: TimeInterval = 2
         /// How long the Done state stays before the fade.
@@ -186,12 +190,18 @@ final class OverlayModel {
         persistsPreference = false
     }
 
+    /// How long the session may stay silent before it ends: long for a declared session or a
+    /// running plan, short for an agent that never declared one.
+    var silenceLimit: TimeInterval {
+        holdActive || planRunning ? Constants.holdSafety : Constants.undeclaredSafety
+    }
+
     // MARK: - Transitions
 
     /// Opens a session if none is up, the last one is finishing, or it already went quiet;
     /// a declared goal and steps carry over only while a hold is active.
     private func ensureSession(at now: Date) {
-        let wentQuiet = now.timeIntervalSince(lastActivity) >= Constants.holdSafety && stopped?.indefinite != true
+        let wentQuiet = now.timeIntervalSince(lastActivity) >= silenceLimit && stopped?.indefinite != true
         if sessionStart == nil || done != nil || wentQuiet {
             sessionStart = now
             done = nil
@@ -437,8 +447,8 @@ final class OverlayModel {
             return now < end ? .releasedScreen : .down
         }
         let idle = now.timeIntervalSince(lastActivity)
-        let silenceEnd = lastActivity.addingTimeInterval(Constants.holdSafety)
-        if idle >= Constants.holdSafety { return until(silenceEnd.addingTimeInterval(Constants.endedShown), .ended) }
+        let silenceEnd = lastActivity.addingTimeInterval(silenceLimit)
+        if idle >= silenceLimit { return until(silenceEnd.addingTimeInterval(Constants.endedShown), .ended) }
         let quiet = idle >= Constants.quietWarningAfter ? idle : nil
         if stopped != nil { return up(.stopped, quiet: quiet) }
         return up(planRunning ? .background : .thinking, quiet: quiet)

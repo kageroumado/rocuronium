@@ -21,7 +21,7 @@ The pill's modes: **Background** (blue; ghost work, keep using the Mac), **Hands
 | `--done` on the last acting command (or `wait`) | that action's outcome, then Done, then the panel fades |
 | `busy off [--result "<text>"]` | Done with the result line (or the last outcome) for 2 s, then the panel fades |
 | the end of a `plan` | Done when every step ran; Ended with the reason when it stopped |
-| ~60 s of silence / ~90 s | "No word from the agent for 1:00" / "Ended — the agent went quiet", then gone |
+| ~60 s / ~90 s of silence after `busy on`; ~20 s without one | "No word from the agent for 1:00" / "Ended — the agent went quiet", then gone |
 
 And it is shaped with:
 

@@ -185,11 +185,25 @@ struct PanelLifecycleTests {
         #expect(lines.mode == .thinking)
         #expect(lines.pill == "Thinking 0:03")
         #expect(lines.line2 == "Clicked “Sign In” · ✓ “Welcome” appeared")
-        #expect(model.presentation(at: at(30)).isUp)
+        #expect(model.presentation(at: at(15)).isUp)
+    }
+
+    /// An agent that never declared a session may never send `--done`; its silence ends the
+    /// session after 20 s rather than 90.
+    @Test func undeclaredSilenceEndsSooner() {
+        let model = OverlayModel(showForAllActions: true)
+        model.begin(click, at: at(0))
+        model.finish(reply: ["verdict": "confirmed"], at: at(1))
+        #expect(PanelLines(model: model, at: at(20)).mode == .thinking)
+        let ended = PanelLines(model: model, at: at(21.5))
+        #expect(ended.mode == .ended)
+        #expect(ended.line2 == "Ended — the agent went quiet")
+        #expect(!model.presentation(at: at(24)).isUp)
     }
 
     @Test func silenceWarnsThenEnds() {
         let model = OverlayModel(showForAllActions: true)
+        model.beginHold(goal: "Testing the login flow", steps: [], at: at(0))
         model.begin(click, at: at(0))
         model.finish(reply: ["verdict": "confirmed"], at: at(1))
         #expect(model.presentation(at: at(30)).quietFor == nil)
