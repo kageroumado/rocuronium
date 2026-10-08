@@ -87,10 +87,14 @@ struct MockDesktopState {
     var humanTyping = false
     var terminalLines: [String] = ["kiri@studio rocuronium % "]
     var buildProgress: Double?
+    /// Between the Sign In press and the dashboard: the page shows a spinner.
+    var signingIn = false
     /// The stroke drawn so far, in desktop points.
     var stroke: [CGPoint] = []
-    /// 0 on the built-in display, 1 parked on the virtual display.
-    var notesParked = 0.0
+    /// Per window: 0 on the built-in display, 1 parked on the virtual display.
+    var parked: [MockWindowID: Double] = [:]
+    /// Per window: 0…1 while it opens (fading and settling in), absent once open.
+    var opening: [MockWindowID: Double] = [:]
     var pointer = MockLayout.restingPointer
     var pointerActor = PointerActor.human
     /// The human's hand is on the mouse right now; the pointer wears a "you" tag.
@@ -110,7 +114,10 @@ struct MockDesktopView: View {
         ZStack(alignment: .topLeading) {
             Wallpaper()
             ForEach(state.windows, id: \.self) { id in
+                let opening = state.opening[id] ?? 1
                 MockWindow(id: id, focused: id == state.windows.last, state: state)
+                    .scaleEffect(0.94 + 0.06 * opening)
+                    .opacity(opening)
                     .offset(x: windowOrigin(id).x, y: windowOrigin(id).y)
             }
             MockDock()
@@ -126,7 +133,7 @@ struct MockDesktopView: View {
     /// A parked window slides off the right edge onto the virtual display.
     private func windowOrigin(_ id: MockWindowID) -> CGPoint {
         var origin = id.frame.origin
-        if id == .notes { origin.x += (MockLayout.desktop.width - origin.x + 40) * state.notesParked }
+        origin.x += (MockLayout.desktop.width - origin.x + 40) * (state.parked[id] ?? 0)
         return origin
     }
 }
@@ -279,7 +286,17 @@ private struct SafariPage: View {
             .offset(x: (window.width - 300) / 2, y: (MockLayout.safariToolbar - MockLayout.windowTitleBar - 26) / 2 - 2)
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
                 .offset(y: MockLayout.safariToolbar - MockLayout.windowTitleBar)
-            if state.signedIn { welcome } else { form }
+            if state.signedIn {
+                welcome
+            } else if state.signingIn {
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.regular)
+                    Text("Signing in…").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                .at(CGRect(x: 250, y: 260, width: 320, height: 80), in: window)
+            } else {
+                form
+            }
         }
     }
 
@@ -315,6 +332,7 @@ private struct SafariPage: View {
 
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("Dashboard").font(.system(size: 12, weight: .semibold)).foregroundStyle(.blue)
             Text("Welcome back, Kiri").font(.system(size: 24, weight: .bold))
             Text("Your dashboard is ready.").foregroundStyle(.secondary)
             HStack(spacing: 12) {
@@ -449,7 +467,7 @@ private struct DisplayStrip: View {
                 ForEach(state.windows, id: \.self) { id in
                     if let rect = miniRect(id, virtual: virtual) {
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(id == .notes ? Color.yellow.opacity(0.9) : Color.primary.opacity(0.35))
+                            .fill((state.parked[id] ?? 0) > 0 ? Color.yellow.opacity(0.9) : Color.primary.opacity(0.35))
                             .frame(width: rect.width, height: rect.height)
                             .offset(x: rect.minX, y: rect.minY)
                     }
@@ -463,7 +481,7 @@ private struct DisplayStrip: View {
 
     /// The window's rect in one display's mini-map, or nil when none of it is on that display.
     private func miniRect(_ id: MockWindowID, virtual: Bool) -> CGRect? {
-        let parked = id == .notes ? state.notesParked : 0
+        let parked = state.parked[id] ?? 0
         var frame = id.frame
         // On the strip the window travels across both displays laid side by side.
         let travel = MockLayout.desktop.width - frame.minX + 60

@@ -47,7 +47,8 @@ Act — ghost first; every reply carries verdict, tentacle, attempts
   statusitem --app <a> [--label <t>] [--press]
   launch     --app <name|bundle id|path> [--confirm]   (--confirm to interrupt a fullscreen app)
   activate   --app <a> [--confirm]                      (--confirm to interrupt a fullscreen app)
-  plan       --file <steps.json>           (or JSON on stdin)
+  plan       --file <steps.json>           (or JSON on stdin) — a known sequence as one call;
+                                           the panel shows its steps and ends Done
 
 Cursor paths — take the real cursor; refused while a human is present or an app is fullscreen unless --confirm
   move       (--to <x,y> | --app <a> --label <t> [--role <r>]) [--from <x,y>]
@@ -71,8 +72,9 @@ Meta
   busy       on --goal <t> [--steps "a|b|c"]   declare what you are doing; the panel headline
                                              (--note is an alias for --goal; ≤120 chars, ≤20 steps)
              step [next|<n>]                 move the step pointer (n is 1-based)
-             wait --for <t> [--seconds <n>]  say what you are waiting on (0–3600 s expected)
-             off [--result <t>]              close the bracket; "panel gone" means "nothing coming"
+             wait --for <t> [--seconds <n>]  release the screen while you wait on something
+                                             that isn't UI (a build, an API call; 0–3600 s)
+             off [--result <t>]              end the session: Done, then the panel fades
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
@@ -104,7 +106,11 @@ Options
                             with the UI Detector model installed, control boxes (icon buttons
                             included) come back groundedBy detector (needs Screen Recording)
   --why <purpose>           on any acting verb: why this one action, shown to the human
-                            (≤120 chars) — e.g. --why "open the login page"
+                            (≤120 chars) — e.g. --why "open the login page"; the panel's
+                            headline when no goal was declared
+  --done                    on any acting verb or wait: the last action of the chain — the
+                            panel shows Done once its result lands. Without it (or busy off,
+                            or the end of a plan) the panel reads Thinking between actions
   --json                    print the raw reply
 
 Nine things to know:
@@ -243,7 +249,7 @@ if command == "key" || command == "shortcut", payload["keys"] == nil {
     } else {
         // A bare word is positional unless it is the value of the flag before it; the flags
         // these two verbs take without a value are the only flags it may follow.
-        let switches: Set<String> = ["--allow-hardware-input", "--confirm", "--resolve-only", "--observe", "--json"]
+        let switches: Set<String> = ["--allow-hardware-input", "--confirm", "--resolve-only", "--observe", "--json", "--done"]
         for (index, word) in arguments.enumerated() where !word.hasPrefix("--") {
             let previous = index > 0 ? arguments[index - 1] : nil
             if previous.map({ !$0.hasPrefix("--") || switches.contains($0) }) ?? true {
@@ -305,6 +311,7 @@ if arguments.contains("--press") { payload["press"] = true }
 // first-class operation, and pressing a destructive item takes a deliberate second flag.
 if arguments.contains("--resolve-only") { payload["resolveOnly"] = true }
 if arguments.contains("--confirm") { payload["confirm"] = true }
+if arguments.contains("--done") { payload["done"] = true }
 if arguments.contains("--restore") { payload["restore"] = true }
 if arguments.contains("--observe") { payload["observe"] = true }
 if arguments.contains("--ocr") { payload["ocr"] = true }

@@ -24,8 +24,9 @@ Rocuronium/                     the .app (menu-bar daemon, holds TCC)
   Vision/         GroundingBackend (protocol), MLXBackend, DetectorBackend,
                   FoundationModelsBackend, TextSighting
   Presence/       PresenceOverlayController, OverlayModel (state + lifecycle as a pure function
-                  of time), PanelText/PanelLines (the words), PanelView, PresencePanel (window),
-                  EffectsLayer, HotkeyMonitor, ActivityLog, ConsentView, MenuBarGlyph, + jelly art
+                  of time), PanelText/PanelLines (the words), PanelView (consent included),
+                  PresencePanel (window), EffectsLayer, HotkeyMonitor, ConsentHotkeys, ActivityLog,
+                  MenuBarGlyph, + jelly art
 RocuroniumCLI/    thin client: main.swift (CLI + `mcp` stdio server), MCPServer.swift
 RocuroniumTests/  unit tests
 ```

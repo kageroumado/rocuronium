@@ -1,7 +1,7 @@
 import CoreGraphics
 
-/// One acting command as the presence panel narrates it: the verb, what it aims at, and
-/// whether it takes the human's mouse or keyboard.
+/// One command as the presence panel narrates it: the verb, what it aims at, whether it takes
+/// the human's mouse or keyboard, and whether it is the last action of the chain.
 ///
 /// Built by the router from the request before the command runs; `PanelText` turns it into
 /// the panel's second line. Plain values only, so the showcase can script the same actions the
@@ -22,7 +22,7 @@ nonisolated struct PanelAction: Equatable, Sendable {
     var keys: String?
     /// For `menu`: the item path, `>`-separated (`View > Increase Font Size`).
     var menuPath: String?
-    /// The caller's `--why`: line 2 when no steps are declared.
+    /// The caller's `--why`: the headline when no goal was declared.
     var why: String?
     /// The command takes the real cursor or keyboard: the panel enters hands-off mode.
     var cursorTaking: Bool
@@ -36,4 +36,11 @@ nonisolated struct PanelAction: Equatable, Sendable {
     var strokePoints: Int?
     /// For `resize`: the requested size in points.
     var size: CGSize?
+    /// The caller's `--done`: the last action of the chain. The panel goes to Done once its
+    /// result lands.
+    var endsSession = false
+    /// For `wait`: how long it waits at most, in seconds.
+    var timeout: TimeInterval?
+    /// For `wait --gone`: waiting for the element to go away rather than appear.
+    var gone = false
 }

@@ -43,14 +43,16 @@ struct RocuroniumApp: App {
 }
 
 #if DEBUG
-/// Starts a Debug build as the showcase: renders the scenes and exits when launched with
-/// `--render-showcase <dir>`, otherwise opens the showcase window. Under unit tests it does
-/// neither, so the test host starts quietly.
+/// Starts a Debug build as the showcase: renders and exits when launched with
+/// `--render-showcase <dir> [--scene <slug>] [--fps <n>]`, otherwise opens the showcase window
+/// as `ShowcaseLaunchOptions` describes. Under unit tests it does neither, so the test host
+/// starts quietly.
 final class ShowcaseOnlyAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
-        if let directory = ShowcaseRenderer.requestedDirectory() {
+        if let request = ShowcaseRenderer.Request.parse() {
             do {
-                let files = try ShowcaseRenderer.render(to: directory)
+                let files = try ShowcaseRenderer.render(request)
+                let directory = request.directory
                 print("rendered \(files.count) frames to \(directory.path)")
                 exit(0)
             } catch {
@@ -59,7 +61,7 @@ final class ShowcaseOnlyAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        ShowcaseWindowController.shared.show()
+        ShowcaseWindowController.shared.show(options: .parse())
     }
 }
 #endif

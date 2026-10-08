@@ -151,6 +151,9 @@ final class CommandRouter {
         var result: String?
         /// On any acting verb: the purpose of this one action, shown to the human.
         var why: String?
+        /// On any acting verb or `wait`: this is the last action of the chain. The panel goes
+        /// to Done once its result lands — the per-action form of `busy off`.
+        var done: Bool?
         /// Why a virtual display lease is being taken; recorded on the lease.
         var reason: String?
         /// Lease duration. The bridge's 30-minute backstop applies when absent.
@@ -366,6 +369,9 @@ final class CommandRouter {
                 return "'\(name)' is \(value.count) characters — keep it to \(limit), one glanceable line"
             }
         }
+        if request.done == true, !actingVerbs.contains(request.command), request.command != "wait" {
+            return "'done' marks the last action of a chain and goes on an acting verb or `wait` — use `busy off` to end without one"
+        }
         if request.command == "plan", request.stepLabels != nil {
             return "'plan' steps must be command objects — step labels belong to `busy on --steps`"
         }
@@ -424,6 +430,8 @@ final class CommandRouter {
                     summary: (reply["summary"] as? String ?? reply["error"] as? String ?? "")
                         + (consentOutcome == "asserted-by-caller" ? " · consent asserted by the caller; no prompt shown" : ""),
                 )
+            }
+            if Self.narratedVerbs.contains(request.command) {
                 overlay.commandFinished(reply)
             }
             return encode(reply)
@@ -468,6 +476,10 @@ final class CommandRouter {
         "move", "drag", "launch", "activate", "park", "resize", "window", "statusitem",
     ]
 
+    /// The verbs the presence panel narrates: every acting verb, and `wait`, which watches the
+    /// UI the human is looking at.
+    private static let narratedVerbs = actingVerbs.union(["wait"])
+
     /// One phrase for the bezel and the log: what the command aimed at.
     private static func target(of request: Request) -> String {
         var parts: [String] = []
@@ -502,11 +514,14 @@ final class CommandRouter {
         }
         // The overlay policy: cursor-taking work is always shown — hardware-input opt-ins
         // and the path verbs, which take the real cursor by construction — and everything
-        // else only when the "show for all actions" toggle is on. Ghost tentacles are invisible
-        // by design; the toggle is for watching, not for safety.
-        let cursorTaking = request.allowHardwareInput == true || request.foreground == true
-            || request.command == "move" || request.command == "drag"
-        if Self.actingVerbs.contains(request.command), cursorTaking || overlay.model.showForAllActions {
+        // else when the "show for all actions" toggle is on or a session is already up, so a
+        // visible session narrates every step of its chain. Ghost tentacles are otherwise
+        // invisible by design; the toggle is for watching, not for safety.
+        let cursorTaking = Self.actingVerbs.contains(request.command)
+            && (request.allowHardwareInput == true || request.foreground == true
+                || request.command == "move" || request.command == "drag")
+        if Self.narratedVerbs.contains(request.command),
+           cursorTaking || overlay.model.showForAllActions || overlay.isSessionVisible {
             // Hands-off work turns the panel amber before the pointer moves, so the warning
             // precedes the motion; ghost work narrates in the background.
             overlay.begin(action: Self.panelAction(for: request, cursorTaking: cursorTaking))
@@ -537,6 +552,9 @@ final class CommandRouter {
                 via.split(whereSeparator: { $0 == " " || $0 == ";" }).count + (request.end == nil ? 1 : 2)
             },
             size: request.w.flatMap { w in request.h.map { CGSize(width: w, height: $0) } },
+            endsSession: request.done == true,
+            timeout: request.command == "wait" ? request.timeout ?? Constants.defaultWaitSeconds : nil,
+            gone: request.gone == true,
         )
     }
 
@@ -616,10 +634,9 @@ final class CommandRouter {
     /// fixed frame in the same top-left coordinates every other verb speaks, so a test can
     /// aim at the stage without a `windows` round-trip.
     /// The agent's work bracket on the presence panel. `busy on` declares the goal (and optionally
-    /// the steps) and holds the panel up through the thinking between commands; `busy step` moves
-    /// the step pointer; `busy wait` says the agent is waiting on something; `busy off` closes the
-    /// bracket with an optional result line. Visual only — it never gates or changes what the
-    /// engine does.
+    /// the steps); `busy step` moves the step pointer; `busy wait` releases the screen while the
+    /// agent waits on something that is not the UI; `busy off` ends the session with an optional
+    /// result line. Visual only — it never gates or changes what the engine does.
     private func busy(_ request: Request) -> [String: Any] {
         let action = request.action ?? "on"
         let shown = overlay.model.showForAllActions
@@ -653,7 +670,7 @@ final class CommandRouter {
             let expected = request.seconds.map { " (~\(Int($0.rounded())) s)" } ?? ""
             return [
                 "ok": true, "busy": true, "shown": shown,
-                "summary": "waiting on \(what)\(expected) — the next acting command ends the wait",
+                "summary": "waiting on \(what)\(expected) — the panel releases the screen until your next action or step",
             ]
         case "off":
             busyStepCount = 0
@@ -1219,7 +1236,6 @@ final class CommandRouter {
             }
             guard await consented(
                 prompt: "Click \(Self.target(of: request)) with the real cursor to raise a system prompt",
-                detail: "\(Self.target(of: request)) · click --foreground",
                 away: presence.state == .away, confirm: request.confirm == true,
             ) else {
                 return declinedReply("The foreground click")
@@ -1253,6 +1269,15 @@ final class CommandRouter {
     /// exactly like `activate`: with a human here it goes through the consent hold. Verification
     /// that the target actually came forward is left to the reach's own occlusion check, which
     /// tests the exact aim point and is strictly more precise than a frontmost-app comparison.
+    /// The consent question for raising a click target: `Bring Safari to the front and click “Sign In”`.
+    static func bringAndClickPrompt(_ request: Request) -> String {
+        let app = request.app ?? "the app"
+        let target = request.label.map { PanelText.quote($0) }
+            ?? request.x.flatMap { x in request.y.map { "at \(Int(x)), \(Int($0))" } }
+            ?? "it"
+        return "Bring \(app) to the front and click \(target)"
+    }
+
     private func raiseTargetForVisibleClick(pid: pid_t, request: Request) async -> [String: Any]? {
         let (targetBundle, frontBundle) = await MainActor.run {
             (NSRunningApplication(processIdentifier: pid)?.bundleIdentifier, EventPoster.frontmostBundleID)
@@ -1269,8 +1294,7 @@ final class CommandRouter {
         }
         let presence = UserPresence.read()
         guard await consented(
-            prompt: "Bring \(Self.target(of: request)) to the front to click it",
-            detail: "\(Self.target(of: request)) · activate",
+            prompt: Self.bringAndClickPrompt(request),
             away: presence.state == .away, confirm: request.confirm == true,
         ) else {
             return declinedReply("Bringing \(Self.target(of: request)) forward to click it")
@@ -1515,7 +1539,6 @@ final class CommandRouter {
             }
             guard await consented(
                 prompt: "Send a session-level key press to the front app",
-                detail: "\(Self.target(of: request)) · key",
                 away: presence.state == .away, confirm: request.confirm == true,
             ) else {
                 return declinedReply("The session key")
@@ -1552,7 +1575,7 @@ final class CommandRouter {
     /// `AppInstancePicker` rules; rides out on the reply as `appResolution`.
     private var appResolution: String?
 
-    private func consented(prompt: String, detail: String, away: Bool, confirm: Bool) async -> Bool {
+    private func consented(prompt: String, away: Bool, confirm: Bool) async -> Bool {
         if away { return true }
         if confirm {
             // The caller vouches for an approval the human gave elsewhere (a harness prompt).
@@ -1566,7 +1589,7 @@ final class CommandRouter {
             consentOutcome = "standing-approval"
             return true
         }
-        switch await overlay.requestConsent(prompt: prompt, detail: detail) {
+        switch await overlay.requestConsent(prompt: prompt) {
         case .approve:
             consentOutcome = "approved"
             return true
@@ -1637,7 +1660,6 @@ final class CommandRouter {
         }
         guard await consented(
             prompt: "\(dragging ? "Drag" : "Move") the real cursor across the screen",
-            detail: "\(Self.target(of: request)) · \(verb)",
             away: presence.state == .away, confirm: request.confirm == true,
         ) else {
             return declinedReply("The \(verb)")
@@ -1994,7 +2016,6 @@ final class CommandRouter {
         let presence = UserPresence.read()
         guard await consented(
             prompt: "Bring \(Self.target(of: request)) to the front",
-            detail: "\(Self.target(of: request)) · activate",
             away: presence.state == .away, confirm: request.confirm == true,
         ) else {
             return declinedReply("Activating \(Self.target(of: request))")
@@ -2208,7 +2229,7 @@ final class CommandRouter {
             },
             resolvePid: { [weak self] req in self?.resolvePid(req) },
             engine: engine,
-            overlay: profile == .visible ? overlay : nil,
+            overlay: profile == .visible || overlay.model.showForAllActions || overlay.isSessionVisible ? overlay : nil,
             activityLog: activityLog,
         )
         planExecutor = executor
@@ -2319,7 +2340,6 @@ final class CommandRouter {
         let presence = UserPresence.read()
         guard await consented(
             prompt: "\(label.capitalized) \(Self.target(of: request))",
-            detail: "\(Self.target(of: request)) · window \(label)",
             away: presence.state == .away, confirm: request.confirm == true,
         ) else {
             return declinedReply("The window \(label)")
@@ -2394,7 +2414,6 @@ final class CommandRouter {
             let presence = UserPresence.read()
             guard await consented(
                 prompt: "Switch to \(described)",
-                detail: "space switch",
                 away: presence.state == .away, confirm: request.confirm == true,
             ) else {
                 return declinedReply("The Space switch")

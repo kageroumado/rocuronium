@@ -454,14 +454,15 @@ enum MCPServer {
             """
             Tell the person at the Mac what you are doing, on the presence panel. Call action \
             'on' with a `goal` when you START a chain of work (and `steps` when you know them), \
-            'step' as you move through them, 'wait' with `for` when you are waiting on something \
-            outside the UI (a build, a download), and 'off' when you FINISH, optionally with a \
-            `result`. The panel stays up through the thinking between commands, and its \
-            vanishing means 'nothing more is coming', so the person can stop guarding their \
-            mouse. The goal is the headline: say what you are trying to do, not the mechanical \
-            step — each acting command's `why` covers that. Any acting command renews the hold \
-            and ends a wait; the hold self-releases after ~90 s of silence. Visual only — it \
-            never changes what the engine does.
+            'step' as you move through them, 'wait' with `for` to release the screen while you \
+            wait on something that isn't UI (a build, an API call — the panel hides until your \
+            next action or step), and 'off' when you FINISH, optionally with a `result`. Only \
+            you can end a session: 'off', `done: true` on the last acting call, or the end of a \
+            `plan`. Between your calls the panel reads Thinking, and its vanishing means \
+            'nothing more is coming', so the person can stop guarding their mouse. Batch a \
+            known sequence as one `plan` rather than separate calls. The goal is the headline: \
+            say what you are trying to do, not the mechanical step. After ~90 s of silence the \
+            session ends by itself. Visual only — it never changes what the engine does.
             """,
             properties: [
                 "action": ["type": "string", "enum": ["on", "off", "step", "wait"], "description": "'on' (default) declares the goal and raises the hold; 'step' moves the step pointer; 'wait' declares a wait; 'off' releases the hold"],
@@ -472,7 +473,7 @@ enum MCPServer {
                     "anyOf": [["type": "array", "items": ["type": "string"]], ["type": "string"]],
                 ],
                 "step": ["type": "string", "description": "For 'step': 'next' (default) or the 1-based number of the step now underway"],
-                "for": ["type": "string", "description": "For 'wait': what you are waiting on, ≤120 chars, e.g. 'the Xcode build'"],
+                "for": ["type": "string", "description": "For 'wait': what you are waiting on outside the UI, ≤120 chars, e.g. 'the Xcode build'"],
                 "seconds": ["type": "number", "description": "For 'wait': how long the wait is expected to take, 0–3600"],
                 "result": ["type": "string", "description": "For 'off': the outcome line shown as the panel closes, ≤120 chars"],
             ], required: [],
@@ -577,8 +578,11 @@ enum MCPServer {
             pause-for-human, or {\"fallback\": {step}}). A step's 'refs' map feeds a field from \
             an earlier step's reply — {\"refs\": {\"x\": \"$2.foundAt.cx\", \"y\": \
             \"$2.foundAt.cy\"}} clicks the center of the rectangle step 2 found (cx/cy are \
-            derived from a {x,y,w,h} block). Profile 'ghost' (default) stays \
-            invisible; 'visible' shows bezel narration per step with human pacing. The \
+            derived from a {x,y,w,h} block). Prefer one plan over separate calls whenever you \
+            know the sequence (a form fill): the presence panel shows its steps, runs them with \
+            no Thinking between, and ends Done when the last lands. Profile 'ghost' (default) \
+            runs back to back and shows on the panel when the person watches every action or \
+            a session is up; 'visible' always shows it, with human pacing. The \
             reply is one transcript with per-step verdicts. ���⌥⇧⎋ aborts mid-plan.
             """,
             properties: [
@@ -661,6 +665,9 @@ enum MCPServer {
         "move", "drag", "launch", "activate", "park", "resize", "window", "statusitem",
     ]
 
+    /// The verbs that accept `done`, added centrally like `why`: every acting verb, and `wait`.
+    static let doneTools = actingTools.union(["wait"])
+
     private static func tool(
         _ name: String, _ description: String,
         properties: [String: Any], required: [String]
@@ -684,7 +691,13 @@ enum MCPServer {
         if actingTools.contains(name), properties["why"] == nil {
             properties["why"] = [
                 "type": "string",
-                "description": "Why this one action, ≤120 chars — shown to the person at the Mac on the presence panel, e.g. 'open the login page'",
+                "description": "Why this one action, ≤120 chars — shown to the person at the Mac on the presence panel (its headline when no goal was declared), e.g. 'open the login page'",
+            ]
+        }
+        if doneTools.contains(name), properties["done"] == nil {
+            properties["done"] = [
+                "type": "boolean",
+                "description": "This is the last action of the chain: the presence panel shows Done once its result lands. Without it (or busy off, or the end of a plan) the panel reads Thinking between actions",
             ]
         }
         if windowScopedTools.contains(name), properties["window"] == nil {

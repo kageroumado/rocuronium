@@ -53,12 +53,9 @@ final class PlanExecutor {
         // it ("$2.foundAt.cx").
         var priorReplies: [Int: [String: Any]] = [:]
 
-        if plan.profile == .visible {
-            overlay?.beginHold(
-                goal: "Running a \(plan.steps.count)-step plan",
-                steps: plan.steps.map(\.intent),
-            )
-        }
+        // The plan's intents are the panel's step list, and its end is the session's end: a plan
+        // knows its whole sequence, so it never leaves the panel guessing what comes next.
+        overlay?.beginPlan(intents: plan.steps.map(\.intent))
 
         for (index, step) in plan.steps.enumerated() {
             if EmergencyStop.isHalted {
@@ -66,19 +63,18 @@ final class PlanExecutor {
                 break
             }
 
-            if plan.profile == .visible {
-                overlay?.advanceStep(to: index + 1)
-                overlay?.begin(action: PanelAction(
-                    verb: step.command, app: step.app, label: step.label, text: step.text,
-                    point: step.x.flatMap { x in step.y.map { CGPoint(x: x, y: $0) } },
-                    keys: step.keys, menuPath: step.command == "menu" ? step.path : nil,
-                    why: step.why ?? step.intent, cursorTaking: false,
-                ))
-            }
+            overlay?.advanceStep(to: index + 1)
+            overlay?.begin(action: PanelAction(
+                verb: step.command, app: step.app, label: step.label, text: step.text,
+                point: step.x.flatMap { x in step.y.map { CGPoint(x: x, y: $0) } },
+                keys: step.keys, menuPath: step.command == "menu" ? step.path : nil,
+                why: step.why,
+                cursorTaking: step.allowHardwareInput == true || step.command == "move" || step.command == "drag",
+            ))
 
             let (reply, resolvedPid) = await executeStep(step, profile: plan.profile, priorReplies: priorReplies)
             priorReplies[index + 1] = reply
-            if plan.profile == .visible { overlay?.commandFinished(reply) }
+            overlay?.commandFinished(reply)
 
             var guardResult: PlanGuard.Result?
             if let expect = step.expect {
@@ -158,9 +154,7 @@ final class PlanExecutor {
             }
         }
 
-        if plan.profile == .visible {
-            overlay?.endHold(result: abortReason.map { "Plan stopped: \($0)" })
-        }
+        overlay?.endPlan(abortReason: abortReason)
 
         activityLog.append(
             action: "plan",
@@ -229,7 +223,7 @@ final class PlanExecutor {
 
     private func pauseForHuman(reason: String) async {
         EmergencyStop.halt(reason: "Plan paused: \(reason) — resume from the Rocuronium menu bar")
-        overlay?.beginWait(what: "you to resume from the menu bar — \(reason)", seconds: nil)
+        overlay?.pausePlan()
         await withCheckedContinuation { continuation in
             pauseContinuation = continuation
         }

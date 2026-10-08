@@ -1,14 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Owns the presence surfaces and their lifecycle: the panel, the full-screen effects layer and
-/// the consent card.
+/// Owns the presence surfaces and their lifecycle: the panel (consent prompt included) and the
+/// full-screen effects layer.
 ///
 /// The model decides what is shown at any instant (`OverlayModel.presentation(at:)`); this
-/// controller turns that into windows. The panel is up while a command is in flight, a hold or a
-/// wait is declared, or consent is pending, and fades once none of those is true. The effects
-/// layer is up only while it has something to draw — a hands-off action, a charging ring, a
-/// ripple — and never while idle. ⌃⌥⇧⎋ removes everything at once.
+/// controller turns that into windows. A session runs from the first action or `busy on` to an
+/// end the agent declares — `busy off`, a `--done` action, the end of a plan — or to the
+/// silence safety. A `busy wait` releases the screen: the panel hides and the session goes on.
+/// The effects layer is up only while it has something to draw — a hands-off action, a
+/// charging ring, a ripple — and never while idle. ⌃⌥⇧⎋ removes everything at once.
 @MainActor
 final class PresenceOverlayController {
     /// The relay hooks are `@Sendable` and cannot capture this MainActor object, so they
@@ -22,7 +23,6 @@ final class PresenceOverlayController {
     private var panelWindow: PresencePanel?
     private var panelHost: NSHostingView<AnyView>?
     private var effectsWindow: NSWindow?
-    private var consentWindow: NSWindow?
     private let hotkey = HotkeyMonitor()
     private let consentKeys = ConsentHotkeys()
     private var consentContinuation: CheckedContinuation<ConsentAnswer, Never>?
@@ -37,15 +37,13 @@ final class PresenceOverlayController {
     private nonisolated enum Constants {
         static let fadeIn: TimeInterval = 0.2
         static let effectsFade: TimeInterval = 0.2
-        /// How often the lifecycle is re-evaluated while anything is up.
+        /// How often the lifecycle is re-evaluated while a session runs.
         static let tick: Duration = .milliseconds(200)
         /// The charge-up ring's wind-up — the visible interrupt window before each hardware click.
         static let charge: TimeInterval = 0.6
         /// How long a consent prompt waits for the human before it cancels itself — well
         /// inside the socket's 30 s so the caller gets a clean "declined", not a dead call.
         static let consentTimeout: TimeInterval = 25
-        /// Space kept between the consent card's bottom edge and the panel's top edge.
-        static let consentGap: CGFloat = 12
         /// Transparent room around the panel inside its window, so the entry swell and the
         /// shadow are never clipped by the window edge.
         static let panelMargin: CGFloat = 18
@@ -59,14 +57,14 @@ final class PresenceOverlayController {
 
     // MARK: - Commands (called by the router)
 
-    /// An acting command is starting. Its action phrase becomes line 2 at once; a hands-off
-    /// command turns the panel amber before the pointer moves, so the warning precedes the motion.
+    /// A command is starting. Its action phrase becomes line 2 at once; a hands-off command
+    /// turns the panel amber before the pointer moves, so the warning precedes the motion.
     func begin(action: PanelAction) {
         model.begin(action, at: Date())
         appear()
     }
 
-    /// The command's reply is in: line 3 says what it came to.
+    /// The command's reply is in: line 2 says what it came to, or the panel holds in Stopped.
     func commandFinished(_ reply: [String: Any]) {
         guard isSessionVisible else { return }
         model.finish(reply: reply, at: Date())
@@ -76,53 +74,71 @@ final class PresenceOverlayController {
     // MARK: - The agent's declarations (`busy`)
 
     /// The agent declares a bracket of work with a goal and, optionally, its steps. Shown only
-    /// when the human asked to watch every action; a cue, never a gate.
+    /// when the human asked to watch every action, or a session is already up; a cue, never a gate.
     func beginHold(goal: String, steps: [String]) {
         guard model.showForAllActions || isSessionVisible else { return }
         model.beginHold(goal: goal, steps: steps, at: Date())
         appear()
     }
 
-    /// Moves the step pointer: `nil` = next, otherwise 1-based.
+    /// Moves the step pointer: `nil` = next, otherwise 1-based. Brings a released panel back.
     func advanceStep(to step: Int?) {
         guard isSessionVisible else { return }
         model.advanceStep(to: step, at: Date())
-        evaluate()
-    }
-
-    /// The agent is waiting on something: the panel shows what, and for how long.
-    func beginWait(what: String, seconds: TimeInterval?) {
-        guard model.showForAllActions || isSessionVisible else { return }
-        model.beginWait(what: what, seconds: seconds, at: Date())
         appear()
     }
 
-    /// The agent is done: the summary shows for two seconds, then everything fades, so
-    /// "panel gone" means "nothing is coming".
+    /// The agent waits on something that is not the UI: the panel hides until it acts again.
+    func beginWait(what: String, seconds: TimeInterval?) {
+        guard isSessionVisible else { return }
+        model.beginWait(what: what, seconds: seconds, at: Date())
+        evaluate()
+    }
+
+    /// The agent is done: Done shows for two seconds, then everything fades, so "panel gone"
+    /// means "nothing is coming".
     func endHold(result: String?) {
         guard isSessionVisible else { return }
         model.endHold(result: result, at: Date())
         evaluate()
     }
 
+    // MARK: - Plans
+
+    /// A plan begins: its step intents become the panel's step list.
+    func beginPlan(intents: [String]) {
+        guard model.showForAllActions || isSessionVisible else { return }
+        model.beginPlan(intents: intents, at: Date())
+        appear()
+    }
+
+    /// The plan is over — it ends the session: Done, or Ended with the reason it stopped.
+    func endPlan(abortReason: String?) {
+        guard isSessionVisible else { return }
+        model.endPlan(abortReason: abortReason, at: Date())
+        evaluate()
+    }
+
+    /// A plan paused for the human: held in Stopped until they resume it.
+    func pausePlan() {
+        guard isSessionVisible else { return }
+        model.pausePlan(at: Date())
+        appear()
+    }
+
     // MARK: - Consent
 
     /// Ask the human at the machine to approve a disruptive action, and block on the answer.
-    /// The socket call awaits this, so it resolves quickly: a one-second hold on **Y** or **N**,
-    /// or the timeout (treated as no) well inside the socket's 30 s.
-    func requestConsent(prompt: String, detail: String) async -> ConsentAnswer {
+    /// The panel grows to hold the question and its keys. The socket call awaits this, so it
+    /// resolves quickly: a one-second hold on **Y**, **A** or **N**, or the timeout (treated as
+    /// no) well inside the socket's 30 s.
+    func requestConsent(prompt: String) async -> ConsentAnswer {
         // Resolve any prompt already standing (only one at a time) as a decline before opening
         // the new one — a stale continuation must never be abandoned unresumed.
         if consentContinuation != nil { resolveConsent(.decline) }
 
-        model.presentConsent(prompt: prompt, detail: detail, at: Date())
+        model.presentConsent(prompt: prompt, at: Date())
         appear()
-
-        if consentWindow == nil { consentWindow = makeConsentWindow() }
-        positionConsentWindow()
-        consentWindow?.alphaValue = 1
-        consentWindow?.orderFrontRegardless()
-        if let number = consentWindow?.windowNumber { ScreenCapture.excludeFromCaptures(windowNumber: number) }
 
         consentKeys.onProgress = { [weak self] answer, fraction in
             self?.model.consentHold = (answer, fraction)
@@ -148,36 +164,9 @@ final class PresenceOverlayController {
         guard let continuation = consentContinuation else { return }
         consentContinuation = nil
         consentKeys.stop()
-        consentWindow?.orderOut(nil)
         model.resolveConsent(answer, at: Date())
         evaluate()
         continuation.resume(returning: answer)
-    }
-
-    private func positionConsentWindow() {
-        guard let consentWindow else { return }
-        // Settle the card to its final size before placing it: NSHostingView resizes the window
-        // after layout keeping the top-left corner, which would push it down onto the panel.
-        consentWindow.contentView?.layoutSubtreeIfNeeded()
-        if let fitting = consentWindow.contentView?.fittingSize, fitting.height > 0 {
-            consentWindow.setContentSize(fitting)
-        }
-        let anchor = panelWindow?.frame.insetBy(dx: Constants.panelMargin, dy: Constants.panelMargin)
-        let screen = panelWindow?.screen ?? PanelPlacement.screenUnderPointer()
-        guard let anchor, let screen else { return }
-        var origin = CGPoint(x: anchor.midX - consentWindow.frame.width / 2, y: anchor.maxY + Constants.consentGap)
-        // A panel parked at the top of the screen gets the card underneath instead.
-        if origin.y + consentWindow.frame.height > screen.visibleFrame.maxY {
-            origin.y = anchor.minY - Constants.consentGap - consentWindow.frame.height
-        }
-        consentWindow.setFrameOrigin(origin)
-    }
-
-    private func makeConsentWindow() -> NSWindow? {
-        let hosting = NSHostingView(rootView: ConsentView(model: model).padding(Constants.panelMargin))
-        let window = PresencePanel(contentView: hosting)
-        window.ignoresMouseEvents = true
-        return window
     }
 
     // MARK: - Effects (called through the relay)
@@ -251,7 +240,7 @@ final class PresenceOverlayController {
         hotkey.unregister()
         panelFading = false
         effectsShown = false
-        for window in [panelWindow, effectsWindow, consentWindow] as [NSWindow?] {
+        for window in [panelWindow, effectsWindow] as [NSWindow?] {
             window?.orderOut(nil)
             window?.alphaValue = 0
         }
@@ -264,6 +253,10 @@ final class PresenceOverlayController {
     private func appear() {
         if panelWindow == nil { makePanelWindow() }
         guard let panelWindow else { return }
+        guard model.presentation(at: Date()).isUp else {
+            evaluate()
+            return
+        }
         if !panelWindow.isVisible {
             fitPanel(anchorBottom: true)
             placePanel()
@@ -296,12 +289,31 @@ final class PresenceOverlayController {
 
     /// Applies the model's presentation to the windows.
     private func evaluate() {
-        let now = Date()
-        let presentation = model.presentation(at: now)
+        let presentation = model.presentation(at: Date())
         setEffects(visible: presentation.effectsVisible)
-        if !presentation.isUp || presentation.opacity < 1 {
+        if presentation.released {
+            releaseScreen()
+        } else if !presentation.isUp || presentation.opacity < 1 {
             fadePanelOut()
         }
+    }
+
+    /// The agent is waiting on something that is not the UI: fade the panel out and keep the
+    /// session, so the next action or step brings it straight back.
+    private func releaseScreen() {
+        hotkey.unregister()
+        guard let panelWindow, panelWindow.isVisible, !panelFading else { return }
+        panelFading = true
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = OverlayModel.Constants.fadeOut
+            panelWindow.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.panelFading else { return }
+                self.panelFading = false
+                if self.model.presentation(at: Date()).released { panelWindow.orderOut(nil) }
+            }
+        })
     }
 
     private func fadePanelOut() {
@@ -318,9 +330,15 @@ final class PresenceOverlayController {
             // rather than hop.
             MainActor.assumeIsolated {
                 guard let self, self.panelFading else { return }
+                let presentation = self.model.presentation(at: Date())
                 // A new command may have arrived during the fade; only end a session still down.
-                guard !self.model.presentation(at: Date()).isUp else {
+                guard !presentation.isUp else {
                     self.panelFading = false
+                    return
+                }
+                if presentation.released {
+                    self.panelFading = false
+                    panelWindow.orderOut(nil)
                     return
                 }
                 self.finishSession()
@@ -383,11 +401,13 @@ final class PresenceOverlayController {
         observePanelSize()
     }
 
-    /// The panel's height follows the step list; re-fit whenever what decides it changes.
+    /// The panel's height follows the step list and the consent prompt; re-fit whenever what
+    /// decides it changes.
     private func observePanelSize() {
         withObservationTracking {
             _ = model.panelExpanded
             _ = model.steps
+            _ = model.consent
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

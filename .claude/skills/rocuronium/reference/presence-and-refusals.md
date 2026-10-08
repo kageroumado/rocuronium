@@ -10,19 +10,30 @@ Every reply carries `presence.state`: `present`, `idle`, `away`, or `unknown`, r
 - `resize` (and its move, `--x --y`): ghost work — no cursor, no focus — so it asks nobody; refused only when the target is the frontmost app and it is fullscreen, unless `--confirm`.
 - Everything else is ghost-safe by construction: tentacles 0–3 never move the cursor and never change the frontmost app, so they are fine while a human is typing.
 
-**The visible agent.** Cursor-taking work is visible work. Whenever a command opts into hardware input, and always for `move`/`drag`, the app shows the presence panel — and for ghost commands too when the "show overlay for every action" toggle is on. The panel is a draggable glass bar (its position is remembered per display) with three lines: the goal (`busy on --goal`, else "Working in <app>"), what is happening now ("Step 2 of 5 · Clicking “Sign In” in Safari", or your `--why`), and what the last action came to in plain words ("✓ “Email” now reads …", "✗ Nothing changed after clicking …", "⚠ You clicked in Safari during the check — the change may be yours"). Typed text is never shown. A mode chip answers the human's first question: **Background · keep working** for ghost work, **Hands off · mouse/keyboard** while a hardware action runs (amber panel, a thin amber screen border, the jellyfish escorting the pointer, and a sigil that charges ~600 ms at the aim point — a deliberate interrupt window), **Waiting**, **Needs you** (consent), **Thinking** (a hold with nothing in flight for 4 s), **Done**. The full-screen layer exists only during hands-off actions and click pings, never while idle. Without a hold the panel fades 2.5 s after the last result; inside one it warns after 60 s of silence and fades at 90 s; `busy off` shows "Done · N actions · m:ss" (or `--result`) for 2 s, then it is gone.
+**The visible agent.** Cursor-taking work is visible work. Whenever a command opts into hardware input, and always for `move`/`drag`, the app shows the presence panel — and for ghost commands too when the "show overlay for every action" toggle is on or a session is already up. The panel is a draggable glass bar (its position is remembered per display) with two lines. Line 1: the goal (`busy on --goal`, else your latest `--why`, else "Working in <app>") and one pill holding the mode and a clock. Line 2: `2/4 ·` when steps were declared, then the action as it happens ("Typing into “Email”…"), replaced in place by its outcome ("Typed into “Email” · ✓ reads kiri@example.com", "Clicked “Sign In” · ✗ nothing changed", "◐ Not counted — you clicked in Safari during the check"), and the stop chord at the right. ✓ appears only where a result was observed. Typed text is never shown.
 
-**`busy` holds the panel up across a chain and tells the human what it is for.** The per-command linger fades the panel during the gaps a chain has anyway — a think between tool calls, a wait on a result, work in another tool the daemon never sees — so "gone" cannot yet mean "safe". Bracket the work instead:
+The pill's modes: **Background** (blue; ghost work, keep using the Mac), **Hands off** (amber; a hardware action runs — amber edge, a thin amber screen border, the jellyfish escorting the pointer, a ring that charges ~600 ms at the aim point as an interrupt window), **Needs you** (orange; a consent question, asked once inside the panel), **Thinking** (violet; nothing in flight and no end declared — the clock counts the pause), **Stopped** (red; the human's input stopped a hands-off action — "You moved the mouse — the click didn't happen" — held until your next command), **Done** (green). The full-screen layer exists only during hands-off actions and click pings, never while idle.
+
+**Ending a session is yours to declare.** After any action without an end signal the panel reads Thinking — it never guesses you are finished. It ends with:
 
 | call | what the human sees |
 |---|---|
-| `busy on --goal "<goal>" [--steps "a\|b\|c"]` | the goal as the headline; with steps, "Step 1 of 3". `--note` is an alias for `--goal`. ≤120 chars, ≤20 steps of ≤80 chars; steps may also be a JSON array over MCP |
-| `busy step [next\|<n>]` | the step pointer moves (n is 1-based; refused outside the declared range) |
-| `busy wait --for "<what>" [--seconds <n>]` | a waiting state with the expected duration (0–3600 s); the next acting command ends it |
-| `busy off [--result "<text>"]` | the result line, then the panel goes |
-| `--why "<purpose>"` on any acting verb | that action's purpose under the headline, when no steps are declared (≤120 chars) |
+| `--done` on the last acting command (or `wait`) | that action's outcome, then Done, then the panel fades |
+| `busy off [--result "<text>"]` | Done with the result line (or the last outcome) for 2 s, then the panel fades |
+| the end of a `plan` | Done when every step ran; Ended with the reason when it stopped |
+| ~60 s of silence / ~90 s | "No word from the agent for 1:00" / "Ended — the agent went quiet", then gone |
 
-Each acting command renews the hold, and the panel vanishes only when you release it, so the person can stop guarding the mouse the moment it is gone. It self-releases after ~90 s of silence, so a crash never strands it. Visual only — it changes nothing the engine does.
+And it is shaped with:
+
+| call | what the human sees |
+|---|---|
+| `busy on --goal "<goal>" [--steps "a\|b\|c"]` | the goal as the headline; with steps, `1/3 ·` on line 2 and numbered dots in the list. `--note` is an alias for `--goal`. ≤120 chars, ≤20 steps of ≤80 chars; steps may also be a JSON array over MCP |
+| `busy step [next\|<n>]` | the step pointer moves (n is 1-based; refused outside the declared range) |
+| `busy wait --for "<what>" [--seconds <n>]` | nothing: the panel releases the screen while you wait on something that isn't UI (a build, an API call); your next action or step brings it back |
+| `wait --label "<what>"` | a wait on the UI, narrated: "Waiting for “Dashboard” to appear · up to 0:25" |
+| `--why "<purpose>"` on any acting verb | the headline when no goal was declared (≤120 chars) |
+
+Batch a sequence you already know as one `plan` rather than separate calls: the panel shows its steps and runs them with no Thinking between. Visual only — none of this changes what the engine does.
 
 **Human input during an action.** Every event the engine synthesizes carries a mark, and while an acting command runs a listen-only tap watches for input without it — the human's. Kinds and timing are recorded, never key content, and the tap exists only for the duration of the action.
 - **Hardware input**: from the charge-up on, any human click, key, scroll, or pointer motion beyond a few points stops the remaining payload — a click is withheld, typing stops between characters, a cursor path aborts with its button released. The reply says `humanInput.stopped: true`. Wait for the human to finish; do not re-send.

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One frame of a scene: the pretend desktop with the real effects layer, consent card and
-/// panel drawn over it from the scene's own model, at scene time `t`.
+/// One frame of a scene: the pretend desktop with the real effects layer and panel drawn over
+/// it from the scene's own model, at scene time `t`.
 ///
 /// Touches nothing live — no overlay controller, no engine, no input — so it can play in a
 /// window and render to a PNG alike.
@@ -11,7 +11,6 @@ struct ShowcaseStage: View {
         static let escortLag: TimeInterval = 0.12
         static let trailStep: TimeInterval = 0.04
         static let trailDots = 18
-        static let consentGap: CGFloat = 12
     }
 
     let scene: ShowcaseScene
@@ -36,15 +35,10 @@ struct ShowcaseStage: View {
         .clipped()
     }
 
-    /// The panel at its default spot above the Dock, with the consent card stacked above it.
+    /// The panel at its default spot above the Dock, growing upward when it opens.
     private func chrome(model: OverlayModel, now: Date) -> some View {
-        VStack(spacing: Constants.consentGap) {
-            if model.consent != nil {
-                ConsentView(model: model)
-            }
-            PanelView(model: model, fixedNow: now)
-        }
-        .frame(width: MockLayout.desktop.width, height: MockLayout.panelBottom, alignment: .bottom)
+        PanelView(model: model, fixedNow: now)
+            .frame(width: MockLayout.desktop.width, height: MockLayout.panelBottom, alignment: .bottom)
     }
 
     private func effects(model: OverlayModel, now: Date) -> some View {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the last action came to, as the panel's third line says it.
+/// What an action came to: the words after the glyph on line 2, and which glyph leads them.
 nonisolated struct PanelResult: Equatable, Sendable {
     nonisolated enum Kind: Equatable, Sendable {
         /// Something observable changed the way the action intended.
@@ -9,44 +9,59 @@ nonisolated struct PanelResult: Equatable, Sendable {
         case failed
         /// The action was sent and the app offers no way to check it.
         case unverified
-        /// A refusal or a human decision: declined, halted, approved.
+        /// A human decision: declined, approved.
         case refused
-        /// The human's own input landed during the action or its check.
-        case humanInput
+        /// The change happened, but the human's own input landed in the target app during the
+        /// check, so it is not counted as the agent's.
+        case notCounted
     }
 
     var kind: Kind
-    /// The sentence after the glyph.
-    var message: String
+    /// The words after the glyph: `reads kiri@example.com`, `nothing changed`.
+    var detail: String
 
-    /// The glyph that leads the line in plain text: ✓ ✗ ? ⚠, or none for a decision.
+    /// The glyph in plain text: ✓ ✗ ? ◐, or none for a decision.
     var glyph: String {
         switch kind {
         case .confirmed: "✓"
         case .failed: "✗"
         case .unverified: "?"
-        case .humanInput: "⚠"
+        case .notCounted: "◐"
         case .refused: ""
         }
     }
 
-    /// The whole line as plain text — what the tests read and what a log would print.
-    var text: String { glyph.isEmpty ? message : "\(glyph) \(message)" }
+    /// Glyph and detail as plain text.
+    var text: String { glyph.isEmpty ? detail : "\(glyph) \(detail)" }
 }
 
-/// The panel's words: action phrases, result phrases, step lines and clocks.
+/// Line 2 once an action's reply is in: what was done, then what came of it —
+/// `Typed into “Email” · ✓ reads kiri@example.com`.
+nonisolated struct PanelOutcome: Equatable, Sendable {
+    /// The action in the past tense, or nil when the result says everything on its own.
+    var lead: String?
+    var result: PanelResult
+
+    /// The whole line as plain text — what the tests read and what a log would print.
+    var text: String {
+        guard let lead else { return result.text }
+        return "\(lead) · \(result.text)"
+    }
+}
+
+/// The panel's words: action phrases, outcomes, step prefixes and clocks.
 ///
 /// Pure functions of the request and the reply, so the live overlay, the showcase and the tests
 /// all say the same sentence for the same command. Present participle for what is happening,
-/// the object in curly quotes, the app last. Secure text is never echoed.
+/// past tense for what happened, the object in curly quotes. Secure text is never echoed.
 nonisolated enum PanelText {
     enum Constants {
         /// An element label in quotes.
         static let labelLimit = 28
-        /// A read-back value on line 3.
+        /// A read-back value on line 2.
         static let valueLimit = 32
-        /// An error sentence carried through to line 3 when no specific phrase fits.
-        static let errorLimit = 72
+        /// An error sentence carried through to line 2 when no specific phrase fits.
+        static let errorLimit = 64
         /// The goal is a headline, never a paragraph.
         static let goalLimit = 64
     }
@@ -149,7 +164,8 @@ nonisolated enum PanelText {
         var past: String
         /// What is acted on: `“Sign In”`, `the “Sign In” button`, `at 640, 412`.
         var object: String
-        /// Where: `Safari`, or empty.
+        /// Where, when the object does not already say it: `Safari`, or empty. A quoted label
+        /// needs no app — line 1 names it.
         var app: String
         /// The preposition that joins object and app: `in`, `into`.
         var preposition = "in"
@@ -200,16 +216,15 @@ nonisolated enum PanelText {
             if let resolved, let name = resolved.label ?? action.label, !name.isEmpty {
                 let noun = resolved.role.flatMap(roleNoun)
                 let object = noun.map { "the \(quote(name)) \($0)" } ?? quote(name)
-                return Phrase(participle: "Clicking", infinitive: "click", past: "Clicked", object: object, app: app)
+                return Phrase(participle: "Clicking", infinitive: "click", past: "Clicked", object: object, app: "")
             }
             if let label {
-                return Phrase(participle: "Clicking", infinitive: "click", past: "Clicked", object: label, app: app)
+                return Phrase(participle: "Clicking", infinitive: "click", past: "Clicked", object: label, app: "")
             }
             let object = action.point.map { "at \(Int($0.x)), \(Int($0.y))" } ?? ""
             return Phrase(participle: "Clicking", infinitive: "click", past: "Clicked", object: object, app: app)
 
         case "type":
-            let into = label ?? app
             if isSecure(action) {
                 return Phrase(
                     participle: "Typing a password into", infinitive: "type a password into",
@@ -218,11 +233,11 @@ nonisolated enum PanelText {
                 )
             }
             // The typed text is never echoed: the engine cannot know a field is secure before it
-            // types, so line 2 names only the field. The read-back on line 3 shows what landed.
+            // types, so line 2 names only the field. The read-back in the outcome shows what landed.
+            let into = label ?? app
             return Phrase(
                 participle: "Typing into", infinitive: "type into", past: "Typed into",
-                object: into.isEmpty ? "the focused field" : into,
-                app: label == nil ? "" : app, hardware: .keyboard,
+                object: into.isEmpty ? "the focused field" : into, app: "", hardware: .keyboard,
             )
 
         case "key", "shortcut":
@@ -251,11 +266,9 @@ nonisolated enum PanelText {
                     participle: "Scrolling", infinitive: "scroll", past: "Scrolled",
                     object: app.isEmpty ? "to the \(edge)" : "\(app) to the \(edge)", app: "",
                 )
-            } else {
-                let subject = app.isEmpty ? "" : app
-                let way = action.direction.map { subject.isEmpty ? $0 : "\(subject) \($0)" } ?? subject
-                return Phrase(participle: "Scrolling", infinitive: "scroll", past: "Scrolled", object: way, app: "")
             }
+            let way = action.direction.map { app.isEmpty ? $0 : "\(app) \($0)" } ?? app
+            return Phrase(participle: "Scrolling", infinitive: "scroll", past: "Scrolled", object: way, app: "")
 
         case "move":
             let destination = label ?? action.destination.map(place)
@@ -269,7 +282,7 @@ nonisolated enum PanelText {
             if let points = action.strokePoints {
                 return Phrase(
                     participle: "Drawing", infinitive: "draw", past: "Drew",
-                    object: "a stroke (\(points) points)", app: app,
+                    object: "a \(points)-point stroke", app: "",
                 )
             }
             let source = label ?? action.point.map { "from \(Int($0.x)), \(Int($0.y))" } ?? ""
@@ -312,8 +325,11 @@ nonisolated enum PanelText {
             )
 
         case "wait":
-            let what = label.map { "\($0) to appear" } ?? "the app to settle"
-            return Phrase(participle: "Waiting for", infinitive: "wait for", past: "Waited for", object: what, app: app, hardware: .other)
+            let what = label.map { "\($0) to \(action.gone ? "go away" : "appear")" } ?? "the app to settle"
+            return Phrase(
+                participle: "Waiting for", infinitive: "wait for", past: "Waited for",
+                object: what, app: label == nil ? app : "", hardware: .other,
+            )
 
         case "read", "find", "map", "screenshot", "windows":
             return Phrase(
@@ -327,19 +343,18 @@ nonisolated enum PanelText {
         }
     }
 
-    /// Line 2 for an action delivered in the background: `Clicking “Sign In” in Safari`.
+    /// The action as it happens: `Clicking “Sign In”`, `Pressing ⌘= in Ghostty`.
     static func actionLine(for action: PanelAction, resolved: Resolved? = nil) -> String {
         let phrase = phrase(for: action, resolved: resolved)
         return phrase.joined(phrase.participle)
     }
 
     /// Line 2 for an action that borrows the human's hardware, naming which hand it takes:
-    /// `Using your mouse to click “Sign In” in Safari`, `Typing with your keyboard into Terminal`.
+    /// `Using your mouse to click “Sign In”`, `Typing with your keyboard into Terminal`.
     static func handsOffLine(for action: PanelAction, resolved: Resolved? = nil) -> String {
         let phrase = phrase(for: action, resolved: resolved)
         if action.verb == "type" {
-            let secure = isSecure(action)
-            let lead = secure ? "Typing a password with your keyboard into" : "Typing with your keyboard into"
+            let lead = isSecure(action) ? "Typing a password with your keyboard into" : "Typing with your keyboard into"
             return phrase.joined(lead)
         }
         return switch phrase.hardware {
@@ -349,11 +364,17 @@ nonisolated enum PanelText {
         }
     }
 
-    /// `Step 2 of 5 · Typing …`; the bare body when no steps were declared.
-    static func stepLine(index: Int?, count: Int, body: String) -> String {
-        guard let index, count > 0 else { return body }
-        let shown = min(index + 1, count)
-        return body.isEmpty ? "Step \(shown) of \(count)" : "Step \(shown) of \(count) · \(body)"
+    /// Line 2 while a `wait` runs: `Waiting for “Dashboard” to appear · up to 0:25`.
+    static func waitLine(for action: PanelAction) -> String {
+        let base = actionLine(for: action)
+        guard let timeout = action.timeout, timeout > 0 else { return base }
+        return "\(base) · up to \(clock(timeout))"
+    }
+
+    /// `2/4`: where the agent is in its declared steps; nil when none were declared.
+    static func stepPrefix(index: Int?, count: Int) -> String? {
+        guard let index, count > 0 else { return nil }
+        return "\(min(index + 1, count))/\(count)"
     }
 
     /// `0:48`, `12:03`, `1:02:03`.
@@ -365,136 +386,165 @@ nonisolated enum PanelText {
             : String(format: "%d:%02d", minutes, rest)
     }
 
-    /// Line 1 without a declared goal: `Working in Safari`.
+    /// Line 1 without a declared goal or a `--why`: `Working in Safari`.
     static func fallbackGoal(app: String?) -> String {
         guard let app, !app.isEmpty else { return "Working on your Mac" }
         return "Working in \(app)"
     }
 
-    /// The summary `busy off` shows for its last two seconds: `Done · 12 actions · 0:48`.
-    static func doneLine(actions: Int, elapsed: TimeInterval) -> String {
-        "Done · \(actions) action\(actions == 1 ? "" : "s") · \(clock(elapsed))"
-    }
-
-    /// Line 3 after a long silence inside a hold.
+    /// Line 2 after a long silence.
     static func quietLine(for seconds: TimeInterval) -> String {
-        "No activity for \(clock(seconds)) — the agent may have stopped"
+        "No word from the agent for \(clock(seconds))"
     }
 
-    // MARK: - Result phrases
+    /// Line 2 as the safety fade takes a silent session down.
+    static let endedQuietLine = "Ended — the agent went quiet"
 
-    /// Line 3 for a finished command, or nil when the reply has nothing worth saying.
-    static func result(for reply: [String: Any], action: PanelAction?) -> PanelResult? {
+    // MARK: - Outcomes
+
+    /// Line 2 for a finished command, or nil when the reply has nothing worth saying. A reply
+    /// the human interrupted is not an outcome: `stopped(for:action:)` says it.
+    static func outcome(for reply: [String: Any], action: PanelAction?) -> PanelOutcome? {
         let action = action ?? PanelAction(verb: "", cursorTaking: false)
         let phrase = phrase(for: action, resolved: Resolved(reply: reply))
-        if let human = humanInputResult(reply, action: action, phrase: phrase) { return human }
+        let lead = phrase.joined(phrase.past)
+        if let notCounted = notCountedResult(reply, action: action) {
+            return PanelOutcome(lead: nil, result: notCounted)
+        }
         if reply["halted"] as? Bool == true {
-            return PanelResult(kind: .refused, message: "Stopped by ⌃⌥⇧⎋")
+            return PanelOutcome(lead: phrase.joined("Didn’t \(phrase.infinitive)"), result: PanelResult(kind: .refused, detail: "you pressed the stop keys"))
         }
         if let error = reply["error"] as? String {
-            return errorResult(error, action: action, phrase: phrase)
+            return errorOutcome(error, action: action, phrase: phrase)
+        }
+        if action.verb == "wait", let satisfied = reply["satisfied"] as? Bool {
+            return waitOutcome(reply, action: action, satisfied: satisfied, lead: lead)
         }
         switch reply["verdict"] as? String {
-        case "confirmed": return confirmedResult(reply, action: action, phrase: phrase)
+        case "confirmed":
+            return PanelOutcome(lead: lead, result: confirmedResult(reply, action: action))
         case "noEffect":
-            return PanelResult(kind: .failed, message: "Nothing changed after \(phrase.participle.lowercasedFirst) \(phrase.object)".trimmed)
+            return PanelOutcome(lead: lead, result: PanelResult(kind: .failed, detail: "nothing changed"))
         case "unverifiable":
             let app = action.app ?? "the app"
-            return PanelResult(kind: .unverified, message: "Sent — \(app) offers no way to check it")
+            return PanelOutcome(lead: lead, result: PanelResult(kind: .unverified, detail: "\(app) offers no way to check"))
         default:
             guard reply["ok"] as? Bool == true else { return nil }
-            return PanelResult(kind: .confirmed, message: phrase.joined(phrase.past))
+            return PanelOutcome(lead: lead, result: PanelResult(kind: .confirmed, detail: "done"))
         }
     }
 
-    /// The human's own input during the action. Hands off, any of it stops the payload; in the
-    /// background only input in the target app matters, because it may be what changed.
-    private static func humanInputResult(_ reply: [String: Any], action: PanelAction, phrase: Phrase) -> PanelResult? {
-        guard let block = reply["humanInput"] as? [String: Any] else { return nil }
-        let events = block["events"] as? [[String: Any]] ?? []
-        let stopped = block["stopped"] as? Bool == true
-        let app = action.app
-        if stopped {
-            let first = events.first
-            let did = humanActivity(first?["kind"] as? String, inTarget: first?["inTarget"] as? Bool == true, app: app)
-            return PanelResult(kind: .humanInput, message: "You \(did) during \(actionNoun(action.verb)) — stopped")
+    /// The Stopped state's sentence when the human's input stopped a hands-off action:
+    /// `You moved the mouse — the click didn't happen`. Nil when nothing was stopped.
+    static func stopped(for reply: [String: Any], action: PanelAction?) -> String? {
+        guard let block = reply["humanInput"] as? [String: Any], block["stopped"] as? Bool == true else { return nil }
+        let action = action ?? PanelAction(verb: "", cursorTaking: false)
+        let first = (block["events"] as? [[String: Any]])?.first
+        let who = switch (first?["kind"] as? String)?.lowercased() {
+        case "mousedown", "click", "leftmousedown", "rightmousedown": "You clicked"
+        case "keydown", "key": "You pressed a key"
+        case "scroll", "scrollwheel": "You scrolled"
+        case "pointermotion", "mousemoved", "mousemove", "move", "motion", "mousedragged": "You moved the mouse"
+        default: "You used the mouse or keyboard"
         }
+        return "\(who) — \(consequence(of: action, reply: reply))"
+    }
+
+    /// What a stop did to the action, as far as the reply knows.
+    private static func consequence(of action: PanelAction, reply: [String: Any]) -> String {
+        switch action.verb {
+        case "click", "statusitem": return "the click didn’t happen"
+        case "type":
+            if let typed = typedCount(reply) { return "typing stopped after \(typed.done) of \(typed.total) characters" }
+            return "typing stopped"
+        case "key", "shortcut": return "the key press didn’t happen"
+        case "drag": return action.strokePoints == nil ? "the drag stopped partway" : "the stroke stopped partway"
+        case "move": return "the pointer stopped where you took it"
+        case "scroll": return "scrolling stopped"
+        case "menu": return "the menu choice didn’t happen"
+        default: return "the action stopped"
+        }
+    }
+
+    /// `typing stopped after 12 of 40 characters`, from the reply's attempt log.
+    private static func typedCount(_ reply: [String: Any]) -> (done: Int, total: Int)? {
+        let outcomes = (reply["attempts"] as? [[String: Any]] ?? []).compactMap { $0["outcome"] as? String }
+        for outcome in outcomes {
+            if let done = firstMatch(#"stopped after (\d+) of"#, in: outcome).flatMap(Int.init),
+               let total = firstMatch(#"of (\d+) characters"#, in: outcome).flatMap(Int.init) {
+                return (done, total)
+            }
+        }
+        return nil
+    }
+
+    /// The human's click, key or scroll in the target app during a background action's check:
+    /// the change may be theirs, so it is not counted.
+    private static func notCountedResult(_ reply: [String: Any], action: PanelAction) -> PanelResult? {
+        guard let block = reply["humanInput"] as? [String: Any], block["stopped"] as? Bool != true else { return nil }
+        let events = block["events"] as? [[String: Any]] ?? []
         let mixed = reply["attribution"] as? String == "mixed"
         guard let inTarget = events.first(where: { $0["inTarget"] as? Bool == true }) ?? (mixed ? events.first : nil)
         else { return nil }
-        let did = humanActivity(inTarget["kind"] as? String, inTarget: true, app: app)
-        return PanelResult(kind: .humanInput, message: "You \(did) during the check — the change may be yours")
-    }
-
-    private static func humanActivity(_ kind: String?, inTarget: Bool, app: String?) -> String {
-        let place = inTarget ? app.map { " in \($0)" } ?? "" : ""
-        switch kind?.lowercased() {
-        case "mousedown", "click", "leftmousedown", "rightmousedown": return "clicked\(place)"
-        case "keydown", "key": return "pressed a key\(place)"
-        case "scroll", "scrollwheel": return "scrolled\(place)"
-        case "pointermotion", "mousemoved", "mousemove", "move", "motion", "mousedragged": return "moved the mouse"
-        default: return "used the mouse or keyboard"
+        let place = action.app.map { " in \($0)" } ?? ""
+        let did = switch (inTarget["kind"] as? String)?.lowercased() {
+        case "keydown", "key": "typed"
+        case "scroll", "scrollwheel": "scrolled"
+        default: "clicked"
         }
+        return PanelResult(kind: .notCounted, detail: "Not counted — you \(did)\(place) during the check")
     }
 
-    private static func actionNoun(_ verb: String) -> String {
-        switch verb {
-        case "click", "statusitem": "the click"
-        case "type": "the typing"
-        case "key", "shortcut": "the key press"
-        case "drag": "the drag"
-        case "move": "the move"
-        case "scroll": "the scroll"
-        case "menu": "the menu choice"
-        default: "the action"
+    private static func waitOutcome(_ reply: [String: Any], action: PanelAction, satisfied: Bool, lead: String) -> PanelOutcome {
+        let elapsed = (reply["elapsedSeconds"] as? Double).map { String(format: "%.1f s", $0) }
+        let event = action.gone ? "went away" : "appeared"
+        if satisfied {
+            return PanelOutcome(lead: lead, result: PanelResult(kind: .confirmed, detail: elapsed.map { "\(event) after \($0)" } ?? event))
         }
+        let waited = action.timeout.map { " after \(clock($0))" } ?? ""
+        return PanelOutcome(lead: lead, result: PanelResult(kind: .failed, detail: "not yet\(waited)"))
     }
 
-    private static func errorResult(_ error: String, action: PanelAction, phrase: Phrase) -> PanelResult {
+    private static func errorOutcome(_ error: String, action: PanelAction, phrase: Phrase) -> PanelOutcome {
+        let didNot = phrase.joined("Didn’t \(phrase.infinitive)")
         if error.contains("was declined by the human") {
-            return PanelResult(kind: .refused, message: "Declined")
+            return PanelOutcome(lead: didNot, result: PanelResult(kind: .refused, detail: "you declined"))
         }
         if let occluder = firstMatch(#"'([^']+)' covers the target"#, in: error) {
-            let verb = action.verb == "drag" ? "drag" : action.verb == "move" ? "move" : "click"
-            let target = action.label.map { quote($0) } ?? "the target"
-            return PanelResult(kind: .refused, message: "Didn’t \(verb): \(occluder) was covering \(target)")
+            return PanelOutcome(lead: didNot, result: PanelResult(kind: .failed, detail: "\(occluder) was covering it"))
         }
         if error.hasPrefix("No element matched") {
             let target = action.label.map { quote($0) } ?? "the target"
             let app = action.app.map { " in \($0)" } ?? ""
-            return PanelResult(kind: .failed, message: "Couldn’t find \(target)\(app)")
+            return PanelOutcome(lead: nil, result: PanelResult(kind: .failed, detail: "Couldn’t find \(target)\(app)"))
         }
         if error.contains("halted") || error.contains("⌃⌥⇧⎋") {
-            return PanelResult(kind: .refused, message: "Stopped by ⌃⌥⇧⎋")
+            return PanelOutcome(lead: didNot, result: PanelResult(kind: .refused, detail: "you pressed the stop keys"))
         }
         let sentence = error.split(separator: ".", maxSplits: 1).first.map(String.init) ?? error
-        return PanelResult(kind: .failed, message: truncate(sentence, limit: Constants.errorLimit))
+        return PanelOutcome(lead: nil, result: PanelResult(kind: .failed, detail: truncate(sentence, limit: Constants.errorLimit)))
     }
 
-    private static func confirmedResult(_ reply: [String: Any], action: PanelAction, phrase: Phrase) -> PanelResult {
+    private static func confirmedResult(_ reply: [String: Any], action: PanelAction) -> PanelResult {
         if let menu = reply["menuItem"] as? String, !menu.isEmpty {
-            return PanelResult(kind: .confirmed, message: "\(menuDisplay(menu)) ran")
+            // A menu action already names its item; a shortcut learns which item it pressed.
+            return PanelResult(kind: .confirmed, detail: action.verb == "menu" ? "ran" : "ran \(menuDisplay(menu))")
         }
         let readback = (reply["readback"] as? String) ?? ""
         if let counts = windowCountChange(readback) {
-            return PanelResult(kind: .confirmed, message: counts.after > counts.before ? "A new window opened" : "A window closed")
+            return PanelResult(kind: .confirmed, detail: counts.after > counts.before ? "a new window opened" : "a window closed")
         }
         if action.verb == "type", !readback.isEmpty {
-            let field = action.label.map { quote($0) } ?? "The field"
-            if isSecure(action) {
-                return PanelResult(kind: .confirmed, message: "\(field) was filled (hidden)")
-            }
-            return PanelResult(kind: .confirmed, message: "\(field) now reads \(truncate(readback, limit: Constants.valueLimit))")
+            if isSecure(action) { return PanelResult(kind: .confirmed, detail: "filled (hidden)") }
+            return PanelResult(kind: .confirmed, detail: "reads \(truncate(readback, limit: Constants.valueLimit))")
         }
         if let delta = reply["treeDelta"] as? String, let change = treeChange(delta) {
-            return PanelResult(kind: .confirmed, message: change)
+            return PanelResult(kind: .confirmed, detail: change)
         }
         if reply["pixelDelta"] != nil {
-            let app = action.app ?? "The window"
-            let where_ = action.verb == "click" ? " where it clicked" : action.verb == "type" ? " where it typed" : ""
-            return PanelResult(kind: .confirmed, message: "\(app) changed\(where_)")
+            return PanelResult(kind: .confirmed, detail: "changed")
         }
-        return PanelResult(kind: .confirmed, message: phrase.joined(phrase.past))
+        return PanelResult(kind: .confirmed, detail: "done")
     }
 
     /// `the target's on-screen window count changed 1 → 2` → (1, 2).
@@ -529,8 +579,9 @@ nonisolated enum PanelText {
                 return "\(quote(name)) \(verb)\(suffix)"
             }
             let role = String(body.split(separator: " ").first ?? "")
-            let noun = roleNoun(role) ?? "An element"
-            return "\(noun.prefix(1).uppercased() + noun.dropFirst()) \(verb)\(suffix)"
+            let noun = roleNoun(role) ?? "element"
+            let article = noun.first.map { "aeiou".contains($0) } == true ? "an" : "a"
+            return "\(article) \(noun) \(verb)\(suffix)"
         }
         return nil
     }
@@ -547,9 +598,4 @@ nonisolated enum PanelText {
             return String(text[group])
         }
     }
-}
-
-private extension String {
-    nonisolated var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
-    nonisolated var trimmed: String { trimmingCharacters(in: .whitespaces) }
 }

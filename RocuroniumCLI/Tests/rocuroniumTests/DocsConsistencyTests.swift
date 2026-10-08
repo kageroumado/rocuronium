@@ -86,11 +86,14 @@ struct DocsConsistencyTests {
             #expect(tools.contains(name), "acting tool '\(name)' is not an MCP tool")
             #expect(MCPServer.schemaProperties(of: name).contains("why"), "acting tool '\(name)' has no 'why'")
         }
+        for name in MCPServer.doneTools {
+            #expect(MCPServer.schemaProperties(of: name).contains("done"), "tool '\(name)' has no 'done'")
+        }
         let busy = Set(MCPServer.schemaProperties(of: "busy"))
         for property in ["action", "goal", "note", "steps", "step", "for", "seconds", "result"] {
             #expect(busy.contains(property), "busy lacks '\(property)'")
         }
-        for flag in ["--goal", "--steps", "--for", "--seconds", "--result", "--why"] {
+        for flag in ["--goal", "--steps", "--for", "--seconds", "--result", "--why", "--done"] {
             #expect(usage.contains(flag), "usage does not mention \(flag)")
         }
     }

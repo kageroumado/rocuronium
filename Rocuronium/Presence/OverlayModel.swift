@@ -8,6 +8,10 @@ import Foundation
 /// happens (`at:`), and everything the surfaces show — mode, lines, whether anything is up at
 /// all — is a pure function of the model and a clock (`presentation(at:)`). The live overlay
 /// passes the wall clock; the showcase passes scene time and replays the same transitions.
+///
+/// A session ends only when the agent says so — `busy off`, an action sent with `--done`, the
+/// end of a plan — or after `Constants.holdSafety` of silence. Between actions the agent is
+/// thinking, and the panel says that rather than guessing it is finished.
 @MainActor
 @Observable
 final class OverlayModel {
@@ -31,28 +35,26 @@ final class OverlayModel {
         case background
         /// A hardware action is armed or running: the human's mouse or keyboard is in use.
         case handsOff
-        /// The agent declared it is waiting on something (`busy wait`).
-        case waiting
         /// A consent prompt is up.
         case needsYou
-        /// A hold is active and nothing has happened for a few seconds.
+        /// Nothing in flight and no end declared: the agent is reasoning about what comes next.
         case thinking
-        /// The hold ended; the summary shows briefly before the panel fades.
+        /// The human's input stopped a hands-off action; held until the agent's next command.
+        case stopped
+        /// The agent declared the end; the outcome shows briefly before the panel fades.
         case done
+        /// The session ended without a success: a plan aborted, or the agent went silent.
+        case ended
     }
 
     nonisolated enum Constants {
-        /// A hold with nothing in flight reads as Thinking after this long.
-        static let thinkingAfter: TimeInterval = 4
-        /// A hold this quiet warns that the agent may have stopped.
+        /// A session this quiet warns that the agent may have stopped.
         static let quietWarningAfter: TimeInterval = 60
-        /// A hold this quiet fades by itself, so a crashed agent never strands the panel.
+        /// A session this quiet ends by itself, so a crashed agent never strands the panel.
         static let holdSafety: TimeInterval = 90
-        /// Without a hold, the panel outlives the last result by this — enough to read line 3.
-        static let resultLinger: TimeInterval = 2.5
-        /// How long line 3 keeps a result before it clears.
-        static let resultShown: TimeInterval = 4
-        /// How long the `busy off` summary stays before the fade.
+        /// How long a session that went quiet says so before it fades.
+        static let endedShown: TimeInterval = 2
+        /// How long the Done state stays before the fade.
         static let doneShown: TimeInterval = 2
         /// The panel's fade-out.
         static let fadeOut: TimeInterval = 0.6
@@ -70,30 +72,36 @@ final class OverlayModel {
     var holdActive = false
     /// Line 1: what the agent is trying to do, in its own words.
     var goal = ""
+    /// The `--why` of the latest action — line 1 when no goal was declared.
+    var why: String?
     var steps: [String] = []
     /// The current step, 0-based; `steps.count` once every step is done.
     var stepIndex: Int?
+    /// When the step pointer last moved: a step that moved after the last outcome names itself
+    /// on line 2 instead of repeating that outcome.
+    var stepMovedAt: Date?
     /// The app the last command aimed at — line 1 without a goal says `Working in <app>`.
     var lastApp: String?
     var actionCount = 0
-    /// Last time anything happened: a command began or finished, a step moved, a wait began.
+    /// Last time the agent did anything: a command began or finished, a step moved, a wait began.
     var lastActivity = Date.distantPast
     /// The step list under the panel is open.
     var panelExpanded = false
+    /// A plan is running: between its steps the agent is not thinking, the plan is.
+    var planRunning = false
 
     // MARK: - The command in flight
 
     var action: PanelAction?
     var actionStart: Date?
-    /// The command that finished last — line 2 says it in the past tense until the next one.
-    var lastAction: PanelAction?
-    /// The element the last reply said it resolved to, for line 2's role noun.
+    /// The element the last reply said it resolved to, for the outcome's role noun.
     var resolved: PanelText.Resolved?
     var lastFinish: Date?
-    var result: PanelResult?
-    var resultAt: Date?
+    /// What the last action came to: line 2 until the next action begins.
+    var outcome: PanelOutcome?
 
-    /// A declared wait: what for, since when, and until when if the agent said.
+    /// A declared non-UI wait (`busy wait`): the panel releases the screen until the next
+    /// action or step.
     struct Wait: Equatable {
         var what: String
         var start: Date
@@ -101,17 +109,34 @@ final class OverlayModel {
     }
 
     var wait: Wait?
-    /// The `busy off` summary and when it began showing.
-    var done: (text: String, at: Date)?
+
+    /// The human's input stopped an action, or a plan paused for them. Held until the agent's
+    /// next command; `indefinite` also suspends the silence safety, because the agent is the
+    /// one waiting.
+    struct Stop: Equatable {
+        var text: String
+        var at: Date
+        var indefinite = false
+    }
+
+    var stopped: Stop?
+
+    /// The declared end: `text` is line 2 (nil keeps the last outcome), `success` picks Done
+    /// over Ended.
+    struct Finish: Equatable {
+        var text: String?
+        var success: Bool
+        var at: Date
+    }
+
+    var done: Finish?
 
     // MARK: - Consent
 
     /// A disruptive action is waiting on the human. `nil` when nothing is pending.
-    struct ConsentRequest {
-        /// One line naming what will happen: "Bring Discord to the front and click 'Inbox'".
+    struct ConsentRequest: Equatable {
+        /// What will happen, said once: "Bring Safari to the front and click “Sign In”".
         let prompt: String
-        /// The app the action targets, for the second line ("Discord · click").
-        let detail: String
     }
 
     var consent: ConsentRequest?
@@ -136,7 +161,7 @@ final class OverlayModel {
 
     var chargeRing: ChargeRing?
     var ripples: [Ripple] = []
-    /// When the human pressed ⌃⌥⇧⎋ or the command finished, the hands-off layer lets go.
+    /// When the hands-off action began; the border fades in from here.
     var handsOffStart: Date?
 
     /// Show the overlay for every acting verb, not only cursor-taking ones. Persisted.
@@ -163,42 +188,53 @@ final class OverlayModel {
 
     // MARK: - Transitions
 
-    /// Opens a session if none is up (or the last one is finishing), keeping the hold's state.
+    /// Opens a session if none is up, the last one is finishing, or it already went quiet;
+    /// a declared goal and steps carry over only while a hold is active.
     private func ensureSession(at now: Date) {
-        if sessionStart == nil || done != nil {
+        let wentQuiet = now.timeIntervalSince(lastActivity) >= Constants.holdSafety && stopped?.indefinite != true
+        if sessionStart == nil || done != nil || wentQuiet {
             sessionStart = now
             done = nil
+            outcome = nil
+            stopped = nil
             actionCount = 0
-            if !holdActive {
+            planRunning = false
+            if !holdActive || wentQuiet {
+                holdActive = false
                 goal = ""
+                why = nil
                 steps = []
                 stepIndex = nil
             }
         }
     }
 
-    /// A command is starting.
+    /// A command is starting. It ends a declared wait and a held stop: the agent is back.
     func begin(_ action: PanelAction, at now: Date) {
         ensureSession(at: now)
         self.action = action
         actionStart = now
         resolved = nil
-        result = nil
-        resultAt = nil
-        // Any acting command ends a declared wait: the thing waited for has evidently arrived.
         wait = nil
+        stopped = nil
+        if let why = action.why, !why.isEmpty { self.why = PanelText.truncate(why, limit: PanelText.Constants.goalLimit) }
         if let app = action.app, !app.isEmpty { lastApp = app }
         handsOffStart = action.cursorTaking ? now : nil
         lastActivity = now
     }
 
-    /// The command's reply is in.
+    /// The command's reply is in. A stop the human caused holds the panel in Stopped; otherwise
+    /// the outcome replaces the action phrase, and a `--done` action ends the session.
     func finish(reply: [String: Any], at now: Date) {
         guard sessionStart != nil else { return }
+        let finished = action
         resolved = PanelText.Resolved(reply: reply)
-        result = PanelText.result(for: reply, action: action)
-        resultAt = result == nil ? nil : now
-        lastAction = action
+        if let text = PanelText.stopped(for: reply, action: finished) {
+            stopped = Stop(text: text, at: now)
+            outcome = nil
+        } else {
+            outcome = PanelText.outcome(for: reply, action: finished)
+        }
         action = nil
         actionStart = nil
         chargeRing = nil
@@ -206,6 +242,9 @@ final class OverlayModel {
         actionCount += 1
         lastFinish = now
         lastActivity = now
+        if finished?.endsSession == true, stopped == nil {
+            declareEnd(text: nil, success: true, at: now)
+        }
     }
 
     /// The agent declares a bracket of work, optionally with the steps it will take. A new goal
@@ -216,15 +255,20 @@ final class OverlayModel {
         if !newSteps.isEmpty {
             steps = newSteps
             stepIndex = 0
+            stepMovedAt = now
         } else if holdActive, !trimmed.isEmpty, trimmed != goal, let index = stepIndex {
             stepIndex = min(index + 1, steps.count)
+            stepMovedAt = now
         }
         if !trimmed.isEmpty { goal = trimmed }
         holdActive = true
+        wait = nil
+        stopped = nil
         lastActivity = now
     }
 
-    /// Moves the step pointer: `nil` = the next step, otherwise 1-based.
+    /// Moves the step pointer: `nil` = the next step, otherwise 1-based. A released screen
+    /// comes back with the new step.
     func advanceStep(to step: Int?, at now: Date) {
         guard !steps.isEmpty else { return }
         if let step {
@@ -232,44 +276,81 @@ final class OverlayModel {
         } else {
             stepIndex = min((stepIndex ?? -1) + 1, steps.count)
         }
+        stepMovedAt = now
+        wait = nil
+        stopped = nil
         lastActivity = now
     }
 
+    /// The agent waits on something that is not the UI: the panel hides until it acts again.
     func beginWait(what: String, seconds: TimeInterval?, at now: Date) {
         ensureSession(at: now)
         wait = Wait(what: what, start: now, deadline: seconds.map { now.addingTimeInterval($0) })
+        stopped = nil
         lastActivity = now
     }
 
-    /// The hold ends: the summary shows for `doneShown`, then everything fades.
+    /// `busy off`: Done for `doneShown`, then everything fades.
     func endHold(result text: String?, at now: Date) {
-        guard holdActive || sessionStart != nil else { return }
-        holdActive = false
-        wait = nil
-        if !steps.isEmpty { stepIndex = steps.count }
-        guard let start = sessionStart else { return }
+        guard sessionStart != nil else {
+            holdActive = false
+            return
+        }
         let summary = text.flatMap { $0.isEmpty ? nil : PanelText.truncate($0, limit: PanelText.Constants.goalLimit) }
-        done = (summary ?? PanelText.doneLine(actions: actionCount, elapsed: now.timeIntervalSince(start)), now)
-        lastActivity = now
+        declareEnd(text: summary, success: true, at: now)
     }
 
-    func presentConsent(prompt: String, detail: String, at now: Date) {
+    /// A plan takes the step list: its intents, under the declared goal or a goal naming it.
+    func beginPlan(intents: [String], at now: Date) {
         ensureSession(at: now)
-        consent = ConsentRequest(prompt: prompt, detail: detail)
-        consentHold = nil
+        if goal.isEmpty { goal = "Running a \(intents.count)-step plan" }
+        steps = intents
+        stepIndex = 0
+        stepMovedAt = now
+        planRunning = true
+        wait = nil
+        stopped = nil
         lastActivity = now
     }
 
-    func resolveConsent(_ answer: ConsentAnswer, at now: Date) {
+    /// The plan is over: Done when every step ran, Ended with the reason when it stopped.
+    func endPlan(abortReason: String?, at now: Date) {
+        planRunning = false
+        guard sessionStart != nil else { return }
+        declareEnd(text: abortReason.map { PanelText.truncate("Plan stopped: \($0)", limit: PanelText.Constants.goalLimit) },
+                   success: abortReason == nil, at: now)
+    }
+
+    /// A plan step's guard failed with `pause-for-human`: held in Stopped until resumed.
+    func pausePlan(at now: Date) {
+        ensureSession(at: now)
+        stopped = Stop(text: "Paused — resume from the menu bar", at: now, indefinite: true)
+        lastActivity = now
+    }
+
+    private func declareEnd(text: String?, success: Bool, at now: Date) {
+        holdActive = false
+        planRunning = false
+        wait = nil
+        stopped = nil
+        if !steps.isEmpty, success { stepIndex = steps.count }
+        done = Finish(text: text, success: success, at: now)
+        lastActivity = now
+    }
+
+    func presentConsent(prompt: String, at now: Date) {
+        ensureSession(at: now)
+        consent = ConsentRequest(prompt: prompt)
+        consentHold = nil
+        stopped = nil
+        lastActivity = now
+    }
+
+    /// The human answered. Approval lets the action continue; a decline is said by the
+    /// action's own outcome when its reply comes back.
+    func resolveConsent(_: ConsentAnswer, at now: Date) {
         consent = nil
         consentHold = nil
-        let message = switch answer {
-        case .approve: "Approved"
-        case .approveForAWhile: "Approved for \(StandingApproval.minutes) minutes"
-        case .decline: "Declined"
-        }
-        result = PanelResult(kind: .refused, message: message)
-        resultAt = now
         lastActivity = now
     }
 
@@ -290,18 +371,20 @@ final class OverlayModel {
         sessionStart = nil
         holdActive = false
         goal = ""
+        why = nil
         steps = []
         stepIndex = nil
+        stepMovedAt = nil
         lastApp = nil
         actionCount = 0
+        planRunning = false
         action = nil
         actionStart = nil
-        lastAction = nil
         resolved = nil
         lastFinish = nil
-        result = nil
-        resultAt = nil
+        outcome = nil
         wait = nil
+        stopped = nil
         done = nil
         consent = nil
         consentHold = nil
@@ -320,10 +403,14 @@ final class OverlayModel {
         var mode: Mode
         /// The full-screen layer: hands-off border and escort, charge ring, ripples.
         var effectsVisible: Bool
-        /// Seconds of silence inside a hold, once it is long enough to warn about.
+        /// Seconds of silence, once it is long enough to warn about.
         var quietFor: TimeInterval?
+        /// Hidden while the agent waits on something that is not the UI; the session goes on
+        /// and the panel comes back with the next action or step.
+        var released = false
 
-        static let down = Presentation(isUp: false, opacity: 0, mode: .background, effectsVisible: false, quietFor: nil)
+        static let down = Presentation(isUp: false, opacity: 0, mode: .thinking, effectsVisible: false, quietFor: nil)
+        static let releasedScreen = Presentation(isUp: false, opacity: 0, mode: .thinking, effectsVisible: false, quietFor: nil, released: true)
     }
 
     func presentation(at now: Date) -> Presentation {
@@ -333,27 +420,28 @@ final class OverlayModel {
             Presentation(isUp: true, opacity: 1, mode: mode, effectsVisible: effects, quietFor: quiet)
         }
         /// Up until `end`, then fading over `fadeOut`, then down.
-        func until(_ end: Date, _ mode: Mode, quiet: TimeInterval? = nil) -> Presentation {
+        func until(_ end: Date, _ mode: Mode) -> Presentation {
             let past = now.timeIntervalSince(end)
-            if past <= 0 { return up(mode, quiet: quiet) }
+            if past <= 0 { return up(mode) }
             let opacity = 1 - past / Constants.fadeOut
             guard opacity > 0 else { return .down }
-            return Presentation(isUp: true, opacity: opacity, mode: mode, effectsVisible: effects, quietFor: quiet)
+            return Presentation(isUp: true, opacity: opacity, mode: mode, effectsVisible: effects, quietFor: nil)
         }
 
         if consent != nil { return up(.needsYou) }
         if let action { return up(action.cursorTaking ? .handsOff : .background) }
-        if let done { return until(done.at.addingTimeInterval(Constants.doneShown), .done) }
+        if let done { return until(done.at.addingTimeInterval(Constants.doneShown), done.success ? .done : .ended) }
+        if let stopped, stopped.indefinite { return up(.stopped) }
         if let wait {
-            return until((wait.deadline ?? wait.start).addingTimeInterval(Constants.holdSafety), .waiting)
+            let end = (wait.deadline ?? wait.start).addingTimeInterval(Constants.holdSafety)
+            return now < end ? .releasedScreen : .down
         }
         let idle = now.timeIntervalSince(lastActivity)
-        if holdActive {
-            let mode: Mode = idle > Constants.thinkingAfter ? .thinking : .background
-            let quiet = idle >= Constants.quietWarningAfter ? idle : nil
-            return until(lastActivity.addingTimeInterval(Constants.holdSafety), mode, quiet: quiet)
-        }
-        return until((lastFinish ?? lastActivity).addingTimeInterval(Constants.resultLinger), .background)
+        let silenceEnd = lastActivity.addingTimeInterval(Constants.holdSafety)
+        if idle >= Constants.holdSafety { return until(silenceEnd.addingTimeInterval(Constants.endedShown), .ended) }
+        let quiet = idle >= Constants.quietWarningAfter ? idle : nil
+        if stopped != nil { return up(.stopped, quiet: quiet) }
+        return up(planRunning ? .background : .thinking, quiet: quiet)
     }
 
     /// The full-screen layer is up only while it has something to show: a hands-off action,
@@ -371,16 +459,10 @@ final class OverlayModel {
         guard presentation.isUp else { return .hidden }
         return switch presentation.mode {
         case .handsOff: .acting
-        case .needsYou: .needsHuman
+        case .needsYou, .stopped: .needsHuman
         case .background: action == nil ? .idle : .thinking
-        case .waiting, .thinking: .thinking
-        case .done: .idle
+        case .thinking: .thinking
+        case .done, .ended: .idle
         }
-    }
-
-    /// Line 3's result, while it is still fresh.
-    func freshResult(at now: Date) -> PanelResult? {
-        guard let result, let resultAt, now.timeIntervalSince(resultAt) < Constants.resultShown else { return nil }
-        return result
     }
 }

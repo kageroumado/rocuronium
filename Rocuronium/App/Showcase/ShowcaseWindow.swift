@@ -2,8 +2,54 @@ import AppKit
 import Propofol
 import SwiftUI
 
-/// The Overlay Showcase window: the ten presence scenes, playable and scrubbable, rendered
-/// with the real panel and effects views on a pretend desktop.
+/// How the showcase opens, from the launch arguments — so a recording can start the window
+/// on one scene, playing, with nothing around the stage:
+///
+///     Rocuronium --showcase-scene hero --autoplay --loop --hide-chrome --window-size 1280x800
+///
+/// With none of these, the window opens on the first scene, playing and looping, with its
+/// scene list and transport.
+struct ShowcaseLaunchOptions: Equatable {
+    var sceneSlug: String?
+    var autoplay = true
+    var loop = true
+    /// Only the mock desktop: no scene list, header, transport or title bar.
+    var hideChrome = false
+    /// The window's content size in points.
+    var windowSize: CGSize?
+    /// Seconds the first frame holds before autoplay starts, so a recording opens on a still.
+    var leadIn: TimeInterval = 0
+
+    enum Constants {
+        static let recordingLeadIn: TimeInterval = 1.5
+    }
+
+    static func parse(_ arguments: [String] = CommandLine.arguments) -> ShowcaseLaunchOptions {
+        func value(_ flag: String) -> String? {
+            guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
+            return arguments[index + 1]
+        }
+        var options = ShowcaseLaunchOptions()
+        let explicit = ["--showcase-scene", "--autoplay", "--loop", "--hide-chrome", "--window-size"]
+            .contains { arguments.contains($0) }
+        guard explicit else { return options }
+        options.sceneSlug = value("--showcase-scene")
+        options.autoplay = arguments.contains("--autoplay")
+        options.loop = arguments.contains("--loop")
+        options.hideChrome = arguments.contains("--hide-chrome")
+        options.leadIn = options.autoplay ? Constants.recordingLeadIn : 0
+        if let size = value("--window-size") {
+            let parts = size.lowercased().split(separator: "x").compactMap { Double($0) }
+            if parts.count == 2, parts.allSatisfy({ $0 >= 200 && $0 <= 8000 }) {
+                options.windowSize = CGSize(width: parts[0], height: parts[1])
+            }
+        }
+        return options
+    }
+}
+
+/// The Overlay Showcase window: the presence scenes, playable and scrubbable, rendered with
+/// the real panel and effects views on a pretend desktop.
 @MainActor
 final class ShowcaseWindowController {
     /// One showcase window per app, opened from the popover, the demo stage, or a Debug launch.
@@ -11,21 +57,44 @@ final class ShowcaseWindowController {
 
     private var window: NSWindow?
 
-    func show() {
+    enum Constants {
+        static let defaultSize = CGSize(width: 1320, height: 820)
+    }
+
+    func show(options: ShowcaseLaunchOptions = ShowcaseLaunchOptions()) {
         if window == nil {
+            let size = options.windowSize ?? Constants.defaultSize
+            // Borderless when bare: no title bar, so no safe area eating into the stage.
+            let style: NSWindow.StyleMask = options.hideChrome
+                ? [.borderless]
+                : [.titled, .closable, .resizable, .miniaturizable]
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1320, height: 820),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                backing: .buffered, defer: false,
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: style, backing: .buffered, defer: false,
             )
             window.title = "Overlay Showcase"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: ShowcasePlayer())
+            if options.hideChrome {
+                window.backgroundColor = .black
+                window.isMovableByWindowBackground = true
+            }
+            let player = ShowcasePlayer(playback: ShowcasePlayback(options: options), hideChrome: options.hideChrome)
+            let hosting = NSHostingView(rootView: player)
+            hosting.sizingOptions = options.windowSize == nil ? [.minSize] : []
+            window.contentView = hosting
+            window.setContentSize(size)
             window.center()
             self.window = window
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        if options.hideChrome, let frame = window?.frame, let screen = NSScreen.screens.first {
+            // The `screencapture -R` rectangle: top-left origin, points.
+            let top = screen.frame.maxY - frame.maxY
+            print("showcase window: -R\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))")
+            // Unbuffered: a recording script reads this line while the app keeps running.
+            fflush(stdout)
+        }
     }
 }
 
@@ -35,6 +104,7 @@ final class ShowcaseWindowController {
 final class ShowcasePlayback {
     var sceneIndex = 0
     var playing = true
+    var loops = true
     var speed = 1.0
     var appearance: Appearance = .system
     /// Scene time when playback last started or was scrubbed.
@@ -59,11 +129,21 @@ final class ShowcasePlayback {
         static let loopRest: TimeInterval = 1.2
     }
 
+    init(options: ShowcaseLaunchOptions = ShowcaseLaunchOptions()) {
+        if let slug = options.sceneSlug, let index = ShowcaseScene.all.firstIndex(where: { $0.slug == slug }) {
+            sceneIndex = index
+        }
+        playing = options.autoplay
+        loops = options.loop
+        anchorDate = Date().addingTimeInterval(options.leadIn)
+    }
+
     var scene: ShowcaseScene { ShowcaseScene.all[sceneIndex] }
 
     func time(at date: Date) -> TimeInterval {
         guard playing else { return anchorTime }
-        let t = anchorTime + date.timeIntervalSince(anchorDate) * speed
+        let t = anchorTime + max(0, date.timeIntervalSince(anchorDate)) * speed
+        guard loops else { return min(scene.duration, t) }
         let cycle = scene.duration + Constants.loopRest
         return min(scene.duration, t.truncatingRemainder(dividingBy: cycle))
     }
@@ -93,24 +173,33 @@ final class ShowcasePlayback {
 }
 
 struct ShowcasePlayer: View {
-    @State private var playback = ShowcasePlayback()
+    /// Owned by the window: one playback per showcase window, for the window's life.
+    let playback: ShowcasePlayback
+    var hideChrome = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            SceneList(playback: playback)
-                .frame(width: 250)
-            Divider()
+        if hideChrome {
             TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !playback.playing)) { timeline in
-                let t = playback.time(at: timeline.date)
-                VStack(alignment: .leading, spacing: Theme.Space.md) {
-                    SceneHeader(scene: playback.scene)
-                    StageViewport(scene: playback.scene, t: t, scheme: playback.appearance.scheme)
-                    TransportBar(playback: playback, t: t)
-                }
-                .padding(Theme.Space.lg)
+                StageViewport(scene: playback.scene, t: playback.time(at: timeline.date), scheme: nil, bare: true)
             }
+            .ignoresSafeArea()
+        } else {
+            HStack(spacing: 0) {
+                SceneList(playback: playback)
+                    .frame(width: 250)
+                Divider()
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !playback.playing)) { timeline in
+                    let t = playback.time(at: timeline.date)
+                    VStack(alignment: .leading, spacing: Theme.Space.md) {
+                        SceneHeader(scene: playback.scene)
+                        StageViewport(scene: playback.scene, t: t, scheme: playback.appearance.scheme)
+                        TransportBar(playback: playback, t: t)
+                    }
+                    .padding(Theme.Space.lg)
+                }
+            }
+            .frame(minWidth: 980, minHeight: 640)
         }
-        .frame(minWidth: 980, minHeight: 640)
     }
 }
 
@@ -166,11 +255,13 @@ private struct SceneHeader: View {
     }
 }
 
-/// The 1280 × 800 stage scaled to whatever room the window gives it.
+/// The 1280 × 800 stage scaled to whatever room the window gives it. `bare` drops the card
+/// frame, for a window that is nothing but the stage.
 private struct StageViewport: View {
     let scene: ShowcaseScene
     let t: TimeInterval
     let scheme: ColorScheme?
+    var bare = false
     @Environment(\.colorScheme) private var systemScheme
 
     var body: some View {
@@ -181,8 +272,10 @@ private struct StageViewport: View {
                 .environment(\.colorScheme, scheme ?? systemScheme)
                 .scaleEffect(scale, anchor: .topLeading)
                 .frame(width: size.width * scale, height: size.height * scale, alignment: .topLeading)
-                .clipShape(Theme.cardShape)
-                .overlay(Theme.cardShape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .clipShape(bare ? AnyShape(Rectangle()) : AnyShape(Theme.cardShape))
+                .overlay {
+                    if !bare { Theme.cardShape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .aspectRatio(MockLayout.desktop.width / MockLayout.desktop.height, contentMode: .fit)
