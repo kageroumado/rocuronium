@@ -30,7 +30,9 @@ struct PanelTextTests {
         #expect(PanelText.actionLine(for: action("park", app: "Ghostty")) == "Moving Ghostty to the virtual display")
         var stroke = action("drag")
         stroke.strokePoints = 24
-        #expect(PanelText.actionLine(for: stroke) == "Drawing a 24-point stroke")
+        #expect(PanelText.actionLine(for: stroke) == "Drawing a stroke")
+        #expect(PanelText.outcome(for: ["verdict": "confirmed", "pixelDelta": 0.08], action: stroke)?.text
+            == "Drew a stroke · ✓ the line shows on screen")
         var scroll = action("scroll")
         scroll.untilText = "Terms"
         #expect(PanelText.actionLine(for: scroll) == "Scrolling until “Terms” is visible")
@@ -49,9 +51,9 @@ struct PanelTextTests {
 
     /// The engine cannot know a field is secure before typing, so typed text never appears.
     @Test func typedTextIsNeverEchoed() {
-        let line = PanelText.actionLine(for: action("type", label: "Email", text: "kiri@example.com"))
+        let line = PanelText.actionLine(for: action("type", label: "Email", text: "alex@example.com"))
         #expect(line == "Typing into “Email”")
-        #expect(!line.contains("kiri"))
+        #expect(!line.contains("alex"))
         #expect(PanelText.actionLine(for: action("type", app: "Terminal", text: "ls")) == "Typing into Terminal")
         #expect(PanelText.actionLine(for: action("type", label: "Password", text: "hunter2", secure: true))
             == "Typing a password into “Password” (hidden)")
@@ -68,22 +70,22 @@ struct PanelTextTests {
 
     /// The outcome replaces the action phrase: past tense, then what was observed.
     @Test func outcomes() {
-        let type = action("type", label: "Email", text: "kiri@example.com")
-        #expect(PanelText.outcome(for: ["verdict": "confirmed", "readback": "kiri@example.com"], action: type)?.text
-            == "Typed into “Email” · ✓ reads kiri@example.com")
+        let type = action("type", label: "Email", text: "alex@example.com")
+        #expect(PanelText.outcome(for: ["verdict": "confirmed", "readback": "alex@example.com"], action: type)?.text
+            == "Typed into “Email” · ✓ reads alex@example.com")
         let click = action("click", label: "Sign In")
         #expect(PanelText.outcome(for: [
             "verdict": "confirmed",
             "treeDelta": "value changed: AXStaticText 'count': 'clicks: 0' → 'clicks: 1'\nappeared: AXSheet 'Save'\n…and 2 more change(s)",
-        ], action: click)?.text == "Clicked “Sign In” · ✓ “clicks: 0” became “clicks: 1” (+3 more)")
+        ], action: click)?.text == "Clicked “Sign In” · ✓ “clicks: 0” → “clicks: 1” (+3 more)")
         #expect(PanelText.outcome(for: ["verdict": "confirmed", "readback": "the target's on-screen window count changed 1 → 2"], action: click)?.text
             == "Clicked “Sign In” · ✓ a new window opened")
         #expect(PanelText.outcome(for: ["verdict": "confirmed", "menuItem": "View > Increase Font Size"], action: action("menu", app: "Ghostty", menu: "View > Increase Font Size"))?.text
-            == "Chose View ▸ Increase Font Size in Ghostty · ✓ ran")
+            == "✓ Chose View ▸ Increase Font Size in Ghostty")
         #expect(PanelText.outcome(for: ["verdict": "confirmed", "pixelDelta": 0.1], action: click)?.text
-            == "Clicked “Sign In” · ✓ changed")
+            == "Clicked “Sign In” · ✓ 10% of it redrew")
         #expect(PanelText.outcome(for: ["verdict": "noEffect"], action: click)?.text == "Clicked “Sign In” · ✗ nothing changed")
-        #expect(PanelText.outcome(for: ["verdict": "unverifiable"], action: click)?.text == "Clicked “Sign In” · ? Safari offers no way to check")
+        #expect(PanelText.outcome(for: ["verdict": "unverifiable"], action: click)?.text == "Clicked “Sign In” · ? Safari can’t confirm it")
         #expect(PanelText.outcome(for: ["error": "No element matched 'Sign In'."], action: click)?.text
             == "✗ Couldn’t find “Sign In” in Safari")
         #expect(PanelText.outcome(for: ["error": "'Notes' covers the target app at (1, 2) — the hover would land on it instead."], action: click)?.text
@@ -93,9 +95,9 @@ struct PanelTextTests {
         var wait = action("wait", label: "Dashboard")
         wait.timeout = 25
         #expect(PanelText.outcome(for: ["ok": true, "satisfied": true, "elapsedSeconds": 2.6], action: wait)?.text
-            == "Waited for “Dashboard” to appear · ✓ appeared after 2.6 s")
+            == "Waited for “Dashboard” · ✓ appeared after 2.6 s")
         #expect(PanelText.outcome(for: ["ok": false, "satisfied": false], action: wait)?.text
-            == "Waited for “Dashboard” to appear · ✗ not yet after 0:25")
+            == "Waited for “Dashboard” · ✗ not yet after 0:25")
     }
 
     @Test func stoppedSaysWhatTheHumanDidAndWhatItCost() {
@@ -159,7 +161,7 @@ struct PanelTextTests {
     @Test func clocksPrefixesAndTruncation() {
         #expect(PanelText.clock(48) == "0:48")
         #expect(PanelText.clock(3723) == "1:02:03")
-        #expect(PanelText.truncate("kiri@example.com", limit: 8) == "kiri@exa…")
+        #expect(PanelText.truncate("alex@example.com", limit: 8) == "alex@exa…")
         #expect(PanelText.truncate("a\n  b", limit: 10) == "a b")
         #expect(PanelText.stepPrefix(index: 1, count: 4) == "2/4")
         #expect(PanelText.stepPrefix(index: 4, count: 4) == "4/4")
@@ -183,7 +185,7 @@ struct PanelLifecycleTests {
         model.finish(reply: ["verdict": "confirmed", "treeDelta": "appeared: AXStaticText 'Welcome'"], at: at(1))
         let lines = PanelLines(model: model, at: at(4))
         #expect(lines.mode == .thinking)
-        #expect(lines.pill == "Thinking 0:03")
+        #expect(lines.pill == "Thinking 0:04")
         #expect(lines.line2 == "Clicked “Sign In” · ✓ “Welcome” appeared")
         #expect(model.presentation(at: at(15)).isUp)
     }
@@ -224,7 +226,7 @@ struct PanelLifecycleTests {
         model.finish(reply: ["verdict": "confirmed"], at: at(1))
         let lines = PanelLines(model: model, at: at(1.5))
         #expect(lines.mode == .done)
-        #expect(lines.line2 == "Clicked “Sign In” · ✓ done")
+        #expect(lines.line2 == "✓ Clicked “Sign In”")
         #expect(lines.pill == "Done 0:01")
         #expect(!model.presentation(at: at(4)).isUp)
     }
@@ -378,6 +380,62 @@ struct ShowcaseTests {
         }
     }
 
+    /// No line in any scene is cut off: line 2 fits beside the stop chord and line 1 beside the
+    /// pill, at every tenth of a second.
+    @Test func noSceneLineTruncates() {
+        for scene in ShowcaseScene.all {
+            for tick in 0 ... Int(scene.duration * 10) {
+                let t = Double(tick) / 10
+                let model = scene.frame(at: t).model
+                guard model.presentation(at: scene.date(t)).isUp, model.consent == nil else { continue }
+                let lines = PanelLines(model: model, at: scene.date(t))
+                let budget = PanelView.lineTwoBudget(hasSteps: !model.steps.isEmpty)
+                let width = PanelView.textWidth(lines.line2, size: PanelView.Constants.bodySize, weight: .medium)
+                #expect(width <= budget, "\(scene.slug) t=\(t): “\(lines.line2)” is \(Int(width)) of \(Int(budget))")
+            }
+        }
+    }
+
+    /// Every result names what was observed; none says just "done", "ran" or "changed".
+    @Test func noSceneResultIsVague() {
+        for scene in ShowcaseScene.all {
+            for tick in 0 ... Int(scene.duration * 10) {
+                let t = Double(tick) / 10
+                let line = PanelLines(model: scene.frame(at: t).model, at: scene.date(t)).line2
+                for vague in ["✓ done", "✓ ran", "✓ changed"] {
+                    #expect(!line.hasSuffix(vague), "\(scene.slug) t=\(t): \(line)")
+                }
+            }
+        }
+    }
+
+    /// The stroke ends under the pointer at every instant it is being drawn.
+    @Test func theStrokeEndsUnderThePointer() {
+        let scene = ShowcaseScene.hero
+        for t in stride(from: 5.4, through: 6.9, by: 0.1) {
+            let frame = scene.frame(at: t)
+            guard let tip = frame.desktop.stroke.last else { continue }
+            #expect(hypot(tip.x - frame.desktop.pointer.x, tip.y - frame.desktop.pointer.y) < 0.5, "t=\(t)")
+        }
+    }
+
+    /// The human's keys light; the agent's ghost typing leaves the keyboard alone, and a
+    /// hands-off click takes the trackpad.
+    @Test func theDeckMirrorsOnlyTheHuman() {
+        let typing = ShowcaseScene.hero.frame(at: 0.8).desktop.deck
+        #expect(typing.keyboard == .human)
+        #expect(!typing.keyGlow.isEmpty)
+        let handsOff = ShowcaseScene.hero.frame(at: 2.5).desktop.deck
+        #expect(handsOff.trackpad == .agent)
+        #expect(handsOff.keyboard == .paused)
+        #expect(handsOff.keyGlow.isEmpty)
+        let ghostOnly = ShowcaseScene.planBatch.frame(at: 0.6).desktop.deck
+        #expect(ghostOnly.keyboard == .stillYours)
+        #expect(ghostOnly.keyGlow.isEmpty)
+        #expect(MockKeyboardLayout.keys(for: "G") == ["g", "lshift"])
+        #expect(MockKeyboardLayout.keys(for: "–") == ["-", "option"])
+    }
+
     @Test func aFrameRendersOffline() {
         let image = ShowcaseRenderer.frame(scene: ShowcaseScene.handsOffClick, t: 2.0, scheme: .light)
         #expect(image?.width == Int(MockLayout.desktop.width * ShowcaseRenderer.Constants.scale))
@@ -392,6 +450,8 @@ struct ShowcaseTests {
         #expect(!options.loop)
         #expect(options.hideChrome)
         #expect(options.windowSize == CGSize(width: 1280, height: 800))
+        #expect(ShowcaseLaunchOptions.parse(["Rocuronium", "--hide-chrome", "--window-origin", "1800,120"]).windowOrigin
+            == CGPoint(x: 1800, y: 120))
         #expect(ShowcaseLaunchOptions.parse(["Rocuronium"]) == ShowcaseLaunchOptions())
         let render = ShowcaseRenderer.Request.parse(["Rocuronium", "--render-showcase", "/tmp/x", "--scene", "hero", "--fps", "30"])
         #expect(render?.sceneSlug == "hero")

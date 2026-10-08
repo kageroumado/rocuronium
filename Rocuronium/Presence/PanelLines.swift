@@ -28,7 +28,7 @@ struct PanelLines: Equatable {
     var goal: String
     /// The pill's word: `Background`, `Hands off`, …
     var pillTitle: String
-    /// The pill's clock: the session's elapsed time, or while thinking, how long it has been.
+    /// The pill's clock: the session's elapsed time in every mode, so it only ever counts up.
     var pillClock: String
     /// `2/4` when steps were declared.
     var stepPrefix: String?
@@ -53,7 +53,7 @@ struct PanelLines: Equatable {
         mode = presentation.mode
         goal = Self.headline(model)
         pillTitle = Self.title(presentation.mode)
-        pillClock = Self.clock(model: model, mode: presentation.mode, at: date)
+        pillClock = Self.clock(model: model, at: date)
         stepPrefix = model.consent == nil ? PanelText.stepPrefix(index: model.stepIndex, count: model.steps.count) : nil
         detail = Self.detail(model: model, presentation: presentation, at: date)
     }
@@ -77,10 +77,9 @@ struct PanelLines: Equatable {
         }
     }
 
-    private static func clock(model: OverlayModel, mode: OverlayModel.Mode, at date: Date) -> String {
-        if mode == .thinking {
-            return PanelText.clock(date.timeIntervalSince(model.lastActivity))
-        }
+    /// Session elapsed, frozen at the declared end. A long pause between actions is said on
+    /// line 2 by the silence warning, so the pill keeps one meaning across mode changes.
+    private static func clock(model: OverlayModel, at date: Date) -> String {
         let end = model.done?.at ?? date
         return PanelText.clock(model.sessionStart.map { end.timeIntervalSince($0) } ?? 0)
     }

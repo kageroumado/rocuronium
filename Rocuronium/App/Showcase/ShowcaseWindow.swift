@@ -5,10 +5,11 @@ import SwiftUI
 /// How the showcase opens, from the launch arguments — so a recording can start the window
 /// on one scene, playing, with nothing around the stage:
 ///
-///     Rocuronium --showcase-scene hero --autoplay --loop --hide-chrome --window-size 1280x800
+///     Rocuronium --showcase-scene hero --autoplay --loop --hide-chrome --window-size 1280x800 \
+///         [--window-origin 1600,100]
 ///
-/// With none of these, the window opens on the first scene, playing and looping, with its
-/// scene list and transport.
+/// A bare window comes up without activating the app. With none of these, the window opens on
+/// the first scene, playing and looping, with its scene list and transport.
 struct ShowcaseLaunchOptions: Equatable {
     var sceneSlug: String?
     var autoplay = true
@@ -17,6 +18,8 @@ struct ShowcaseLaunchOptions: Equatable {
     var hideChrome = false
     /// The window's content size in points.
     var windowSize: CGSize?
+    /// The window's top-left corner in global top-left points — on the virtual display, say.
+    var windowOrigin: CGPoint?
     /// Seconds the first frame holds before autoplay starts, so a recording opens on a still.
     var leadIn: TimeInterval = 0
 
@@ -30,7 +33,7 @@ struct ShowcaseLaunchOptions: Equatable {
             return arguments[index + 1]
         }
         var options = ShowcaseLaunchOptions()
-        let explicit = ["--showcase-scene", "--autoplay", "--loop", "--hide-chrome", "--window-size"]
+        let explicit = ["--showcase-scene", "--autoplay", "--loop", "--hide-chrome", "--window-size", "--window-origin"]
             .contains { arguments.contains($0) }
         guard explicit else { return options }
         options.sceneSlug = value("--showcase-scene")
@@ -43,6 +46,10 @@ struct ShowcaseLaunchOptions: Equatable {
             if parts.count == 2, parts.allSatisfy({ $0 >= 200 && $0 <= 8000 }) {
                 options.windowSize = CGSize(width: parts[0], height: parts[1])
             }
+        }
+        if let origin = value("--window-origin") {
+            let parts = origin.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 2 { options.windowOrigin = CGPoint(x: parts[0], y: parts[1]) }
         }
         return options
     }
@@ -78,21 +85,37 @@ final class ShowcaseWindowController {
                 window.backgroundColor = .black
                 window.isMovableByWindowBackground = true
             }
-            let player = ShowcasePlayer(playback: ShowcasePlayback(options: options), hideChrome: options.hideChrome)
+            let playback = ShowcasePlayback(options: options)
+            let player = ShowcasePlayer(playback: playback, hideChrome: options.hideChrome)
             let hosting = NSHostingView(rootView: player)
             hosting.sizingOptions = options.windowSize == nil ? [.minSize] : []
             window.contentView = hosting
             window.setContentSize(size)
-            window.center()
+            if let origin = options.windowOrigin, let primary = NSScreen.screens.first {
+                // Top-left global points, the coordinates `rocuronium windows` reports.
+                window.setFrameTopLeftPoint(NSPoint(x: origin.x, y: primary.frame.maxY - origin.y))
+            } else {
+                window.center()
+            }
             self.window = window
+            if options.hideChrome {
+                // Wall-clock instant of scene time 0, so a recording can be cut on a loop boundary.
+                print("showcase anchor: \(playback.anchorDate.timeIntervalSince1970)")
+            }
         }
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        if options.hideChrome, let frame = window?.frame, let screen = NSScreen.screens.first {
-            // The `screencapture -R` rectangle: top-left origin, points.
+        if options.hideChrome {
+            // A recording window comes up without taking focus from whoever is using the Mac.
+            window?.orderFrontRegardless()
+        } else {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        }
+        if options.hideChrome, let window, let screen = NSScreen.screens.first {
+            let frame = window.frame
+            // The window's id and its rectangle in top-left global points.
             let top = screen.frame.maxY - frame.maxY
-            print("showcase window: -R\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))")
-            // Unbuffered: a recording script reads this line while the app keeps running.
+            print("showcase window: id \(window.windowNumber) -R\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))")
+            // Unbuffered: a recording script reads these lines while the app keeps running.
             fflush(stdout)
         }
     }
@@ -124,11 +147,6 @@ final class ShowcasePlayback {
         }
     }
 
-    enum Constants {
-        /// The pause at the end of a scene before it loops.
-        static let loopRest: TimeInterval = 1.2
-    }
-
     init(options: ShowcaseLaunchOptions = ShowcaseLaunchOptions()) {
         if let slug = options.sceneSlug, let index = ShowcaseScene.all.firstIndex(where: { $0.slug == slug }) {
             sceneIndex = index
@@ -144,7 +162,7 @@ final class ShowcasePlayback {
         guard playing else { return anchorTime }
         let t = anchorTime + max(0, date.timeIntervalSince(anchorDate)) * speed
         guard loops else { return min(scene.duration, t) }
-        let cycle = scene.duration + Constants.loopRest
+        let cycle = scene.duration + scene.loopRest
         return min(scene.duration, t.truncatingRemainder(dividingBy: cycle))
     }
 

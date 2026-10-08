@@ -88,6 +88,21 @@ struct PanelView: View {
     var fixedNow: Date?
     @State private var hidden = false
 
+    /// The width line 2 has before it truncates: the panel less its padding, the mark, the stop
+    /// chord, and the chevron column when steps exist.
+    static func lineTwoBudget(hasSteps: Bool) -> CGFloat {
+        let chord = textWidth(StopHint.chord, size: 10.5, weight: .medium) + 1.5 * CGFloat(StopHint.chord.count)
+            + 4 + textWidth("stop", size: 10.5, weight: .medium)
+        let fixed = (Theme.Space.md + 2) + (Theme.Space.md + 4) + Constants.markSize.width + Constants.columnSpacing
+            + Theme.Space.md + chord
+        return Constants.width - fixed - (hasSteps ? Constants.chevronWidth + 6 : 0)
+    }
+
+    /// The rendered width of `text` in the system font.
+    static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size, weight: weight)]).width
+    }
+
     var body: some View {
         if let fixedNow {
             PanelContent(model: model, now: fixedNow, animatesMark: false)

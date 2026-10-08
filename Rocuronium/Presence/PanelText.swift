@@ -17,7 +17,7 @@ nonisolated struct PanelResult: Equatable, Sendable {
     }
 
     var kind: Kind
-    /// The words after the glyph: `reads kiri@example.com`, `nothing changed`.
+    /// The words after the glyph: `reads alex@example.com`, `nothing changed`.
     var detail: String
 
     /// The glyph in plain text: ✓ ✗ ? ◐, or none for a decision.
@@ -36,7 +36,7 @@ nonisolated struct PanelResult: Equatable, Sendable {
 }
 
 /// Line 2 once an action's reply is in: what was done, then what came of it —
-/// `Typed into “Email” · ✓ reads kiri@example.com`.
+/// `Typed into “Email” · ✓ reads alex@example.com`.
 nonisolated struct PanelOutcome: Equatable, Sendable {
     /// The action in the past tense, or nil when the result says everything on its own.
     var lead: String?
@@ -56,10 +56,10 @@ nonisolated struct PanelOutcome: Equatable, Sendable {
 /// past tense for what happened, the object in curly quotes. Secure text is never echoed.
 nonisolated enum PanelText {
     enum Constants {
-        /// An element label in quotes.
-        static let labelLimit = 28
-        /// A read-back value on line 2.
-        static let valueLimit = 32
+        /// An element label in quotes; longer ones end in an ellipsis inside the quotes.
+        static let labelLimit = 18
+        /// A read-back or changed value on line 2.
+        static let valueLimit = 24
         /// An error sentence carried through to line 2 when no specific phrase fits.
         static let errorLimit = 64
         /// The goal is a headline, never a paragraph.
@@ -279,11 +279,8 @@ nonisolated enum PanelText {
             )
 
         case "drag":
-            if let points = action.strokePoints {
-                return Phrase(
-                    participle: "Drawing", infinitive: "draw", past: "Drew",
-                    object: "a \(points)-point stroke", app: "",
-                )
+            if action.strokePoints != nil {
+                return Phrase(participle: "Drawing", infinitive: "draw", past: "Drew", object: "a stroke", app: "")
             }
             let source = label ?? action.point.map { "from \(Int($0.x)), \(Int($0.y))" } ?? ""
             let destination = action.destination.map { "to \(place($0))" } ?? ""
@@ -406,8 +403,11 @@ nonisolated enum PanelText {
     /// the human interrupted is not an outcome: `stopped(for:action:)` says it.
     static func outcome(for reply: [String: Any], action: PanelAction?) -> PanelOutcome? {
         let action = action ?? PanelAction(verb: "", cursorTaking: false)
-        let phrase = phrase(for: action, resolved: Resolved(reply: reply))
-        let lead = phrase.joined(phrase.past)
+        // The outcome names the element by its label alone: the role noun the running phrase
+        // uses would push the result off the line.
+        let resolved = Resolved(reply: reply).map { Resolved(role: nil, label: $0.label) }
+        let phrase = phrase(for: action, resolved: resolved)
+        let lead = pastLead(for: action, phrase: phrase)
         if let notCounted = notCountedResult(reply, action: action) {
             return PanelOutcome(lead: nil, result: notCounted)
         }
@@ -422,16 +422,35 @@ nonisolated enum PanelText {
         }
         switch reply["verdict"] as? String {
         case "confirmed":
-            return PanelOutcome(lead: lead, result: confirmedResult(reply, action: action))
+            // With nothing more specific observed, the action itself is the result.
+            guard let result = confirmedResult(reply, action: action) else {
+                return PanelOutcome(lead: nil, result: PanelResult(kind: .confirmed, detail: lead))
+            }
+            return PanelOutcome(lead: lead, result: result)
         case "noEffect":
             return PanelOutcome(lead: lead, result: PanelResult(kind: .failed, detail: "nothing changed"))
         case "unverifiable":
-            let app = action.app ?? "the app"
-            return PanelOutcome(lead: lead, result: PanelResult(kind: .unverified, detail: "\(app) offers no way to check"))
+            // The lead names the app when its phrase does; otherwise the result says whose app.
+            let app = action.app ?? ""
+            let detail = app.isEmpty || lead.hasSuffix(app) ? "no way to check" : "\(app) can’t confirm it"
+            return PanelOutcome(lead: lead, result: PanelResult(kind: .unverified, detail: detail))
         default:
             guard reply["ok"] as? Bool == true else { return nil }
-            return PanelOutcome(lead: lead, result: PanelResult(kind: .confirmed, detail: "done"))
+            return PanelOutcome(lead: nil, result: PanelResult(kind: .confirmed, detail: lead))
         }
+    }
+
+    /// The action in the past tense, short enough to leave room for its result: a wait names
+    /// only what it waited for (the result says whether it appeared), and a password field
+    /// is said once, with `(hidden)` left to the result.
+    private static func pastLead(for action: PanelAction, phrase: Phrase) -> String {
+        if action.verb == "wait", let label = action.label {
+            return "Waited for \(quote(label))"
+        }
+        if action.verb == "type", isSecure(action) {
+            return "Typed into \(action.label.map { quote($0) } ?? "the field")"
+        }
+        return phrase.joined(phrase.past)
     }
 
     /// The Stopped state's sentence when the human's input stopped a hands-off action:
@@ -525,10 +544,12 @@ nonisolated enum PanelText {
         return PanelOutcome(lead: nil, result: PanelResult(kind: .failed, detail: truncate(sentence, limit: Constants.errorLimit)))
     }
 
-    private static func confirmedResult(_ reply: [String: Any], action: PanelAction) -> PanelResult {
+    /// What a confirmed reply observed, or nil when it observed nothing beyond the action
+    /// itself — then the past-tense action is the result.
+    private static func confirmedResult(_ reply: [String: Any], action: PanelAction) -> PanelResult? {
         if let menu = reply["menuItem"] as? String, !menu.isEmpty {
             // A menu action already names its item; a shortcut learns which item it pressed.
-            return PanelResult(kind: .confirmed, detail: action.verb == "menu" ? "ran" : "ran \(menuDisplay(menu))")
+            return action.verb == "menu" ? nil : PanelResult(kind: .confirmed, detail: "ran \(menuDisplay(menu))")
         }
         let readback = (reply["readback"] as? String) ?? ""
         if let counts = windowCountChange(readback) {
@@ -541,10 +562,20 @@ nonisolated enum PanelText {
         if let delta = reply["treeDelta"] as? String, let change = treeChange(delta) {
             return PanelResult(kind: .confirmed, detail: change)
         }
-        if reply["pixelDelta"] != nil {
-            return PanelResult(kind: .confirmed, detail: "changed")
+        if let delta = reply["pixelDelta"] as? Double {
+            return PanelResult(kind: .confirmed, detail: pixelChange(delta, action: action, reply: reply))
         }
-        return PanelResult(kind: .confirmed, detail: "done")
+        return nil
+    }
+
+    /// What a pixel-only confirmation saw: a stroke's line on screen, otherwise how much of the
+    /// target redrew — `12% of it redrew` when the lead already names it.
+    private static func pixelChange(_ delta: Double, action: PanelAction, reply: [String: Any]) -> String {
+        if action.verb == "drag", action.strokePoints != nil { return "the line shows on screen" }
+        let percent = delta * 100
+        let amount = percent < 1 ? "under 1%" : "\(Int(percent.rounded()))%"
+        let named = (Resolved(reply: reply)?.label ?? action.label).map { !$0.isEmpty } ?? false
+        return "\(amount) of \(named ? "it" : "the target") redrew"
     }
 
     /// `the target's on-screen window count changed 1 → 2` → (1, 2).
@@ -570,7 +601,7 @@ nonisolated enum PanelText {
             // The last two quoted strings are old → new; a label, when present, comes first.
             if values.count >= 2 {
                 let old = values[values.count - 2], new = values[values.count - 1]
-                return "\(quote(old, limit: Constants.valueLimit)) became \(quote(new, limit: Constants.valueLimit))\(suffix)"
+                return "\(quote(old, limit: Constants.valueLimit)) → \(quote(new, limit: Constants.valueLimit))\(suffix)"
             }
         }
         for (prefix, verb) in [("appeared:", "appeared"), ("vanished:", "went away")] where first.hasPrefix(prefix) {

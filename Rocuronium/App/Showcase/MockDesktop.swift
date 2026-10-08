@@ -23,13 +23,24 @@ enum MockLayout {
     static let notesDoneButton = CGRect(x: 1128, y: 120, width: 52, height: 22)
     static let notesTitle = CGRect(x: 820, y: 154, width: 340, height: 26)
 
-    /// The mini-map of both displays, bottom-right beside the Dock.
-    static let displayStrip = CGRect(x: 1032, y: 630, width: 232, height: 88)
+    /// The bottom edge the Dock, the input deck and the display mini-map share.
+    static let bottomBand: CGFloat = 790
+    static let sideInset: CGFloat = 16
 
-    /// The panel's bottom edge: the live default, 20 pt above the Dock.
-    static let panelBottom: CGFloat = 712
-    static let dockHeight: CGFloat = 58
-    static let dockBottomInset: CGFloat = 8
+    /// The human's keyboard and trackpad, bottom-left.
+    static var inputDeck: CGRect {
+        let size = InputDeckView.Constants.size
+        return CGRect(x: sideInset, y: bottomBand - size.height, width: size.width, height: size.height)
+    }
+
+    /// The mini-map of both displays, bottom-right.
+    static let displayStrip = CGRect(x: 1280 - 16 - 250, y: 790 - 118, width: 250, height: 118)
+
+    /// The panel's bottom edge: centered over the Dock, clear of the input deck beside it.
+    static var panelBottom: CGFloat { inputDeck.minY - 12 }
+    static let dockIcon: CGFloat = 40
+    static let dockSpacing: CGFloat = 8
+    static let dockPadding: CGFloat = 7
     /// Where the human's pointer rests when a scene starts.
     static let restingPointer = CGPoint(x: 980, y: 520)
 }
@@ -85,7 +96,11 @@ struct MockDesktopState {
     var notesTitle = "Groceries"
     var notesText = ""
     var humanTyping = false
-    var terminalLines: [String] = ["kiri@studio rocuronium % "]
+    var terminalLines: [String] = ["alex@mac rocuronium % "]
+    /// Per key id, 0…1: the keys the human's typing lights right now.
+    var keyGlow: [String: Double] = [:]
+    /// The human's keyboard and trackpad, derived per frame from the desktop and the model.
+    var deck = InputDeckState()
     var buildProgress: Double?
     /// Between the Sign In press and the dashboard: the page shows a spinner.
     var signingIn = false
@@ -121,6 +136,8 @@ struct MockDesktopView: View {
                     .offset(x: windowOrigin(id).x, y: windowOrigin(id).y)
             }
             MockDock()
+            InputDeckView(state: state.deck)
+                .offset(x: MockLayout.inputDeck.minX, y: MockLayout.inputDeck.minY)
             DisplayStrip(state: state)
                 .frame(width: MockLayout.displayStrip.width, height: MockLayout.displayStrip.height)
                 .offset(x: MockLayout.displayStrip.minX, y: MockLayout.displayStrip.minY)
@@ -188,22 +205,22 @@ private struct MockDock: View {
     ]
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: MockLayout.dockSpacing) {
             ForEach(Array(Self.apps.enumerated()), id: \.offset) { _, app in
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(app.1.gradient)
-                    .frame(width: 44, height: 44)
-                    .overlay(Image(systemName: app.0).font(.system(size: 20, weight: .medium)).foregroundStyle(.white))
+                    .frame(width: MockLayout.dockIcon, height: MockLayout.dockIcon)
+                    .overlay(Image(systemName: app.0).font(.system(size: 18, weight: .medium)).foregroundStyle(.white))
             }
         }
-        .padding(7)
+        .padding(MockLayout.dockPadding)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill((scheme == .dark ? Color.black : Color.white).opacity(0.32))
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.3), lineWidth: 0.5)),
         )
         .frame(width: MockLayout.desktop.width)
-        .offset(y: MockLayout.desktop.height - MockLayout.dockHeight - MockLayout.dockBottomInset)
+        .offset(y: MockLayout.bottomBand - MockLayout.dockIcon - 2 * MockLayout.dockPadding)
     }
 }
 
@@ -333,7 +350,7 @@ private struct SafariPage: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Dashboard").font(.system(size: 12, weight: .semibold)).foregroundStyle(.blue)
-            Text("Welcome back, Kiri").font(.system(size: 24, weight: .bold))
+            Text("Welcome back, Alex").font(.system(size: 24, weight: .bold))
             Text("Your dashboard is ready.").foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 ForEach(0 ..< 3, id: \.self) { index in
@@ -416,7 +433,13 @@ private struct SketchPage: View {
             guard state.stroke.count > 1 else { return }
             var path = Path()
             let origin = CGPoint(x: window.minX, y: window.minY + MockLayout.windowTitleBar)
-            path.addLines(state.stroke.map { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) })
+            let points = state.stroke.map { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) }
+            path.move(to: points[0])
+            // Midpoint quadratics: the dense samples join with no visible corners.
+            for (a, b) in zip(points.dropFirst(), points.dropFirst(2)) {
+                path.addQuadCurve(to: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), control: a)
+            }
+            path.addLine(to: points[points.count - 1])
             context.stroke(path, with: .color(Theme.agent), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
         }
     }
@@ -440,7 +463,7 @@ struct HumanTag: View {
 private struct DisplayStrip: View {
     let state: MockDesktopState
     @Environment(\.colorScheme) private var scheme
-    private static let scale = 96.0 / MockLayout.desktop.width
+    private static let scale = 112.0 / MockLayout.desktop.width
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -451,6 +474,7 @@ private struct DisplayStrip: View {
             }
         }
         .padding(8)
+        .frame(width: MockLayout.displayStrip.width, height: MockLayout.displayStrip.height, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill((scheme == .dark ? Color.black : Color.white).opacity(0.55)))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
     }
