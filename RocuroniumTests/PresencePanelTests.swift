@@ -427,7 +427,7 @@ struct ShowcaseTests {
         #expect(!typing.keyGlow.isEmpty)
         let handsOff = ShowcaseScene.hero.frame(at: 2.5).desktop.deck
         #expect(handsOff.trackpad == .agent)
-        #expect(handsOff.keyboard == .paused)
+        #expect(handsOff.keyboard == .waiting)
         #expect(handsOff.keyGlow.isEmpty)
         let ghostOnly = ShowcaseScene.planBatch.frame(at: 0.6).desktop.deck
         #expect(ghostOnly.keyboard == .stillYours)

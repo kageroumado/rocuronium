@@ -10,8 +10,9 @@ enum DeckOwner: Equatable {
     case stillYours
     /// A hands-off action drives this device.
     case agent
-    /// A hands-off action drives the other device; any input here would stop it.
-    case paused
+    /// A hands-off action drives the other device; any input here would stop it, so the human
+    /// waits.
+    case waiting
 }
 
 /// The human's keyboard and trackpad at one instant, mirroring only their physical input.
@@ -28,6 +29,8 @@ struct InputDeckState: Equatable {
     var fingerPress = 0.0
     /// The pointer the agent's hands-off action is moving, in trackpad unit coordinates.
     var agentPointer: CGPoint?
+    /// Where the agent's pointer was over the last second, newest first, in unit coordinates.
+    var agentTrail: [CGPoint] = []
 }
 
 /// A key on the pretend keyboard: its id (what the typing maps to), its cap, and its width in
@@ -159,8 +162,8 @@ private struct DeckHeader: View {
         case .idle: EmptyView()
         case .human: DeckChip(text: "you", color: DeckPalette.human, filled: true)
         case .stillYours: DeckChip(text: "still yours", color: .secondary, filled: false)
-        case .agent: DeckChip(text: "hands off", color: DeckPalette.agent, filled: true)
-        case .paused: DeckChip(text: "paused", color: DeckPalette.agent, filled: false)
+        case .agent: DeckChip(text: "agent", color: DeckPalette.agent, filled: true)
+        case .waiting: DeckChip(text: "wait", color: DeckPalette.agent, filled: false)
         }
     }
 }
@@ -229,7 +232,7 @@ private struct KeyboardView: View {
                 y += Metrics.keyPitch
             }
         }
-        .opacity(state.keyboard == .paused ? 0.6 : 1)
+        .opacity(state.keyboard == .waiting ? 0.6 : 1)
     }
 }
 
@@ -248,6 +251,7 @@ private struct TrackpadView: View {
                 shape.fill(surface)
                 shape.strokeBorder(edge, lineWidth: state.trackpad == .agent ? 1.5 : 0.75)
                 if let agent = state.agentPointer, state.trackpad == .agent {
+                    agentTrail(in: size)
                     dot(at: agent, in: size, color: DeckPalette.agent, diameter: 8)
                 }
                 trail(in: size)
@@ -256,7 +260,7 @@ private struct TrackpadView: View {
                 }
             }
         }
-        .opacity(state.trackpad == .paused ? 0.6 : 1)
+        .opacity(state.trackpad == .waiting ? 0.6 : 1)
     }
 
     private var surface: some ShapeStyle {
@@ -278,6 +282,26 @@ private struct TrackpadView: View {
             let fade = 1 - Double(index + 1) / Double(state.fingerTrail.count + 1)
             dot(at: point, in: size, color: DeckPalette.human.opacity(0.45 * fade), diameter: 4 + 6 * fade)
         }
+    }
+
+    /// The agent's pointer motion as a fading amber line, so the pad reads as moved by the agent
+    /// rather than touched by a still finger.
+    private func agentTrail(in size: CGSize) -> some View {
+        let points = ([state.agentPointer].compactMap(\.self) + state.agentTrail)
+            .map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) }
+        return Path { path in
+            guard let first = points.first else { return }
+            path.move(to: first)
+            for point in points.dropFirst() { path.addLine(to: point) }
+        }
+        .stroke(
+            LinearGradient(
+                colors: [DeckPalette.agent.opacity(0.8), DeckPalette.agent.opacity(0)],
+                startPoint: .init(x: (points.first?.x ?? 0) / max(size.width, 1), y: (points.first?.y ?? 0) / max(size.height, 1)),
+                endPoint: .init(x: (points.last?.x ?? 0) / max(size.width, 1), y: (points.last?.y ?? 0) / max(size.height, 1)),
+            ),
+            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round),
+        )
     }
 
     private func fingertip(at point: CGPoint, in size: CGSize) -> some View {

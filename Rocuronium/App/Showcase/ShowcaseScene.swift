@@ -196,6 +196,9 @@ struct ShowcaseScene: Identifiable {
         static let fingerLinger: TimeInterval = 0.35
         static let fingerTrailDots = 7
         static let fingerTrailStep: TimeInterval = 0.035
+        /// The agent's pointer trail on the trackpad: samples over the last second.
+        static let agentTrailSamples = 30
+        static let agentTrailStep: TimeInterval = 0.033
         /// The trackpad's unused border, as a fraction of each side.
         static let trackpadMargin = 0.12
         /// The pause at the end of a scene before it loops.
@@ -308,9 +311,14 @@ struct ShowcaseScene: Identifiable {
         if let action = model.action, model.consent == nil {
             if action.cursorTaking {
                 let keyboard = PanelText.phrase(for: action).hardware == .keyboard
-                deck.keyboard = keyboard ? .agent : .paused
-                deck.trackpad = keyboard ? .paused : .agent
-                if !keyboard { deck.agentPointer = Self.trackpadPoint(desktop.pointer) }
+                deck.keyboard = keyboard ? .agent : .waiting
+                deck.trackpad = keyboard ? .waiting : .agent
+                if !keyboard {
+                    deck.agentPointer = Self.trackpadPoint(desktop.pointer)
+                    deck.agentTrail = (1 ... Constants.agentTrailSamples).map { step in
+                        Self.trackpadPoint(pointer(at: max(0, t - Double(step) * Constants.agentTrailStep)).point)
+                    }
+                }
             } else {
                 deck.keyboard = .stillYours
                 deck.trackpad = .stillYours
