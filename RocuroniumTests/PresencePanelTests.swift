@@ -203,6 +203,61 @@ struct PanelLifecycleTests {
         #expect(!model.presentation(at: at(24)).isUp)
     }
 
+    /// A refused verb closes its narration like any other reply: the 2026-10-10 repro, a `menu`
+    /// against a background app whose menu was empty, with no `busy on`. Its thrown refusal
+    /// must reach `finish`, and then the undeclared silence ends the session.
+    @Test func aRefusedActionEndsByUndeclaredSilence() {
+        let model = OverlayModel(showForAllActions: true)
+        let menu = PanelAction(verb: "menu", app: nil, menuPath: "Refrax > Quit Refrax", cursorTaking: false)
+        let refusal = CommandRouter.errorReply(
+            from: Engine.EngineError.menuPathNotFound(component: "Quit Refrax", available: []),
+        )
+        model.begin(menu, at: at(0))
+        #expect(PanelLines(model: model, at: at(0.1)).line2 == "Choosing Refrax ▸ Quit Refrax…")
+        model.finish(reply: refusal, at: at(0.2))
+        let after = PanelLines(model: model, at: at(5))
+        #expect(after.mode == .thinking)
+        #expect(after.line2 == "✗ No menu item 'Quit Refrax': that menu is empty")
+        #expect(PanelLines(model: model, at: at(21)).mode == .ended)
+        #expect(!model.presentation(at: at(23)).isUp)
+        #expect(!model.presentation(at: at(250)).isUp)
+    }
+
+    /// A command whose reply never comes holds the panel only as long as the socket's reply
+    /// bound; from there the silence safety runs as if the agent had gone quiet then.
+    @Test func anUnansweredActionStopsHoldingThePanel() {
+        let model = OverlayModel(showForAllActions: true)
+        model.begin(click, at: at(0))
+        #expect(model.presentation(at: at(29)).mode == .background)
+        #expect(PanelLines(model: model, at: at(29)).line2 == "Clicking “Sign In”…")
+        #expect(model.presentation(at: at(31)).mode == .thinking)
+        #expect(PanelLines(model: model, at: at(31)).line2 == "Getting started")
+        #expect(PanelLines(model: model, at: at(51)).mode == .ended)
+        #expect(!model.presentation(at: at(53)).isUp)
+        #expect(!model.presentation(at: at(250)).isUp)
+
+        // A hands-off command's border and escort go with it.
+        let hands = OverlayModel(showForAllActions: true)
+        hands.begin(PanelAction(verb: "click", app: "Safari", label: "Sign In", cursorTaking: true), at: at(0))
+        #expect(hands.presentation(at: at(29)).effectsVisible)
+        #expect(!hands.presentation(at: at(31)).effectsVisible)
+
+        // The next command after a stranded one opens a fresh session.
+        model.begin(click, at: at(60))
+        #expect(model.sessionStart == at(60))
+        #expect(model.presentation(at: at(61)).mode == .background)
+    }
+
+    /// An empty level says why it is empty instead of listing nothing.
+    @Test func anEmptyMenuLevelExplainsTheBackgroundApp() {
+        let empty = Engine.EngineError.menuPathNotFound(component: "Quit Refrax", available: []).errorDescription ?? ""
+        #expect(!empty.contains("It offers: ."))
+        #expect(empty.contains("activate"))
+        #expect(empty.contains("shortcut"))
+        let listed = Engine.EngineError.menuPathNotFound(component: "Quit", available: ["About", "Settings…"]).errorDescription
+        #expect(listed == "No menu item 'Quit' at that level. It offers: About, Settings….")
+    }
+
     @Test func silenceWarnsThenEnds() {
         let model = OverlayModel(showForAllActions: true)
         model.beginHold(goal: "Testing the login flow", steps: [], at: at(0))

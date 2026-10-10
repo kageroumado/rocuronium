@@ -56,6 +56,10 @@ final class OverlayModel {
         /// An undeclared session this quiet ends by itself. Its agent never opted into the
         /// protocol and may never send `--done` or `busy off`, so the wait is short.
         static let undeclaredSafety: TimeInterval = 20
+        /// The longest a command can be in flight: the control socket's reply bound. A command
+        /// older than this has no reply coming, so it stops holding the panel up, and the
+        /// moment its bound ran out counts as the agent's last word.
+        static let actionLimit: TimeInterval = 30
         /// How long a session that went quiet says so before it fades.
         static let endedShown: TimeInterval = 2
         /// How long the Done state stays before the fade.
@@ -196,12 +200,24 @@ final class OverlayModel {
         holdActive || planRunning ? Constants.holdSafety : Constants.undeclaredSafety
     }
 
+    /// The command in flight, while its reply can still come.
+    func liveAction(at now: Date) -> PanelAction? {
+        guard let action, now.timeIntervalSince(actionStart ?? now) < Constants.actionLimit else { return nil }
+        return action
+    }
+
+    /// The agent's last word: its last activity, or the instant a command's reply bound ran out.
+    private func lastWord(at now: Date) -> Date {
+        guard action != nil, liveAction(at: now) == nil, let actionStart else { return lastActivity }
+        return max(lastActivity, actionStart.addingTimeInterval(Constants.actionLimit))
+    }
+
     // MARK: - Transitions
 
     /// Opens a session if none is up, the last one is finishing, or it already went quiet;
     /// a declared goal and steps carry over only while a hold is active.
     private func ensureSession(at now: Date) {
-        let wentQuiet = now.timeIntervalSince(lastActivity) >= silenceLimit && stopped?.indefinite != true
+        let wentQuiet = now.timeIntervalSince(lastWord(at: now)) >= silenceLimit && stopped?.indefinite != true
         if sessionStart == nil || done != nil || wentQuiet {
             sessionStart = now
             done = nil
@@ -439,15 +455,16 @@ final class OverlayModel {
         }
 
         if consent != nil { return up(.needsYou) }
-        if let action { return up(action.cursorTaking ? .handsOff : .background) }
+        if let action = liveAction(at: now) { return up(action.cursorTaking ? .handsOff : .background) }
         if let done { return until(done.at.addingTimeInterval(Constants.doneShown), done.success ? .done : .ended) }
         if let stopped, stopped.indefinite { return up(.stopped) }
         if let wait {
             let end = (wait.deadline ?? wait.start).addingTimeInterval(Constants.holdSafety)
             return now < end ? .releasedScreen : .down
         }
-        let idle = now.timeIntervalSince(lastActivity)
-        let silenceEnd = lastActivity.addingTimeInterval(silenceLimit)
+        let quietSince = lastWord(at: now)
+        let idle = now.timeIntervalSince(quietSince)
+        let silenceEnd = quietSince.addingTimeInterval(silenceLimit)
         if idle >= silenceLimit { return until(silenceEnd.addingTimeInterval(Constants.endedShown), .ended) }
         let quiet = idle >= Constants.quietWarningAfter ? idle : nil
         if stopped != nil { return up(.stopped, quiet: quiet) }
@@ -458,7 +475,7 @@ final class OverlayModel {
     /// a charging ring, or a ripple still spreading. Never while idle.
     func effectsVisible(at now: Date) -> Bool {
         // While the human is being asked, nothing has their hardware yet.
-        if action?.cursorTaking == true, consent == nil { return true }
+        if liveAction(at: now)?.cursorTaking == true, consent == nil { return true }
         if chargeRing != nil { return true }
         return ripples.contains { now.timeIntervalSince($0.start) < Constants.rippleLife }
     }
@@ -470,7 +487,7 @@ final class OverlayModel {
         return switch presentation.mode {
         case .handsOff: .acting
         case .needsYou, .stopped: .needsHuman
-        case .background: action == nil ? .idle : .thinking
+        case .background: liveAction(at: now) == nil ? .idle : .thinking
         case .thinking: .thinking
         case .done, .ended: .idle
         }

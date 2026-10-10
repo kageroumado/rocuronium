@@ -414,38 +414,47 @@ final class CommandRouter {
     }
 
     func route(_ data: Data) async -> Data {
+        consentOutcome = nil
+        appResolution = nil
+        let request: Request
         do {
-            consentOutcome = nil
-            appResolution = nil
-            let request = try JSONDecoder().decode(Request.self, from: data)
-            if let complaint = validate(request) {
-                return encode(["ok": false, "error": complaint])
-            }
-            var reply = try await execute(request)
-            // A consent prompt shown mid-request rides out on the reply, so the caller learns a
-            // human approved or declined — actionable state, not just success/failure prose.
-            if let consentOutcome { reply["consent"] = consentOutcome }
-            if let appResolution { reply["appResolution"] = appResolution }
-            if Self.actingVerbs.contains(request.command) {
-                activityLog.append(
-                    action: request.command,
-                    target: Self.target(of: request),
-                    verdict: reply["verdict"] as? String
-                        ?? (reply["ok"] as? Bool == true ? "ok" : "refused"),
-                    summary: (reply["summary"] as? String ?? reply["error"] as? String ?? "")
-                        + (consentOutcome == "asserted-by-caller" ? " · consent asserted by the caller; no prompt shown" : ""),
-                )
-            }
-            if Self.narratedVerbs.contains(request.command) {
-                overlay.commandFinished(reply)
-            }
-            if Self.actingVerbs.contains(request.command), let hint = endSignalHint(for: request) {
-                reply["hint"] = hint
-            }
-            return encode(reply)
+            request = try JSONDecoder().decode(Request.self, from: data)
         } catch {
             return encode(Self.errorReply(from: error))
         }
+        if let complaint = validate(request) {
+            return encode(["ok": false, "error": complaint])
+        }
+        // A thrown refusal is a reply like any other: `execute` may already have opened the
+        // panel's narration, and only `commandFinished` closes it. Skipping it leaves the
+        // action in flight, which holds the panel up with no silence limit.
+        var reply: [String: Any]
+        do {
+            reply = try await execute(request)
+        } catch {
+            reply = Self.errorReply(from: error)
+        }
+        // A consent prompt shown mid-request rides out on the reply, so the caller learns a
+        // human approved or declined — actionable state, not just success/failure prose.
+        if let consentOutcome { reply["consent"] = consentOutcome }
+        if let appResolution { reply["appResolution"] = appResolution }
+        if Self.actingVerbs.contains(request.command) {
+            activityLog.append(
+                action: request.command,
+                target: Self.target(of: request),
+                verdict: reply["verdict"] as? String
+                    ?? (reply["ok"] as? Bool == true ? "ok" : "refused"),
+                summary: (reply["summary"] as? String ?? reply["error"] as? String ?? "")
+                    + (consentOutcome == "asserted-by-caller" ? " · consent asserted by the caller; no prompt shown" : ""),
+            )
+        }
+        if Self.narratedVerbs.contains(request.command) {
+            overlay.commandFinished(reply)
+        }
+        if Self.actingVerbs.contains(request.command), let hint = endSignalHint(for: request) {
+            reply["hint"] = hint
+        }
+        return encode(reply)
     }
 
     /// Turns a thrown engine error into the structured reply the socket protocol speaks: the

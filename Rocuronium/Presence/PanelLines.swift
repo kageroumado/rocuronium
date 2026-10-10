@@ -92,7 +92,7 @@ struct PanelLines: Equatable {
             return .text(model.actionCount == 0 ? "Nothing needed doing" : "Finished", .quiet)
         }
         if presentation.mode == .ended { return .text(PanelText.endedQuietLine, .quiet) }
-        if let action = model.action {
+        if let action = model.liveAction(at: date) {
             if action.verb == "wait" { return .text(PanelText.waitLine(for: action), .quiet) }
             if action.cursorTaking { return .text(PanelText.handsOffLine(for: action, resolved: model.resolved), .quiet) }
             return .text(PanelText.actionLine(for: action, resolved: model.resolved) + "…", .quiet)

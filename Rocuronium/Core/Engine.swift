@@ -234,6 +234,10 @@ actor Engine {
                     + "'+', e.g. shift+tab or cmd+=. For text use 'type'."
             case let .hazardousShortcut(path, consequence):
                 "That shortcut resolves to '\(path)', which \(consequence). Pass confirm:true if that is genuinely intended. (Every app's menu bar includes the Apple menu, so session-wide items are reachable from any target.)"
+            case let .menuPathNotFound(component, available) where available.isEmpty:
+                "No menu item '\(component)': that menu is empty. "
+                    + "Accessibility shows it with no items: an app in the background often leaves its menus unbuilt until they open on screen. "
+                    + "Bring it to the front with `activate` and retry, or press the item's key equivalent with `shortcut`."
             case let .menuPathNotFound(component, available):
                 "No menu item '\(component)' at that level. It offers: \(available.joined(separator: ", "))."
             case let .menuPathIsSubmenu(path, items):
