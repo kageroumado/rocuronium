@@ -16,3 +16,6 @@ Docs/
 
 # Design prototypes are local scratch, never shipped.
 Prototypes/
+
+# LLVM coverage output, written to the working directory by instrumented test runs.
+*.profraw
