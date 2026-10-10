@@ -55,6 +55,117 @@ struct TrustBoundaryTests {
         #expect(!CodeIdentity.isTrusted(executableAt: copy.path, identifiers: ["rocuronium"]))
     }
 
+    // MARK: - CodeIdentity: running peers
+
+    @Test func testHostIsNotATrustedPeer() throws {
+        // A real audit token for a live process that is not one of ours.
+        let token = try #require(Self.auditToken(of: getpid()))
+        #expect(!CodeIdentity.isTrusted(auditToken: token, identifiers: ["rocuronium", "glass.kagerou.rocuronium"]))
+    }
+
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func runningSignedCLIIsTrustedOnlyUnderItsTeamAndIdentifier() throws {
+        let peer = try RunningPeer(executable: Self.installedCLI)
+        defer { peer.stop() }
+        #expect(CodeIdentity.isTrusted(auditToken: peer.token, identifiers: ["rocuronium"]))
+        #expect(!CodeIdentity.isTrusted(auditToken: peer.token, identifiers: ["adrafinil"]))
+        #expect(!CodeIdentity.isTrusted(auditToken: peer.token, team: "ZZZZZZZZZZ", identifiers: ["rocuronium"]))
+    }
+
+    /// The reinstall case: a long-lived MCP server whose bundle went to the Trash and was
+    /// overwritten there. The process still runs the code it was signed as, so it stays trusted.
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func runningPeerStaysTrustedAfterItsFileIsReplaced() throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appending(path: "rocuronium").path
+        try FileManager.default.copyItem(atPath: Self.installedCLI, toPath: path)
+        let peer = try RunningPeer(executable: path)
+        defer { peer.stop() }
+
+        let replacement = directory.appending(path: "replacement").path
+        try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: replacement)
+        try #require(rename(replacement, path) == 0)
+
+        #expect(CodeIdentity.isTrusted(auditToken: peer.token, identifiers: ["rocuronium"]))
+    }
+
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func adHocPeerClaimingOurIdentifierIsNotTrusted() throws {
+        let directory = try Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appending(path: "rocuronium").path
+        try FileManager.default.copyItem(atPath: Self.installedCLI, toPath: path)
+        try Self.codesign(["--force", "--sign", "-", "--identifier", "rocuronium", path])
+        let peer = try RunningPeer(executable: path)
+        defer { peer.stop() }
+
+        #expect(!CodeIdentity.isTrusted(auditToken: peer.token, identifiers: ["rocuronium"]))
+    }
+
+    @Test(.enabled(if: installedBundlePresent, "installed bundle absent"))
+    func exitedPeerIsNotTrusted() throws {
+        let peer = try RunningPeer(executable: Self.installedCLI)
+        peer.stop()
+        #expect(!CodeIdentity.isTrusted(auditToken: peer.token, identifiers: ["rocuronium"]))
+    }
+
+    /// A CLI held open as an MCP server, the shape of a real long-lived peer.
+    private final class RunningPeer {
+        let process = Process()
+        let input = Pipe()
+        let token: audit_token_t
+
+        init(executable: String) throws {
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = ["mcp"]
+            process.standardInput = input
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            guard let token = TrustBoundaryTests.auditToken(of: process.processIdentifier) else {
+                process.terminate()
+                throw CocoaError(.featureUnsupported)
+            }
+            self.token = token
+        }
+
+        func stop() {
+            try? input.fileHandleForWriting.close()
+            process.waitUntilExit()
+        }
+    }
+
+    private static func auditToken(of pid: pid_t) -> audit_token_t? {
+        var task: mach_port_t = 0
+        guard task_name_for_pid(mach_task_self_, pid, &task) == KERN_SUCCESS else { return nil }
+        defer { mach_port_deallocate(mach_task_self_, task) }
+        var token = audit_token_t()
+        var count = mach_msg_type_number_t(MemoryLayout<audit_token_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &token) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(task, task_flavor_t(TASK_AUDIT_TOKEN), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? token : nil
+    }
+
+    private static func scratchDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "peer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private static func codesign(_ arguments: [String]) throws {
+        let tool = Process()
+        tool.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        tool.arguments = arguments
+        tool.standardError = FileHandle.nullDevice
+        try tool.run()
+        tool.waitUntilExit()
+        try #require(tool.terminationStatus == 0)
+    }
+
     // MARK: - Credential surfaces
 
     @Test func lockScreenProcessesAreRefused() {

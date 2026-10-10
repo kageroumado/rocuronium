@@ -223,14 +223,12 @@ final class ControlServer {
         let uid: uid_t
         let executablePath: String
 
-        let auditToken: Data?
+        let auditToken: audit_token_t?
 
         init?(descriptor: Int32) {
             var token = audit_token_t()
             var tokenSize = socklen_t(MemoryLayout<audit_token_t>.size)
-            auditToken = getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &tokenSize) == 0
-                ? withUnsafeBytes(of: &token) { Data($0) }
-                : nil
+            auditToken = getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &tokenSize) == 0 ? token : nil
 
             var credentials = xucred()
             var size = socklen_t(MemoryLayout<xucred>.size)
@@ -254,8 +252,10 @@ final class ControlServer {
         /// sandboxed helper running as the user could otherwise drive the machine through it.
         var isAuthorized: Bool { uid == getuid() && isSignedByUs }
 
+        /// Without an audit token there is no race-free way to name the peer, so it is refused.
         private var isSignedByUs: Bool {
-            CodeIdentity.isTrusted(auditToken: auditToken, pid: pid, identifiers: Constants.peerIdentifiers)
+            guard let auditToken else { return false }
+            return CodeIdentity.isTrusted(auditToken: auditToken, identifiers: Constants.peerIdentifiers)
         }
 
         var description: String { "pid \(pid) uid \(uid) — \(executablePath)" }

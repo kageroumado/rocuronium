@@ -37,7 +37,7 @@ RocuroniumTests/  unit tests
 
 The `.app` holds the Accessibility + Screen Recording grants and does all work; the CLI is a dumb pipe (JSON over a `SOCK_STREAM` unix socket, newline-delimited, one request-reply per connection). `rocuronium mcp` wraps the same socket in MCP stdio, exposing the verbs as typed tools.
 
-- **Auth**: peer identity via `LOCAL_PEERTOKEN` (audit token, race-free) checked against a Developer ID team-OU anchor. Same-uid *and* signed by us.
+- **Auth**: peer identity via `LOCAL_PEERTOKEN` (audit token, race-free); `SecTaskValidateForRequirement` has the kernel match the *running* process against Developer ID + team + identifier. Same-uid *and* signed by us. Never `SecCodeCheckValidity` here: it also compares the file on disk, and a reinstall trashes the bundle that long-lived `rocuronium mcp` servers are still running from.
 - **Serialization**: the accept loop dispatches each request to the main actor via a semaphore-blocked task, bounded at 30 s; a timeout cancels the in-flight task rather than abandoning it (an abandoned hardware action would move the cursor for an agent that believes it failed). **One request at a time by construction** — `Engine` and `TreeCache` depend on it. Making the accept loop concurrent without making `Engine` reentrant corrupts `TreeCache` and interleaves cursor positions.
 
 ## The tentacle ladder

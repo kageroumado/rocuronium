@@ -1,4 +1,5 @@
 import Foundation
+import LightweightCodeRequirements
 import Security
 
 /// The one signing identity the daemon trusts: Apple-anchored, this team, and a named binary.
@@ -20,23 +21,33 @@ nonisolated enum CodeIdentity {
         return #"anchor apple generic and certificate leaf[subject.OU] = "\#(teamIdentifier)" and (\#(named))"#
     }
 
-    /// Whether the running code behind an audit token (or, failing that, a pid) satisfies the
-    /// requirement. The audit token is the race-free identity; the pid is a fallback for a
-    /// socket that could not supply one.
-    static func isTrusted(auditToken: Data?, pid: pid_t, identifiers: [String]) -> Bool {
-        var attributes: [String: Any] = [:]
-        if let auditToken {
-            attributes[kSecGuestAttributeAudit as String] = auditToken
-        } else if pid > 0 {
-            attributes[kSecGuestAttributePid as String] = pid
-        } else {
-            return false
+    /// The running-process form of ``requirement(identifiers:)``, evaluated by the kernel:
+    /// a Developer ID signature that code signing accepted at exec, this team, a named binary,
+    /// and a signature still valid now (`CS_VALID`, cleared when a page fails validation).
+    static func processRequirement(
+        team: String = teamIdentifier, identifiers: [String],
+    ) throws -> ProcessCodeRequirement {
+        try .allOf {
+            ValidationCategory(.developerID)
+            TeamIdentifier(team)
+            SigningIdentifier.in(identifiers)
+            ProcessCodeSigningFlags.isSuperset(of: [.isDynamicallyValid])
         }
-        var code: SecCode?
-        guard SecCodeCopyGuestWithAttributes(nil, attributes as CFDictionary, [], &code) == errSecSuccess,
-              let code, let requirement = makeRequirement(identifiers)
+    }
+
+    /// Whether the process behind an audit token satisfies ``processRequirement(team:identifiers:)``.
+    ///
+    /// Judged on what the kernel recorded when the process was exec'd, NOT on the file at its
+    /// path — `SecCodeCheckValidity` re-reads that file, so a long-lived client whose bundle was
+    /// replaced or trashed by a reinstall fails it with `errSecCSStaticCodeChanged` while running
+    /// exactly the code it was signed as. The audit token names the process race-free; a pid
+    /// could be recycled between connect and check.
+    static func isTrusted(auditToken: audit_token_t, team: String = teamIdentifier, identifiers: [String]) -> Bool {
+        guard let task = SecTaskCreateWithAuditToken(nil, auditToken),
+              let requirement = try? processRequirement(team: team, identifiers: identifiers)
         else { return false }
-        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        // Throws `taskIsNoLongerValid` once the peer has exited; an absent peer is untrusted.
+        return (try? SecTaskValidateForRequirement(task: task, requirement: requirement)) == true
     }
 
     /// Whether the executable at `path` satisfies the requirement, evaluated on the bytes on

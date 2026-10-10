@@ -807,7 +807,12 @@ enum MCPServer {
         }
         payload["command"] = name
         guard let socketReply = forward(payload) else {
-            return errorContent("could not reach Rocuronium.app — is it running?")
+            return errorContent(StaleInstall.diagnosis() ?? "could not reach Rocuronium.app — is it running?")
+        }
+        // A server outliving its install fails here first; the daemon's own words cannot say why.
+        if let error = socketReply["error"] as? String, error.hasPrefix("unauthorized"),
+           let stale = StaleInstall.diagnosis() {
+            return errorContent("\(stale)\n\(error)")
         }
         let text = (try? JSONSerialization.data(withJSONObject: socketReply, options: [.sortedKeys]))
             .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
