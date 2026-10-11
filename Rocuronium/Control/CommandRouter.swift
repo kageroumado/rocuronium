@@ -42,13 +42,22 @@ final class CommandRouter {
     let activityLog = ActivityLog()
     /// The deterministic practice window every verb can be exercised against.
     let demoStage = DemoStageController()
+    /// The agent account's off-console session: enable, start, stop, status, and the switch
+    /// that ends it when this daemon stops vouching for it.
+    let agentSession = AgentSessionController()
 
     init() {
         virtualDisplay = VirtualDisplayBridge(engine: engine)
         PresenceOverlayController.shared = overlay
         PresenceOverlayController.installRelayHooks()
-        overlay.onEmergencyStop = { [activityLog] in
+        agentSession.record = { [activityLog] action, verdict, summary in
+            activityLog.append(action: action, target: "agent session", verdict: verdict, summary: summary)
+        }
+        overlay.onEmergencyStop = { [activityLog, agentSession] in
             StandingApproval.end()
+            // The chord is session-scoped: it never reaches a daemon in the agent's off-console
+            // session, so this one ends that session on its behalf.
+            agentSession.emergencyStop()
             activityLog.append(
                 action: "halt", target: "⌃⌥⇧⎋",
                 verdict: "halted",
@@ -154,6 +163,10 @@ final class CommandRouter {
         /// On any acting verb or `wait`: this is the last action of the chain. The panel goes
         /// to Done once its result lands — the per-action form of `busy off`.
         var done: Bool?
+        /// For `session enable`: the agent account's short name, when it is not `agent`.
+        var account: String?
+        /// For `session enable`: an existing agent account's password, read from the CLI's stdin.
+        var password: String?
         /// Why a virtual display lease is being taken; recorded on the lease.
         var reason: String?
         /// Lease duration. The bridge's 30-minute backstop applies when absent.
@@ -513,14 +526,17 @@ final class CommandRouter {
         // The ⌃⌥⇧⎋ halt refuses everything that perceives or acts. `status`, `diag`, and
         // `activity` still answer — an agent must be able to learn *why* its verbs stopped
         // working — and no socket verb can clear the flag: resume is the popover button.
-        if EmergencyStop.isHalted, !["status", "diag", "activity"].contains(request.command) {
+        // `session stop` and `session status` answer too: stopping the agent session is what a
+        // halt is for.
+        let sessionSafe = request.command == "session" && ["stop", "status", nil].contains(request.action)
+        if EmergencyStop.isHalted, !["status", "diag", "activity"].contains(request.command), !sessionSafe {
             return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true]
         }
         // Any command that perceives or acts marks the session active, which places (and
         // keeps renewing) the session-level display hold. Status-shaped commands do not:
         // a monitoring loop polling `status` must not pin the display awake all night.
         switch request.command {
-        case "status", "diag", "request-capture", "display", "activity", "demo", "busy": break
+        case "status", "diag", "request-capture", "display", "activity", "demo", "busy", "session": break
         default:
             adrafinil.noteActivity()
             // A command aimed at an app with a parked window renews that window's
@@ -637,8 +653,18 @@ final class CommandRouter {
         case "activity": activity()
         case "busy": busy(request)
         case "demo": demo(request)
+        case "session": await session(request)
         default: ["ok": false, "error": "unknown command '\(request.command)'"]
         }
+    }
+
+    /// `session enable|start|stop|status`. `watch` and `remote` never reach here: they run in the
+    /// CLI inside the agent account.
+    private func session(_ request: Request) async -> [String: Any] {
+        if request.action == "enable" {
+            return await agentSession.enable(password: request.password, account: request.account)
+        }
+        return await agentSession.handle(action: request.action, request: [:])
     }
 
     /// Resolves an app name or pid from a request. Exposed for the plan executor's guard

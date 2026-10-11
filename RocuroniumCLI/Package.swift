@@ -18,9 +18,25 @@ let package = Package(
     name: "RocuroniumCLI",
     platforms: [.macOS(.v26)],
     targets: [
-        .executableTarget(name: "rocuronium", path: "Sources/rocuronium", swiftSettings: swiftSettings),
+        .executableTarget(
+            name: "rocuronium", dependencies: ["SessionKit"], path: "Sources/rocuronium",
+            swiftSettings: swiftSettings,
+        ),
+        // The agent session's account lifecycle, shared by the CLI (the in-session watchdog and
+        // the SSH forced command) and the root helper (provisioning and removal).
+        .target(name: "SessionKit", path: "Sources/SessionKit", swiftSettings: swiftSettings),
+        // The privileged half of `session enable`: a LaunchDaemon the app registers through
+        // SMAppService and talks to over XPC. Root, so it holds as little as it can.
+        .executableTarget(
+            name: "rocuronium-session-helper", dependencies: ["SessionKit"],
+            path: "Sources/rocuronium-session-helper", swiftSettings: swiftSettings,
+        ),
         .testTarget(
             name: "rocuroniumTests", dependencies: ["rocuronium"], path: "Tests/rocuroniumTests",
+            swiftSettings: swiftSettings,
+        ),
+        .testTarget(
+            name: "SessionKitTests", dependencies: ["SessionKit"], path: "Tests/SessionKitTests",
             swiftSettings: swiftSettings,
         ),
     ],

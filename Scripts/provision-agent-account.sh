@@ -1,9 +1,11 @@
 #!/bin/bash
 # Provision a dedicated agent account and strip it down to something worth running.
 #
-# The user-facing gesture is "enable agent session" plus a password; everything below is what
-# that gesture has to do. Run as root — rocuronium invokes it behind a single authorization
-# prompt. Idempotent: safe to re-run against an account that already exists.
+# The manual equivalent of `rocuronium session enable`, which does the same work from Swift
+# (SessionKit's Provisioner, run by the root session helper). Nothing in the app calls this
+# script and it is not in the bundle; it is for provisioning by hand with sudo, and for reading
+# what enabling does. Keep the two in step. Idempotent: safe to re-run against an account that
+# already exists.
 #
 # The password is read from stdin, never from argv, so it never reaches the process table or a
 # shell history. `sysadminctl` only accepts one on argv or from a prompt, so it gets a pty.

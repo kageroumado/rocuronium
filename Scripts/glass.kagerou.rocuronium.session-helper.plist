@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>glass.kagerou.rocuronium.session-helper</string>
+	<!-- Relative to the app bundle: SMAppService resolves it, so the daemon always runs the
+	     helper that shipped with the app that registered it. -->
+	<key>BundleProgram</key>
+	<string>Contents/Resources/rocuronium-session-helper</string>
+	<!-- On demand only: launchd starts it for a message and it exits after two idle minutes. -->
+	<key>MachServices</key>
+	<dict>
+		<key>glass.kagerou.rocuronium.session-helper</key>
+		<true/>
+	</dict>
+	<key>AssociatedBundleIdentifiers</key>
+	<string>glass.kagerou.rocuronium</string>
+</dict>
+</plist>

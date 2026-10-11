@@ -617,6 +617,22 @@ enum MCPServer {
             properties: [:], required: [],
         ),
         tool(
+            "session",
+            """
+            The agent account's off-console session — a second macOS user logged in on its \
+            own virtual display, with its own cursor and focus, so hardware-grade input there \
+            never touches the human's. 'status' (default) reports the account and uid, whether \
+            a session exists and its uptime, whether the dead-man's switch is armed, the \
+            session's displays, and whether the Rocuronium daemon inside answers and reports \
+            offConsole. 'stop' ends the session (launchctl bootout of the account's GUI \
+            domain) and confirms its loginwindow is gone. Enabling and starting are the \
+            human's, from the CLI: an agent may stop a session but never create one.
+            """,
+            properties: [
+                "action": ["type": "string", "enum": ["status", "stop"], "description": "'status' (default) or 'stop'"],
+            ], required: [],
+        ),
+        tool(
             "demo",
             """
             Open Rocuronium's deterministic demo stage — a fixed practice window at \
@@ -804,6 +820,11 @@ enum MCPServer {
                 "'\(name)' does not accept \(rejected.map { "'\($0)'" }.joined(separator: ", "))"
                     + " — accepted: \(declared.sorted().joined(separator: ", "))",
             )
+        }
+        // The schema's enum is advice to the model; this is the rule. Creating a second login
+        // session is the human's call, so MCP reaches only the two harmless subcommands.
+        if name == "session", let action = payload["action"] as? String, !["status", "stop"].contains(action) {
+            return errorContent("session over MCP takes 'status' or 'stop'; enable and start are run by the human from the CLI")
         }
         payload["command"] = name
         guard let socketReply = forward(payload) else {

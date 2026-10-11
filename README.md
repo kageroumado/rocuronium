@@ -95,7 +95,7 @@ Add to your Claude Code config:
 }
 ```
 
-All verbs are exposed as MCP tools with the same names and arguments.
+All verbs are exposed as MCP tools with the same names and arguments; `session` is limited to `status` and `stop` there, since creating a login session is the human's call.
 
 ## Commands
 
@@ -107,6 +107,7 @@ All verbs are exposed as MCP tools with the same names and arguments.
 | **Orchestrate** | `plan` (multi-step with guards) |
 | **Windows** | `resize` `window` (fullscreen, minimize, zoom) `space` (Mission Control Spaces) |
 | **Isolate** | `display` (virtual display lease) `park` (move window to it) |
+| **Agent session** | `session` `enable` · `start` · `stop` · `status` — a second macOS user, off-console, with its own cursor; a dead-man's switch ends it when the console daemon stops vouching for it (MCP: `status` and `stop` only) |
 | **Meta** | `busy` (hold the presence overlay up while working) `demo` (practice window) `request-capture` `mcp` `guide` (the agent skill baked into the binary) `version` |
 
 One coordinate frame everywhere: points, origin at the top-left of the main display.

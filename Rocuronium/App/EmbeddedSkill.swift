@@ -147,7 +147,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 - **⌃⌥⇧⎋ is the emergency stop.** It halts the engine mid-action. Afterward every acting/perceiving verb is refused with "halted by the human"; `status`/`activity` still answer with `halted: true`. **Resume is a button in the menu-bar popover and nothing else — no socket verb can clear the halt.** If your verbs are suddenly refused with that message, stop and wait; do not look for a workaround.
 
 → The refusal catalog (each refusal, the flag that permits it, why it exists) and the presence model: **reference/presence-and-refusals.md**
-→ Isolation — the virtual display as a lease, `park`, the park-then-hardware pattern: **reference/isolation.md**
+→ Isolation — the virtual display as a lease, `park`, the park-then-hardware pattern, and the agent session (`session`): **reference/isolation.md**
 
 ## Environment facts that trip agents
 
@@ -266,6 +266,20 @@ The sting clicks whatever window is topmost at the coordinate, so a hardware cli
 - `space move --app X [--window …] --to <index>` — sends a window to another Space without switching to it. Non-disruptive to the current view, so it is un-gated and just reported.
 
 Built on the same private SkyLight/CGS footing as the virtual display; `space list` degrades to empty rather than lying if the API is mid-transition.
+
+## The agent session: a second user with its own cursor
+
+The virtual display hides windows; it does not give you a cursor of your own. The **agent session** does: a second macOS user (`agent` by default) logged in off-console, so the hardware tentacle there takes *that* session's cursor, which no human is watching. It is a parallel worker, not a proxy — none of the human's logins, files, or keychain exist in it.
+
+- `session status` — the account and uid, whether a session exists and for how long, whether the dead-man's switch is armed, the session's displays, and whether Rocuronium inside answers with `offConsole: true`. Safe to poll; answers even while halted.
+- `session stop` — ends the session (bootout of the account's GUI domain) and confirms its loginwindow is gone. Always allowed, halted or not.
+- `session enable` / `session start` belong to the human, from the CLI: enabling asks for a one-time helper approval, and starting creates a login session. Over MCP, `session` takes `status` and `stop` only.
+
+What to know before relying on one:
+- **It ends itself.** A watcher inside the account ends the session when the console daemon stops sending heartbeats (15 s), when that daemon quits or crashes, or when the human presses ⌃⌥⇧⎋ on the console. A session you were driving can vanish; `session status` says why in the activity log.
+- **Inside it, `offConsole` is true** and presence reads `away`: the presence gates relax and hardware events post at the session tap, which is what keeps them off the human's screen. Never trust a daemon reporting `offConsole: false` to be the agent session.
+- **Accessibility is granted once, by a human, inside the session.** Until then `status` there shows `trusted: false` and every posted event is silently dropped — reads work, acts do not.
+- **Start one per task, stop it when done.** An idle session costs ~2.4 W that cannot be reduced (SIP protects the daemons that spend it); a fresh one takes seconds.
 
 """##),
         File(path: "reference/plans.md", contents: ##"""

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Prepare a freshly built Rocuronium.app for signing: build the dependency-free SwiftPM CLI
-# and copy it into Contents/Resources. One signature and one
+# Prepare a freshly built Rocuronium.app for signing: build the dependency-free SwiftPM CLI and
+# session helper and copy them into the bundle. One signature and one
 # notarization then cover both, and the embedded CLI carries the app's Developer ID — which
 # is what lets the control socket verify that a process talking to it is one of ours.
 #
@@ -36,3 +36,13 @@ echo "==> Embedding the CLI"
 # launches the CLI, which prints usage and exits. Resources/ keeps the clean binary name.
 mkdir -p "$APP/Contents/Resources"
 cp "$CLI" "$APP/Contents/Resources/rocuronium"
+
+echo "==> Embedding the session helper"
+# The root half of `session enable`, built by the same package. Next to the CLI so the pipeline's
+# inside-out signing seals it with the app's Developer ID; the LaunchDaemon plist SMAppService
+# reads lives in Contents/Library/LaunchDaemons and names it by its bundle-relative path.
+HELPER="$PROJECT_DIR/RocuroniumCLI/.build/release/rocuronium-session-helper"
+[ -x "$HELPER" ] || { echo "session helper not produced at $HELPER"; exit 1; }
+cp "$HELPER" "$APP/Contents/Resources/rocuronium-session-helper"
+mkdir -p "$APP/Contents/Library/LaunchDaemons"
+cp "$PROJECT_DIR/Scripts/glass.kagerou.rocuronium.session-helper.plist" "$APP/Contents/Library/LaunchDaemons/"

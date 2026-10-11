@@ -62,7 +62,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 - **⌃⌥⇧⎋ is the emergency stop.** It halts the engine mid-action. Afterward every acting/perceiving verb is refused with "halted by the human"; `status`/`activity` still answer with `halted: true`. **Resume is a button in the menu-bar popover and nothing else — no socket verb can clear the halt.** If your verbs are suddenly refused with that message, stop and wait; do not look for a workaround.
 
 → The refusal catalog (each refusal, the flag that permits it, why it exists) and the presence model: **reference/presence-and-refusals.md**
-→ Isolation — the virtual display as a lease, `park`, the park-then-hardware pattern: **reference/isolation.md**
+→ Isolation — the virtual display as a lease, `park`, the park-then-hardware pattern, and the agent session (`session`): **reference/isolation.md**
 
 ## Environment facts that trip agents
 

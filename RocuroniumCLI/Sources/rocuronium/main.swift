@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SessionKit
 
 // rocuronium — a thin client for the control socket.
 //
@@ -67,6 +68,20 @@ Windows
   park       --app <a> [--x <n> --y <n>]   onto the virtual display, or back to a point
   space      <list | switch (--next|--prev|--to <n>) [--confirm] | move --app <a> --to <n>>
                         real Mission Control Spaces; switch is presence-gated like activate
+
+Agent session — a second macOS user, off-console, with its own cursor (Docs/AGENT-SESSION.md)
+  session    status                        account, uid, session uptime, displays, the daemon inside,
+                                           and the dead-man's switch
+             enable [--account <name>] [--password-stdin]
+                                           provision the agent account through the session helper
+                                           (approved once in Login Items); a new account gets a
+                                           generated password kept in the keychain
+             start                         bring the session up, arm the dead-man's switch, wait for
+                                           Rocuronium inside to report offConsole
+             stop                          bootout the session; the only path allowed before a delete
+             watch [--seconds <n>]         inside the agent account: end this session when stdin
+                                           goes quiet or closes (the dead-man's switch; refuses on
+                                           the console)
 
 Meta
   busy       on --goal <t> [--steps "a|b|c"]   declare what you are doing; the panel headline
@@ -224,9 +239,18 @@ if command == "mcp" {
     MCPServer.run(forward: send)
 }
 
+// `session watch` and `session remote` run inside the agent account and act on their own; the
+// other `session` subcommands go over the socket below.
+if command == "session", let action = arguments.first {
+    if action == "remote" { SessionRemote.run(forward: send) }
+    if action == "watch" {
+        SessionRemote.watch(deadlineSeconds: SessionWatch.deadline(requested: value(for: "seconds").flatMap { Int($0) }))
+    }
+}
+
 var payload: [String: Any] = ["command": command]
 // `display`, `demo`, `busy`, and `space` take a positional subcommand: `rocuronium space switch`.
-if command == "display" || command == "demo" || command == "busy" || command == "space",
+if command == "display" || command == "demo" || command == "busy" || command == "space" || command == "session",
    let action = arguments.first, !action.hasPrefix("-") {
     payload["action"] = action
     arguments.removeFirst()
@@ -264,7 +288,7 @@ if command == "plan" {
     }
 }
 for flag in ["app", "label", "role", "text", "reason", "lease", "path", "keys", "easing", "button", "via", "since", "window", "modifiers", "note", "token", "fullscreen",
-             "goal", "steps", "result", "why"] {
+             "goal", "steps", "result", "why", "account"] {
     if let found = value(for: flag) { payload[flag] = found }
 }
 // Kebab-case on the command line, camelCase on the wire.
@@ -328,6 +352,11 @@ for (flag, key) in [("width", "w"), ("height", "h"), ("window-index", "windowInd
         exit(2)
     }
     payload[key] = number
+}
+// An existing agent account's password, for `session enable`: from stdin, never argv.
+if arguments.contains("--password-stdin") {
+    let line = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+    payload["password"] = line.trimmingCharacters(in: .newlines)
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--foreground") { payload["foreground"] = true }
@@ -669,6 +698,31 @@ case "plan":
         }
     }
     print(reply["summary"] as? String ?? "done")
+
+case "session":
+    var current = reply
+    // `start` returns as soon as the bring-up is under way — a session takes ~10–20 s, and the
+    // daemon answers one request at a time — so the CLI follows it through `status`.
+    if payload["action"] as? String == "start" {
+        var printed = Set<String>()
+        let deadline = Date().addingTimeInterval(120)
+        while true {
+            for line in current["progress"] as? [String] ?? [] where printed.insert(line).inserted {
+                print("· \(line)")
+            }
+            guard current["state"] as? String == "starting", Date() < deadline else { break }
+            usleep(1_000_000)
+            guard let next = send(["command": "session", "action": "status"]) else { break }
+            current = next
+        }
+    }
+    for line in current["lines"] as? [String] ?? [] { print(line) }
+    if let summary = current["summary"] as? String { print(summary) }
+    if let error = current["error"] as? String {
+        FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(current["ok"] as? Bool == false ? 1 : 0)
 
 case "activity":
     for entry in reply["entries"] as? [[String: Any]] ?? [] {
