@@ -78,6 +78,8 @@ Meta
   demo       [show|reset|hide|render --path <f.png>]   practice window, --app Rocuronium
   request-capture                          fire the Screen Recording prompt
   mcp                                      serve these verbs as MCP tools over stdio
+  version                                  this binary's version, read from the Rocuronium.app it
+                                           lives in, and the running daemon's (also --version)
   guide      [<topic> | --list | --install [--to <dir>]]
                                            the agent skill baked into this binary: the full
                                            operator guide, or one reference by name; --install
@@ -139,6 +141,31 @@ Nine things to know:
 // MARK: - Argument parsing
 
 var arguments = Array(CommandLine.arguments.dropFirst())
+
+// `version` reads the stamp from the bundle around the executable actually running, then asks
+// the daemon for its own, so a CLI from one install and a daemon from another are told apart.
+if let first = arguments.first, ["version", "--version", "-V"].contains(first) {
+    let executable = StaleInstall.runningExecutablePath()
+    if let stamp = InstalledVersion.read(executablePath: executable) {
+        print("rocuronium \(stamp.display)   \(InstalledVersion.bundlePath(executablePath: executable) ?? "")")
+    } else {
+        print("rocuronium unstamped build   \(executable ?? "?") (not inside Rocuronium.app)")
+    }
+    if let status = send(["command": "status"]), let daemon = status["version"] as? String {
+        let daemonStamp = InstalledVersion.Stamp(version: daemon, build: status["build"] as? String ?? "0")
+        print("daemon     \(daemonStamp.display)   running")
+        if let stamp = InstalledVersion.read(executablePath: executable), stamp != daemonStamp {
+            FileHandle.standardError.write(Data(
+                "rocuronium: the running daemon is not the installed build — restart Rocuronium.app (Scripts/install-launchagent.sh)\n".utf8))
+        }
+    } else if send(["command": "status"]) != nil {
+        print("daemon     running, from a build that predates the version field (1.5.0 or older)")
+    } else {
+        print("daemon     not running")
+    }
+    exit(0)
+}
+
 // Asking for help is a success; only an unparseable invocation exits 2.
 let helpWords: Set<String> = ["--help", "-h", "help"]
 guard let command = arguments.first, !command.hasPrefix("-"), !helpWords.contains(command) else {
@@ -424,6 +451,7 @@ case "status":
     // JSON booleans arrive as NSNumber and would otherwise print as 0 and 1.
     func yesNo(_ key: String) -> String { reply[key] as? Bool == true ? "yes" : "no" }
     let trusted = reply["trusted"] as? Bool == true
+    if let version = reply["version"] { print("daemon        \(version) (\(reply["build"] ?? "?"))") }
     print("presence      \(reply["presence"] ?? "?")  (idle \(reply["idleSeconds"] ?? "?")s)")
     print("accessibility \(trusted ? "granted" : "NOT GRANTED — nothing works until it is")")
     print("can see       \(yesNo("canSee"))  (display asleep: \(yesNo("displayAsleep")))")

@@ -12,11 +12,11 @@ import Foundation
 /// working", and a registered hotkey is consumed system-wide, so holding one around the clock
 /// would take it from every other app for a shortcut with nothing to stop.
 ///
-/// Three modifiers, and deliberately no Command. ⌃⌥⇧⎋ — the obvious choice — is Force Quit
-/// (⌘⌃⌥⇧⎋) without its Command key, which puts the stop chord directly under the muscle memory
+/// Three modifiers, and deliberately no Command. ⌥⎋ — the obvious choice — is Force Quit
+/// (⌘⌥⎋) without its Command key, which puts the stop chord directly under the muscle memory
 /// of the shortcut people reach for when something misbehaves; it was hit by accident. Any
 /// chord containing ⌘ has the mirror problem: a slipped finger opens Force Quit at the exact
-/// moment the user wants the agent to stop, not their apps to die.
+/// moment the user wants the agent to stop, not their apps to die. ⌃⌥⇧⎋ is neither.
 @MainActor
 final class HotkeyMonitor {
     struct Chord {

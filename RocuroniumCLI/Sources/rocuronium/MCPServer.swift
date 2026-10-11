@@ -759,7 +759,7 @@ enum MCPServer {
                 reply(id, result: [
                     "protocolVersion": protocolVersion,
                     "capabilities": ["tools": [String: Any]()],
-                    "serverInfo": ["name": "rocuronium", "version": "1.0"],
+                    "serverInfo": ["name": "rocuronium", "version": InstalledVersion.read()?.version ?? "dev"],
                     "instructions": instructions,
                 ])
             case "ping":

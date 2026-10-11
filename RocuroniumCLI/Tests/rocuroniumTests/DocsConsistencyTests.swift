@@ -56,6 +56,12 @@ struct DocsConsistencyTests {
         #expect(usage.contains("guide"))
     }
 
+    /// `version` is CLI-only too, and `--version` is the spelling every other tool teaches.
+    @Test func versionAppearsInUsage() {
+        #expect(usage.contains("version"))
+        #expect(usage.contains("--version"))
+    }
+
     /// The generated `EmbeddedSkill.swift` must match the skill directory it was baked from,
     /// or `rocuronium guide` prints a manual the repository no longer says.
     @Test func embeddedSkillMatchesTheSkillDirectory() throws {

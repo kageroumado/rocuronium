@@ -37,7 +37,7 @@ nonisolated enum StaleInstall {
 
     /// The kernel's path for this process's executable, which follows the file through a move
     /// to the Trash — `CommandLine.arguments[0]` keeps the path it was launched by.
-    private static func runningExecutablePath() -> String? {
+    static func runningExecutablePath() -> String? {
         var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
         let length = proc_pidpath(getpid(), &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }

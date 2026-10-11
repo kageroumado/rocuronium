@@ -101,12 +101,13 @@ All verbs are exposed as MCP tools with the same names and arguments.
 
 | | Verbs |
 |---|---|
-| **Observe** | `status` `diag` `apps` `windows` `find` `read` `wait` `screenshot` `activity` |
+| **Observe** | `status` `diag` `apps` `windows` `find` `read` `map` `wait` `screenshot` `activity` |
 | **Act** | `type` `click` `key` `shortcut` `menu` `scroll` `statusitem` `launch` `activate` |
 | **Cursor** | `move` `drag` (hardware — takes the real cursor, presence-gated) |
 | **Orchestrate** | `plan` (multi-step with guards) |
+| **Windows** | `resize` `window` (fullscreen, minimize, zoom) `space` (Mission Control Spaces) |
 | **Isolate** | `display` (virtual display lease) `park` (move window to it) |
-| **Meta** | `busy` (hold the presence overlay up while working) `demo` (practice window) `request-capture` `mcp` |
+| **Meta** | `busy` (hold the presence overlay up while working) `demo` (practice window) `request-capture` `mcp` `guide` (the agent skill baked into the binary) `version` |
 
 One coordinate frame everywhere: points, origin at the top-left of the main display.
 `rocuronium --help` lists every flag; each MCP tool carries its own contract in its description.

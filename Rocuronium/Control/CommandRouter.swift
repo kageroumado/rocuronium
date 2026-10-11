@@ -837,6 +837,8 @@ final class CommandRouter {
         let presence = UserPresence.read()
         var reply: [String: Any] = [
             "ok": true,
+            "version": AppVersion.marketing,
+            "build": AppVersion.build,
             "trusted": AXIsProcessTrusted(),
             "presence": presence.state.rawValue,
             "idleSeconds": Int(presence.idleSeconds),

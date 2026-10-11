@@ -120,7 +120,7 @@ struct AboutSettingsView: View {
                 .frame(width: 72, height: 72)
             Text("Rocuronium")
                 .font(.system(size: 18, weight: .bold))
-            Text("Vision and hands for your AI — version \(Self.version)")
+            Text("Vision and hands for your AI — version \(AppVersion.marketing)")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             HStack(spacing: 14) {
@@ -139,8 +139,4 @@ struct AboutSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    private static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "dev"
-    }
 }
