@@ -119,6 +119,9 @@ public struct Provisioner: Sendable {
             runner.run("/usr/sbin/createhomedir", ["-c", "-u", request.name], input: nil)
         }
 
+        // Recorded before anything else is written, so a half-provisioned account can still be
+        // removed by the helper that started it.
+        system.register(request.name)
         enableServices(for: request.name, log: &log)
         writePreferences(for: request.name, log: &log)
         installFiles(request, home: home, log: &log)

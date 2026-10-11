@@ -2293,6 +2293,11 @@ final class CommandRouter {
                 if EmergencyStop.isHalted {
                     return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true]
                 }
+                // A plan is how an MCP agent runs a sequence, so it gets MCP's limit on
+                // `session`: ending or reading a session, never creating or provisioning one.
+                if req.command == "session", !["stop", "status", nil].contains(req.action) {
+                    return ["ok": false, "error": "a plan step may only run 'session status' or 'session stop'; enable and start are the human's, from the CLI"]
+                }
                 self.adrafinil.noteActivity()
                 return try await self.dispatch(req)
             },

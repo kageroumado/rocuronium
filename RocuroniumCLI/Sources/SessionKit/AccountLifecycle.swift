@@ -19,6 +19,10 @@ public struct CommandResult: Equatable, Sendable {
 public protocol AccountSystem: Sendable {
     func uid(of name: String) -> uid_t?
     func isAdmin(_ name: String) -> Bool
+    /// Whether the helper provisioned this account. Removal and bootout touch only these.
+    func isRegistered(_ name: String) -> Bool
+    func register(_ name: String)
+    func unregister(_ name: String)
     /// Every live process owned by `uid`, whatever session it belongs to.
     func processes(of uid: uid_t) -> [pid_t]
     /// `launchctl bootout gui/<uid>`: ends the account's GUI login session.
@@ -61,6 +65,7 @@ public enum AccountRemoval {
         if let refusal = Provisioning.refusal(name: name, uid: uid, system: system, protecting: protecting) {
             return .refused(refusal)
         }
+        guard system.isRegistered(name) else { return .refused(Provisioning.notRegistered(name)) }
         let bootout = system.bootout(uid: uid)
         var survivors = system.processes(of: uid)
         var waited = 0.0
@@ -82,6 +87,7 @@ public enum AccountRemoval {
         guard deleted.succeeded else {
             return .refused("deleting '\(name)' failed (exit \(deleted.status)): \(deleted.output)")
         }
+        system.unregister(name)
         return .removed(uid: uid)
     }
 }
@@ -116,6 +122,18 @@ public enum Provisioning {
             return .refused("'\(name)' has a running session (\(live.count) process\(live.count == 1 ? "" : "es")) — stop it first: rocuronium session stop")
         }
         return .existing(uid: uid)
+    }
+
+    /// The refusal for an account this helper did not provision.
+    static func notRegistered(_ name: String) -> String {
+        "'\(name)' was not provisioned by Rocuronium's session helper, so the helper will not end or delete it"
+    }
+
+    /// Whether the helper may bootout `name`'s session: a provisioned agent account, never the
+    /// requester's own, never an administrator — another person's session is not the helper's.
+    public static func bootoutRefusal(name: String, uid: uid_t, system: any AccountSystem, protecting: uid_t?) -> String? {
+        if let refusal = refusal(name: name, uid: uid, system: system, protecting: protecting) { return refusal }
+        return system.isRegistered(name) ? nil : notRegistered(name)
     }
 
     /// The accounts no agent-session operation may touch, whatever the request says.

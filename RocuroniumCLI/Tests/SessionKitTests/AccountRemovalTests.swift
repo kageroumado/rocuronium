@@ -13,6 +13,8 @@ struct AccountRemovalTests {
         var calls: [String] = []
         var accounts: [String: uid_t] = ["agent": 502]
         var admins: Set<String> = []
+        /// Accounts the helper provisioned; removal and bootout touch nothing else.
+        var registered: Set<String> = ["agent"]
         /// What `processes(of:)` returns, call by call; the last entry repeats.
         var processTable: [[pid_t]] = [[]]
         var bootoutStatus: Int32 = 0
@@ -21,6 +23,9 @@ struct AccountRemovalTests {
 
         func uid(of name: String) -> uid_t? { accounts[name] }
         func isAdmin(_ name: String) -> Bool { admins.contains(name) }
+        func isRegistered(_ name: String) -> Bool { registered.contains(name) }
+        func register(_ name: String) { registered.insert(name) }
+        func unregister(_ name: String) { registered.remove(name) }
 
         func processes(of uid: uid_t) -> [pid_t] {
             calls.append("processes")
@@ -108,6 +113,24 @@ struct AccountRemovalTests {
             Issue.record("removed the caller's own account")
         }
         #expect(system.calls.isEmpty)
+    }
+
+    /// Another person's standard account on the same Mac is never the helper's to end or
+    /// delete, however it is asked: only accounts it provisioned itself.
+    @Test func unregisteredAccountsAreNeverRemoved() {
+        let system = FakeSystem()
+        system.accounts = ["agent": 502, "ely": 503]
+        guard case .refused = AccountRemoval.run(name: "ely", system: system) else {
+            Issue.record("removed an account the helper never provisioned")
+            return
+        }
+        #expect(system.calls.isEmpty)
+    }
+
+    @Test func removalUnregistersTheAccount() {
+        let system = FakeSystem()
+        #expect(AccountRemoval.run(name: "agent", system: system) == .removed(uid: 502))
+        #expect(!system.registered.contains("agent"))
     }
 
     @Test func aMissingAccountIsAlreadyGone() {

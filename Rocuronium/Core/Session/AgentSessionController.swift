@@ -47,8 +47,15 @@ final class AgentSessionController {
     private(set) var phase: Phase = .idle
     private(set) var progress: [String] = []
     private var heartbeat: AgentSessionHeartbeat?
+    /// A switch a start is still arming: a stop that lands meanwhile must close it too.
+    private var heartbeatInFlight: AgentSessionHeartbeat?
     private var bringUp: (any AgentSessionBringUp)?
     private var startTask: Task<Void, Never>?
+    /// Bumped by every start and every stop. A start compares its own number after each await,
+    /// so one that was stopped or halted mid-flight can never arm a switch or report running
+    /// after the stop has answered — cancelling the task alone would not stop it, since none of
+    /// what it awaits checks for cancellation.
+    private var generation = 0
     /// Builds the bring-up route for a start; nil when this Mac has none (see `AGENT-SESSION.md`).
     var makeBringUp: (@MainActor () -> (any AgentSessionBringUp)?)?
     /// Records start, stop, and the switch firing in the activity log.
@@ -101,17 +108,36 @@ final class AgentSessionController {
         }
         phase = .starting
         progress = []
+        generation += 1
+        let mine = generation
         startTask = Task(name: "agent-session start") { [weak self] in
-            await self?.runStart(route: route)
+            await self?.runStart(route: route, generation: mine)
         }
         return ["ok": true, "state": "starting", "progress": progress, "summary": "starting the agent session"]
     }
 
-    private func runStart(route: any AgentSessionBringUp) async {
+    private func runStart(route: any AgentSessionBringUp, generation mine: Int) async {
         let account = account
         let link = link
-        func note(_ line: String) { progress.append(line) }
+        func note(_ line: String) {
+            guard generation == mine else { return }
+            progress.append(line)
+        }
+        /// False once a stop, a halt, or a newer start has overtaken this one. Whatever this
+        /// start brought up is then ended here, and nothing is committed.
+        func stillWanted() async -> Bool {
+            guard generation != mine || Task.isCancelled || EmergencyStop.isHalted else { return true }
+            heartbeatInFlight?.stopNow()
+            heartbeatInFlight = nil
+            route.close()
+            if let uid = Self.uid(of: account), Self.loginWindow(of: uid) != nil {
+                _ = await link.call("stop")
+            }
+            if generation == mine { phase = .idle }
+            return false
+        }
         func fail(_ message: String) async {
+            guard generation == mine else { return }
             note("failed: \(message)")
             // A session that came up without its switch armed must not outlive this failure.
             if let uid = Self.uid(of: account), Self.loginWindow(of: uid) != nil {
@@ -136,29 +162,38 @@ final class AgentSessionController {
         bringUp = route
         note("requesting an off-console session for \(account) (\(route.route))")
         do {
-            try await route.open(account: account, password: password) { [weak self] line in self?.progress.append(line) }
+            try await route.open(account: account, password: password) { [weak self] line in
+                guard self?.generation == mine else { return }
+                self?.progress.append(line)
+            }
         } catch {
             return await fail("\(error)")
         }
+        guard await stillWanted() else { return }
         let appeared = Date()
         while Self.loginWindow(of: uid) == nil {
             guard Date().timeIntervalSince(appeared) < Constants.sessionAppearTimeout else {
                 return await fail("no session for \(account) appeared within \(Int(Constants.sessionAppearTimeout)) s")
             }
             try? await Task.sleep(for: .milliseconds(500))
+            guard await stillWanted() else { return }
         }
         note("session is up (loginwindow pid \(Self.loginWindow(of: uid) ?? 0)) after \(String(format: "%.1f", Date().timeIntervalSince(appeared))) s")
 
         // No unattended session without a kill path: arm the switch before anything else runs.
         let switchBox = AgentSessionHeartbeat()
+        heartbeatInFlight = switchBox
         switchBox.onEnded = { [weak self] reason in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.switchEnded(reason) } }
         }
         do {
             try await switchBox.arm(link: link)
         } catch {
+            heartbeatInFlight = nil
             return await fail("\(error)")
         }
+        guard await stillWanted() else { return }
+        heartbeatInFlight = nil
         heartbeat = switchBox
         note("dead-man's switch armed (\(AgentSessionHeartbeat.Constants.deadlineSeconds) s deadline)")
 
@@ -171,11 +206,13 @@ final class AgentSessionController {
             } else {
                 try? await Task.sleep(for: .seconds(1))
             }
+            guard await stillWanted() else { return }
         }
         guard let daemon else { return await fail("Rocuronium did not answer inside the session within \(Int(Constants.daemonAnswerTimeout)) s") }
         guard daemon["offConsole"] as? Bool == true else {
             return await fail("the daemon inside the session reports offConsole = false — refusing to drive it")
         }
+        guard await stillWanted() else { return }
         note("Rocuronium answers inside the session (offConsole: true, accessibility \(daemon["trusted"] as? Bool == true ? "granted" : "NOT granted"))")
         phase = .running(since: Date())
         record?("session start", "ok", "agent session for \(account) is running")
@@ -185,7 +222,10 @@ final class AgentSessionController {
     /// then a check that the account's processes are gone. The one path allowed to precede an
     /// account deletion.
     func stop(reason: String) async -> [String: Any] {
+        generation += 1
         startTask?.cancel()
+        heartbeatInFlight?.stopNow()
+        heartbeatInFlight = nil
         let account = account
         var lines: [String] = []
         if let heartbeat {
@@ -223,7 +263,7 @@ final class AgentSessionController {
     /// ⌃⌥⇧⎋ on the console: the chord is session-scoped and never reaches the agent session's
     /// own daemon, so this side ends that session for it.
     func emergencyStop() {
-        guard heartbeat != nil || bringUp != nil || phase == .starting else { return }
+        guard heartbeat != nil || heartbeatInFlight != nil || bringUp != nil || phase == .starting else { return }
         Task(name: "agent-session emergency stop") { await stop(reason: "⌃⌥⇧⎋") }
     }
 

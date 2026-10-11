@@ -100,9 +100,8 @@ nonisolated(unsafe) var idleExit: DispatchWorkItem?
         guard let name = string(message, "name"), let uid = system.uid(of: name) else {
             return fail("bootout needs an existing account name")
         }
-        if case let .refused(reason) = Provisioning.gate(name: name, system: system, protecting: peerUID),
-           !reason.contains("running session") {
-            return fail(reason)
+        if let refusal = Provisioning.bootoutRefusal(name: name, uid: uid, system: system, protecting: peerUID) {
+            return fail(refusal)
         }
         let result = system.bootout(uid: uid)
         xpc_dictionary_set_bool(reply, "ok", true)

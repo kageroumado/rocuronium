@@ -114,6 +114,10 @@ public struct LiveAccountSystem: AccountSystem {
         ProcessTable.pids(ownedBy: uid)
     }
 
+    public func isRegistered(_ name: String) -> Bool { AccountRegistry.names().contains(name) }
+    public func register(_ name: String) { AccountRegistry.update { $0.insert(name) } }
+    public func unregister(_ name: String) { AccountRegistry.update { $0.remove(name) } }
+
     public func bootout(uid: uid_t) -> CommandResult {
         Shell.run("/bin/launchctl", ["bootout", "gui/\(uid)"], timeout: 30)
     }
@@ -157,5 +161,32 @@ public enum ProcessTable {
     /// session, console or off-console, has exactly one, running as that user.
     public static func loginWindow(of uid: uid_t) -> pid_t? {
         pids(ownedBy: uid).first { name(of: $0) == "loginwindow" }
+    }
+}
+
+/// The accounts the session helper provisioned: a root-owned list outside every user's home,
+/// so no user — the console user included — can add another person's account to it.
+public enum AccountRegistry {
+    static let directory = "/Library/Application Support/glass.kagerou.rocuronium"
+    static let path = directory + "/agent-accounts.plist"
+
+    public static func names() -> Set<String> {
+        guard let data = FileManager.default.contents(atPath: path),
+              let list = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String]
+        else { return [] }
+        return Set(list)
+    }
+
+    /// Root only. Writes `0644 root:wheel` atomically, after checking the directory is root's.
+    static func update(_ change: (inout Set<String>) -> Void) {
+        let manager = FileManager.default
+        try? manager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755, .ownerAccountID: 0, .groupOwnerAccountID: 0])
+        guard let attributes = try? manager.attributesOfItem(atPath: directory),
+              (attributes[.ownerAccountID] as? NSNumber)?.intValue == 0 else { return }
+        var current = names()
+        change(&current)
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: current.sorted(), format: .xml, options: 0) else { return }
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try? manager.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: path)
     }
 }
