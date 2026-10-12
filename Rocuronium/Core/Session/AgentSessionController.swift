@@ -19,8 +19,7 @@ protocol AgentSessionBringUp: AnyObject {
     func close()
 }
 
-/// The `session` verb's state: one agent account, at most one session for it, and never a
-/// session without a dead-man's switch armed.
+/// Owns one agent account's session, startup recovery, and the running session's watchdog.
 ///
 /// The lifecycle is **recreate on demand**. An idle session costs ~2.4 W even stripped — the
 /// background daemons that cost it are platform binaries SIP will not let anyone stop — while a
@@ -42,6 +41,10 @@ final class AgentSessionController {
         var loginWindow: (uid_t) throws -> pid_t?
         var password: (String) async -> String?
         var endSession: (AgentSessionLink) async -> Result<[String: Any], AgentSessionLink.LinkError>
+        var loadPendingLogin: () throws -> PendingAgentLogin? = { nil }
+        var savePendingLogin: (PendingAgentLogin?) throws -> Void = { _ in }
+        var now: () -> Date = { Date() }
+        var recoveryPause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(250)) }
 
         static var live: Self {
             Self(
@@ -53,16 +56,22 @@ final class AgentSessionController {
                         AgentSessionKeychain.password(account: account)
                     }.value
                 },
-                endSession: { await $0.call("stop") }
+                endSession: { await $0.call("stop") },
+                loadPendingLogin: PendingAgentLogin.load,
+                savePendingLogin: PendingAgentLogin.save
             )
         }
     }
 
     private let runtime: Runtime
     private var stopTask: Task<Void, Never>?
+    private var pendingLogin: PendingAgentLogin?
+    private var recoveryLoadError: String?
     private enum Constants {
         static let accountKey = "agentSession.account"
         static let defaultAccount = "agent"
+        /// Covers the handshake and subsequent loginwindow-appearance bounds.
+        static let pendingLoginObservation: TimeInterval = 90
         /// From the request to the account's loginwindow existing; the measured spawn is ~10 s.
         static let sessionAppearTimeout: TimeInterval = 45
         /// From loginwindow to the daemon inside answering on its socket.
@@ -104,6 +113,22 @@ final class AgentSessionController {
 
     init(runtime: Runtime = .live) {
         self.runtime = runtime
+        do {
+            pendingLogin = try runtime.loadPendingLogin()
+            if pendingLogin != nil {
+                phase = .stopping
+                progress = ["recovering an interrupted agent login"]
+                stopTask = Task(name: "recover interrupted agent login") { [weak self] in
+                    guard let self else { return }
+                    try? self.retainEmergencyShortcut?()
+                    _ = await self.finishStop(reason: "interrupted startup recovery")
+                    self.stopTask = nil
+                }
+            }
+        } catch {
+            recoveryLoadError = "could not read pending agent login: \(error)"
+            phase = .failed(recoveryLoadError!)
+        }
         // Proof of life for the heartbeat thread: if the main actor stops reaching this, the
         // beats stop and the agent session ends.
         Task(name: "agent-session main-actor check-in") { [weak self] in
@@ -131,6 +156,10 @@ final class AgentSessionController {
     func start() -> [String: Any] {
         guard phase != .stopping else {
             return ["ok": false, "state": "stopping", "error": "the agent session is still stopping; wait for idle before starting again"]
+        }
+        if let recoveryLoadError { return ["ok": false, "error": recoveryLoadError] }
+        if pendingLogin != nil, case .failed = phase {
+            return ["ok": false, "error": "an interrupted login still needs cleanup — run rocuronium session stop"]
         }
         if case .starting = phase { return ["ok": true, "state": "starting", "progress": progress, "summary": "already starting"] }
         if case .running = phase, heartbeat?.isArmed == true {
@@ -173,7 +202,8 @@ final class AgentSessionController {
             startupHeartbeat?.stopNow()
             route.close()
             if requestedSession {
-                _ = await runtime.endSession(link)
+                do { try await cleanPendingLogin() }
+                catch { note("pending-login cleanup requires retry: \(error)") }
             }
             if generation == mine { phase = .idle }
             return false
@@ -186,21 +216,11 @@ final class AgentSessionController {
             // A session that came up without its switch armed must not outlive this failure.
             if requestedSession {
                 note("ending the half-started session")
-                _ = await runtime.endSession(link)
-                if let uid = runtime.uid(account) {
-                    do {
-                        let deadline = Date().addingTimeInterval(10)
-                        while try runtime.loginWindow(uid) != nil, Date() < deadline {
-                            try await Task.sleep(for: .milliseconds(250))
-                        }
-                        if try runtime.loginWindow(uid) != nil {
-                            failure += "; the agent session survived cleanup — run rocuronium session stop"
-                        } else {
-                            note("failed-start cleanup verified: agent loginwindow is gone")
-                        }
-                    } catch {
-                        failure += "; could not verify failed-start cleanup: \(error)"
-                    }
+                do {
+                    try await cleanPendingLogin()
+                    note("failed-start cleanup verified: agent loginwindow is gone")
+                } catch {
+                    failure += "; could not verify failed-start cleanup: \(error)"
                 }
             }
             guard generation == mine else { return }
@@ -233,6 +253,10 @@ final class AgentSessionController {
             }
             note("requesting an off-console session for \(account) (\(route.route))")
             do {
+                let pending = PendingAgentLogin(account: account, uid: uid,
+                                                observationDeadline: runtime.now().addingTimeInterval(Constants.pendingLoginObservation))
+                try runtime.savePendingLogin(pending)
+                pendingLogin = pending
                 requestedSession = true
                 try await route.open(account: account, password: password) { [weak self] line in
                     guard self?.generation == mine else { return }
@@ -269,6 +293,8 @@ final class AgentSessionController {
             guard await stillWanted() else { return }
             heartbeatInFlight = nil
             heartbeat = switchBox
+            try runtime.savePendingLogin(nil)
+            pendingLogin = nil
             note("dead-man's switch armed (\(AgentSessionHeartbeat.Constants.deadlineSeconds) s deadline)")
 
             _ = await link.call("start-daemon")
@@ -315,6 +341,14 @@ final class AgentSessionController {
             }
             return stoppingReply
         }
+        if pendingLogin != nil || recoveryLoadError != nil {
+            stopTask = Task(name: "retry pending agent login cleanup") { [weak self] in
+                guard let self else { return }
+                _ = await self.finishStop(reason: reason)
+                self.stopTask = nil
+            }
+            return stoppingReply
+        }
         return await finishStop(reason: reason)
     }
 
@@ -333,10 +367,20 @@ final class AgentSessionController {
         bringUp?.close()
         bringUp = nil
         guard let uid = runtime.uid(account) else {
+            if pendingLogin != nil || recoveryLoadError != nil {
+                let message = "pending login account identity is unavailable; cleanup requires review"
+                phase = .failed(message)
+                return ["ok": false, "state": "failed", "error": message]
+            }
             phase = .idle
             return ["ok": true, "state": "idle", "lines": lines, "summary": "no '\(account)' account, so no session"]
         }
         do {
+            if recoveryLoadError != nil {
+                pendingLogin = try runtime.loadPendingLogin()
+                recoveryLoadError = nil
+            }
+            try await cleanPendingLogin()
             if try runtime.loginWindow(uid) != nil {
                 switch await runtime.endSession(link) {
                 case let .success(reply): lines.append("bootout over ssh: exit \(reply["status"] ?? "?")")
@@ -361,6 +405,37 @@ final class AgentSessionController {
             phase = .failed(message)
             record?(reason, "failed", message)
             return ["ok": false, "state": "failed", "lines": lines, "error": message]
+        }
+    }
+
+    /// Observes an unacknowledged login until it appears or its bounded recovery window ends.
+    /// The saved record survives errors, so later stops and daemon restarts can retry cleanup.
+    private func cleanPendingLogin() async throws {
+        let saved = pendingLogin
+        guard let uid = runtime.uid(account) else {
+            if saved != nil { throw AgentRFBError("pending login account identity is unavailable") }
+            return
+        }
+        let pending = saved ?? PendingAgentLogin(account: account, uid: uid, observationDeadline: runtime.now())
+        guard pending.account == account, runtime.uid(pending.account) == pending.uid else {
+            throw AgentRFBError("pending login belongs to a different account identity; cleanup requires review")
+        }
+        while try runtime.loginWindow(pending.uid) == nil, runtime.now() < pending.observationDeadline {
+            try await runtime.recoveryPause()
+        }
+        if try runtime.loginWindow(pending.uid) != nil {
+            _ = await runtime.endSession(AgentSessionLink(account: pending.account))
+            let deadline = runtime.now().addingTimeInterval(10)
+            while try runtime.loginWindow(pending.uid) != nil, runtime.now() < deadline {
+                try await runtime.recoveryPause()
+            }
+            guard try runtime.loginWindow(pending.uid) == nil else {
+                throw AgentRFBError("the agent session survived pending-login cleanup")
+            }
+        }
+        if saved != nil {
+            try runtime.savePendingLogin(nil)
+            pendingLogin = nil
         }
     }
 

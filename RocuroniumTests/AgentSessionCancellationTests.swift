@@ -84,6 +84,143 @@ struct AgentSessionCancellationTests {
         #expect(route.entered == false)
     }
 
+    @Test func restartedDaemonCleansLateLoginBeforeAllowingStart() async throws {
+        let fixture = SessionFixture()
+        let now = Date()
+        var saved: PendingAgentLogin? = .init(account: "agent", uid: 502, observationDeadline: now.addingTimeInterval(90))
+        var runtime = fixture.runtime
+        runtime.loadPendingLogin = { saved }
+        runtime.savePendingLogin = { saved = $0 }
+        var paused = false
+        runtime.recoveryPause = {
+            paused = true
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let controller = AgentSessionController(runtime: runtime)
+        #expect(controller.phase == .stopping)
+        #expect(controller.start()["ok"] as? Bool == false)
+        try await waitUntil { paused }
+        #expect(saved != nil)
+        fixture.pid = 456
+        try await waitUntil { controller.phase == .idle }
+        #expect(saved == nil)
+        #expect(fixture.pid == nil)
+        #expect(fixture.endCalls == 1)
+    }
+
+    @Test func timedOutAcknowledgmentWaitsForLateSession() async throws {
+        let fixture = SessionFixture()
+        var saved: PendingAgentLogin?
+        var runtime = fixture.runtime
+        runtime.savePendingLogin = { saved = $0 }
+        var paused = false
+        runtime.recoveryPause = {
+            paused = true
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let route = DeferredLogin { throw AgentRFBError("acknowledgment timed out") }
+        let controller = AgentSessionController(runtime: runtime)
+        controller.makeBringUp = { route }
+        _ = controller.start()
+        try await waitUntil { route.entered }
+        #expect(saved != nil)
+        route.complete()
+        try await waitUntil { paused }
+        fixture.pid = 789
+        try await waitUntil {
+            if case .failed = controller.phase { return true }
+            return false
+        }
+        #expect(fixture.pid == nil)
+        #expect(fixture.endCalls == 1)
+        #expect(saved == nil)
+    }
+
+    @Test func unreadableRecoveryRecordRefusesStartup() {
+        let fixture = SessionFixture()
+        var runtime = fixture.runtime
+        runtime.loadPendingLogin = { throw AgentRFBError("unreadable journal") }
+        let controller = AgentSessionController(runtime: runtime)
+        #expect(controller.start()["ok"] as? Bool == false)
+    }
+
+    @Test func failedCleanupRetainsRecordForRetry() async throws {
+        let fixture = SessionFixture()
+        fixture.pid = 456
+        var now = Date()
+        var saved: PendingAgentLogin? = .init(account: "agent", uid: 502, observationDeadline: now)
+        var runtime = fixture.runtime
+        runtime.loadPendingLogin = { saved }
+        runtime.savePendingLogin = { saved = $0 }
+        runtime.now = { now }
+        runtime.recoveryPause = { now = now.addingTimeInterval(11) }
+        runtime.endSession = { _ in .success(["ok": false]) }
+        let controller = AgentSessionController(runtime: runtime)
+        try await waitUntil {
+            if case .failed = controller.phase { return true }
+            return false
+        }
+        #expect(saved != nil)
+        #expect(controller.start()["ok"] as? Bool == false)
+        fixture.pid = nil
+        let retry = await controller.stop(reason: "retry cleanup")
+        #expect(retry["state"] as? String == "stopping")
+        try await waitUntil { controller.phase == .idle }
+        #expect(saved == nil)
+        #expect(controller.phase == .idle)
+    }
+
+    @Test func recoveryRefusesChangedAccountIdentity() async throws {
+        let fixture = SessionFixture()
+        var runtime = fixture.runtime
+        let pending = PendingAgentLogin(account: "agent", uid: 999, observationDeadline: Date())
+        runtime.loadPendingLogin = { pending }
+        var cleared = false
+        runtime.savePendingLogin = { _ in cleared = true }
+        let controller = AgentSessionController(runtime: runtime)
+        try await waitUntil {
+            if case .failed = controller.phase { return true }
+            return false
+        }
+        #expect(fixture.endCalls == 0)
+        #expect(cleared == false)
+        #expect(controller.start()["ok"] as? Bool == false)
+    }
+
+    @Test func recoveryObservesTheWholeWindowWhenNoSessionAppears() async throws {
+        let fixture = SessionFixture()
+        var now = Date()
+        let began = now
+        var saved: PendingAgentLogin? = .init(account: "agent", uid: 502, observationDeadline: now.addingTimeInterval(90))
+        var runtime = fixture.runtime
+        runtime.loadPendingLogin = { saved }
+        runtime.savePendingLogin = { saved = $0 }
+        runtime.now = { now }
+        runtime.recoveryPause = { now = now.addingTimeInterval(30) }
+        let controller = AgentSessionController(runtime: runtime)
+        #expect(controller.start()["ok"] as? Bool == false)
+        try await waitUntil { controller.phase == .idle }
+        #expect(now.timeIntervalSince(began) == 90)
+        #expect(saved == nil)
+        #expect(fixture.endCalls == 0)
+    }
+
+    @Test func journalWriteFailurePreventsLoginRequest() async throws {
+        let fixture = SessionFixture()
+        var runtime = fixture.runtime
+        runtime.savePendingLogin = { _ in throw AgentRFBError("journal write failed") }
+        let route = DeferredLogin { fixture.pid = 123 }
+        let controller = AgentSessionController(runtime: runtime)
+        controller.makeBringUp = { route }
+        _ = controller.start()
+        try await waitUntil {
+            if case .failed = controller.phase { return true }
+            return false
+        }
+        #expect(route.entered == false)
+        #expect(fixture.endCalls == 0)
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(3)
         while !condition(), ContinuousClock.now < deadline {
