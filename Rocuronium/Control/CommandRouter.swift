@@ -619,6 +619,7 @@ final class CommandRouter {
         if request.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { request.label = nil }
         confirmInFlight = request.confirm == true
         approvedInDispatch = false
+        defer { approvedInDispatch = false }
         guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
         let monitor = HumanInputMonitor.shared
         monitor.begin(targetPid: try? resolve(request))
