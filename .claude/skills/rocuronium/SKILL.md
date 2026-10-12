@@ -8,7 +8,7 @@ description: Drive this Mac's UI from an agent — read the screen as text, map 
 Rocuronium lets an agent see and operate macOS. Two words carry the design:
 
 - **Ghost** delivery reaches an app through accessibility and per-process posted events. It never moves the cursor and never changes the frontmost app, so it is safe while a human is at the keyboard. This is the default.
-- **The sting** is real hardware input on the console. It takes the cursor, is opt-in per call (`--allow-hardware-input`), and is refused while someone is present.
+- **The sting** is real hardware input on the console. It takes the cursor, is opt-in per call (`--allow-hardware-input`), runs only after the ghost tentacles failed, and is put to the human first whenever someone is present.
 
 Every reply says which side delivered the action and, through a computed `verdict`, what observably happened. **Trust `verdict`, never the exit code or the summary.**
 
@@ -34,7 +34,7 @@ One coordinate frame (points, origin top-left of the main display), one JSON rep
 ## The three verdicts
 
 - **confirmed** — something observably changed (read-back matched, a frame or scroll bar moved, pixels changed in a still window, the window count moved, a tree element appeared/vanished/changed, or the process exited after a quit-shaped press). Proceed.
-- **noEffect** — the call reported success and nothing changed. This is the verdict the tool exists for (WebKit's `AXSetValue` lies; background AppKit menus never validate; wheel events are ignored). **Do not retry harder — change mechanism** (read the `referral`, `activate` the target, `park` it, verify through `read --since`).
+- **noEffect** — the call reported success and nothing changed. This is the verdict the tool exists for (WebKit's `AXSetValue` lies; background AppKit menus never validate; wheel events are ignored). **Do not retry harder — change mechanism**: read the reply's `suggestion` and `referral` first. A click that must land goes again with `--allow-hardware-input`; the ladder skips the ghost tentacles that just failed, asks the human if one is present, and clicks for real. `activate` does not help a ghost click (posted input reaches the app whether it is frontmost or not) and takes the front window from the human.
 - **unverifiable** — nothing to read back and pixels could not testify. **Do not retry blindly** — the action may have landed, and a retry types it twice. Verify through another channel first.
 
 **`attribution: mixed` overrides `confirmed`.** Acting replies carry `humanInput` and, with a verdict, `attribution`. `mixed` means the human clicked, typed, or scrolled in the target app while the action ran or was being checked, so the change may be theirs: verify the specific value before building on it. `humanInput.stopped: true` means a hardware payload yielded to a human hand — wait for them, never re-send it straight away.

@@ -23,4 +23,10 @@ nonisolated enum PresenceRelay {
     /// see it, so an invisible action's location is legible without taking the cursor. The
     /// gate lives in the installed hook; the actuation path calls unconditionally.
     nonisolated(unsafe) static var ghostImpact: @Sendable (CGPoint) -> Void = { _ in }
+
+    /// Asked, with a sentence naming the act, right before the hardware tentacle takes the
+    /// cursor or keyboard while someone may be at the machine (any presence but `away`). The app
+    /// puts the question to the human and answers; `false` withholds the act. The default
+    /// approves: with no app installing it there is nobody to ask.
+    nonisolated(unsafe) static var approveHardware: @Sendable (String) async -> Bool = { _ in true }
 }

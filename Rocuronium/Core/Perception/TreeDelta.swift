@@ -64,6 +64,18 @@ nonisolated enum TreeDelta {
 
         var changeCount: Int { appeared.count + vanished.count + valueChanges.count }
         var isEmpty: Bool { changeCount == 0 }
+
+        /// Changes that carry something a reader could see: every value change, and each
+        /// appeared or vanished subtree holding a label or a value. A bare container coming
+        /// and going is layout, not a consequence: WebKit adds an anonymous `AXGroup` when a
+        /// press only focuses a `role="button"` div (measured 2026-10-12, Safari), and
+        /// counting it confirmed a click that published nothing.
+        var contentChangeCount: Int {
+            func carries(_ group: Group) -> Bool {
+                ([group.root] + group.children).contains { !$0.label.isEmpty || !$0.value.isEmpty }
+            }
+            return valueChanges.count + appeared.count(where: carries) + vanished.count(where: carries)
+        }
     }
 
     static func compute(from old: [TreeSnapshot.Node], to new: [TreeSnapshot.Node]) -> Delta {

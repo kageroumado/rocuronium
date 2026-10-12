@@ -50,6 +50,10 @@ final class CommandRouter {
         virtualDisplay = VirtualDisplayBridge(engine: engine)
         PresenceOverlayController.shared = overlay
         PresenceOverlayController.installRelayHooks()
+        PresenceRelay.approveHardware = { [weak self] prompt in
+            guard let self else { return false }
+            return await self.consented(prompt: prompt, away: false, confirm: self.confirmInFlight)
+        }
         agentSession.record = { [activityLog] action, verdict, summary in
             activityLog.append(action: action, target: "agent session", verdict: verdict, summary: summary)
         }
@@ -609,6 +613,11 @@ final class CommandRouter {
     /// tracking, no halt check. Called by both `execute()` (with its wrappers) and the plan
     /// executor, so plan steps are watched too.
     func dispatch(_ request: Request) async throws -> [String: Any] {
+        // An empty label is the absence of one: `find` reports unlabelled elements with
+        // `label: ""`, and an agent echoing that row back means "this element", not "match ''".
+        var request = request
+        if request.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { request.label = nil }
+        confirmInFlight = request.confirm == true
         guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
         let monitor = HumanInputMonitor.shared
         monitor.begin(targetPid: try? resolve(request))
@@ -1639,6 +1648,10 @@ final class CommandRouter {
     /// form, that a human said yes or no — not just that the action succeeded or was refused.
     /// `nil` when no prompt was shown (nobody present, or `--confirm` already carried authority).
     private var consentOutcome: String?
+
+    /// The `confirm` flag of the request being dispatched, for the consent the engine asks for
+    /// mid-action through ``PresenceRelay/approveHardware``.
+    private var confirmInFlight = false
 
     /// Set when `--app` named several running instances and one was taken by the
     /// `AppInstancePicker` rules; rides out on the reply as `appResolution`.

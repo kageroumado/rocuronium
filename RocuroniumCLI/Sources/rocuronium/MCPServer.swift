@@ -214,22 +214,23 @@ enum MCPServer {
                 "exact": ["type": "boolean", "description": "Match label as the whole string (case- and whitespace-insensitive) instead of a substring"],
                 "role": ["type": "string", "description": "Narrow the label match by element role"],
                 "submit": ["type": "boolean", "description": "Allow Return/Tab in the text"],
-                "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
+                "allowHardwareInput": ["type": "boolean", "description": "Permit the real cursor/keyboard after the ghost tentacles fail; a human who is present is asked first"],
             ], required: ["app", "text"],
         ),
         tool(
             "click",
             """
             Click an element by label or screen point (points, top-left origin), ghost-first: \
-            an accessibility press, then a posted click only when the element exposes no press \
-            action, then hardware only with `allowHardwareInput`. The verdict says what \
-            observably happened; an accepted press that verifies `noEffect` does not escalate, \
-            because pixels miss small consequences (a counter changing elsewhere in the \
-            window measured as pixelDelta 0) — confirm with `read` + `since` instead of \
-            retrying. Window-count and whole-window pixel evidence are added automatically, \
+            an accessibility press, then a posted click when the press changed nothing, then \
+            the real cursor only with `allowHardwareInput` (the human is asked first when \
+            present). Pass `allowHardwareInput` up front on a click that has to land: it costs \
+            nothing when a ghost route works. `attempts` lists every step and why it fell \
+            through. A `noEffect` on web content means the page ignores synthetic presses \
+            (controls listening for pointer events): retry with `allowHardwareInput`, never \
+            `activate`, which changes nothing for a ghost click. Window-count and whole-window pixel evidence are added automatically, \
             as is the window's accessibility-tree diff: `treeChanges` counts what moved and \
             `treeDelta` renders it (a sibling label ticking 'clicks: 0' → 'clicks: 1' that \
-            no pixel diff can see), and any tree change confirms the click on its own. \
+            no pixel diff can see), and a tree change carrying a label or value confirms the click. \
             When a label matches several elements and exactly one matches as the whole string, \
             that one is clicked and the reply says matchedBy:'exact'; otherwise pass `role` or \
             `exact`. A press-less list row (a SwiftUI List sidebar row) is selected through its \
@@ -265,7 +266,7 @@ enum MCPServer {
                 "button": ["type": "string", "enum": ["left", "right"], "description": "right opens a context menu"],
                 "count": ["type": "number", "description": "Clicks: 1 (default) or 2 for a double-click"],
                 "modifiers": ["type": "string", "description": "Held modifiers, comma-separated: cmd,shift,option,control,fn"],
-                "allowHardwareInput": ["type": "boolean", "description": "Permit the cursor-taking tentacle as a last resort"],
+                "allowHardwareInput": ["type": "boolean", "description": "Permit the real cursor/keyboard after the ghost tentacles fail; a human who is present is asked first"],
                 "foreground": ["type": "boolean", "description": "Skip the ghost tentacles: activate the app and click with the real cursor so the press is a genuine gesture that can raise a system permission prompt (TCC, notifications). Implies allowHardwareInput; presence-gated like activate"],
                 "observe": ["type": "boolean", "description": "Diff the AX tree even on a large window the channel would otherwise skip (adds one walk)"],
             ], required: ["app"],

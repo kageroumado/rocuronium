@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Synchronization
 
 /// The core of the app: deliver an action by the least invasive means that actually works,
 /// and prove what happened.
@@ -96,9 +97,35 @@ nonisolated struct GhostReach {
         return usable.map { CGPoint(x: $0.midX, y: $0.midY) }
     }
 
+    /// The last element a ghost click left unchanged, and when. A caller that retries the same
+    /// element with hardware allowed has already seen the ghost tentacles fail there, and a
+    /// repeat can do worse than fail: a second `AXPress` on a focusable web control draws a focus
+    /// ring, and the ring's pixels read as `confirmed` (measured 2026-10-12, Safari, a
+    /// `role="button"` div), which ends the ladder before the click the caller approved.
+    private static let lastGhostMiss = Mutex<(signature: String, at: Date)?>(nil)
+    private enum Constants {
+        static let ghostMissMemory: TimeInterval = 120
+        /// How far a focus ring reaches into a control's frame, in points. WebKit's default
+        /// outline is 3 pt; AppKit's ring is drawn outside the frame.
+        static let focusRingBand: CGFloat = 4
+    }
+
     func perform(
         _ action: Action, on element: AXElement, pid: pid_t,
         refetch: () -> AXElement? = { nil }
+    ) async -> Evidence {
+        let signature = element.signature
+        let evidence = await climb(action, on: element, pid: pid, refetch: refetch)
+        if case .click = action, clickOptions.isPlainLeftClick {
+            let missed = evidence.verdict == .noEffect && evidence.tentacle != .hardwareInput
+            Self.lastGhostMiss.withLock { $0 = missed ? (signature, Date()) : nil }
+        }
+        return evidence
+    }
+
+    private func climb(
+        _ action: Action, on element: AXElement, pid: pid_t,
+        refetch: () -> AXElement?
     ) async -> Evidence {
         var attempts: [Evidence.Attempt] = []
 
@@ -154,9 +181,11 @@ nonisolated struct GhostReach {
         // Records why a later pixel capture found no witness, folded into the verdict by
         // `foldingVisual` below.
         let visualFault = VisualFault()
+        let targetWasFocused = element.boolValue(kAXFocusedAttribute) ?? false
         func foldingVisual(_ evidence: Evidence) async -> Evidence {
             let delta = await pixelDelta(
-                from: baseline, at: baselineRect, of: element, into: visualFault, refetch,
+                from: baseline, at: baselineRect, of: element, into: visualFault,
+                targetWasFocused: targetWasFocused, refetch,
             )
             return evidence.addingVisualEvidence(delta: delta, fault: visualFault.reason)
         }
@@ -180,12 +209,21 @@ nonisolated struct GhostReach {
         // cannot reach at all, and the channel that can (refrax-ctl, CDP, Safari's own scripting)
         // belongs to the calling agent, which holds the task context and the launch flags.
         var referral: Evidence.Referral?
+        // Decided before anything acts: WebKit can rebuild a pressed element, and a stale one
+        // reports no parent, so an ancestry walk after the click finds no web area.
+        let targetIsWebContent = WebContent.isWebContent(element)
+
+        let retriesAGhostMiss: Bool = {
+            guard allowHardwareInput, !accessibilityOnly, case .click = action, clickOptions.isPlainLeftClick,
+                  let miss = Self.lastGhostMiss.withLock({ $0 }) else { return false }
+            return miss.signature == element.signature && Date().timeIntervalSince(miss.at) < Constants.ghostMissMemory
+        }()
 
         // The foreground path skips every ghost tentacle: `AXPress` and a posted click both
         // actuate the control without a real gesture, and the whole reason the caller asked for
         // foreground is that those do not raise the system prompt this action must surface. Go
         // straight to the sting, which activates the app and clicks with the real cursor.
-        if !foreground {
+        if !foreground, !retriesAGhostMiss {
             // Tentacle 1 — accessibility, then read back. A success code proves nothing.
             if let evidence = await tryAccessibility(
                 action, element, pid, &attempts,
@@ -197,7 +235,20 @@ nonisolated struct GhostReach {
                 if case .click = action, let frame = element.frame, frame.width >= 1, frame.height >= 1 {
                     PresenceRelay.ghostImpact(CGPoint(x: frame.midX, y: frame.midY))
                 }
-                return await foldingVisual(evidence)
+                let seen = await foldingVisual(evidence)
+                // A press the app accepted and then ignored is the WebKit case: `AXPress` on a
+                // control that listens for pointer events. It has not landed, so the click goes
+                // on down the ladder exactly as a swallowed posted click does. A retried click is
+                // at worst a second click.
+                guard case .click = action, !accessibilityOnly, seen.verdict == .noEffect else { return seen }
+                attempts = seen.attempts
+                attempts.append(.init(
+                    tentacle: .accessibility,
+                    outcome: "pressed, but neither the tree nor the pixels moved — falling through to a posted click",
+                ))
+                // The press may have moved focus by itself; the posted click answers only for
+                // what it changes.
+                focusBefore = ElementQuery.focused(pid: pid)?.signature
             }
 
             // Menu items stop here: everything below aims at a rectangle that means nothing while
@@ -248,7 +299,11 @@ nonisolated struct GhostReach {
                 let escalate = seen.verdict == .noEffect
                     || (gestureOnly && seen.verdict == .unverifiable)
                 guard allowHardwareInput, !isText, escalate else {
-                    return gestureOnly ? seen.suggestingHardware() : seen
+                    if gestureOnly { return seen.suggestingHardware() }
+                    if !isText, seen.verdict == .noEffect, targetIsWebContent {
+                        return seen.suggestingRealClickForWebContent()
+                    }
+                    return seen
                 }
                 attempts.append(.init(
                     tentacle: .postedEvent,
@@ -265,10 +320,15 @@ nonisolated struct GhostReach {
                 outcome: referral.map { "unreachable by OS input — refer to \($0.channel)" }
                     ?? "no adapter for this target",
             ))
-        } else {
+        } else if foreground {
             attempts.append(.init(
                 tentacle: .hardwareInput,
                 outcome: "foreground requested — skipping the ghost tentacles so a real activation + hardware click can raise system prompts",
+            ))
+        } else {
+            attempts.append(.init(
+                tentacle: .hardwareInput,
+                outcome: "the ghost click on this element just came back noEffect — skipping the ghost tentacles for the hardware click the caller allowed",
             ))
         }
 
@@ -373,6 +433,28 @@ nonisolated struct GhostReach {
             // thing to handle, and only the agent has that context.
             evidence.suggestion = "park --app \(targetName ?? "pid \(pid)")"
             return evidence
+        }
+
+        // The caller's flag permits the sting; a human at the machine still owns the cursor and
+        // keyboard it takes, so they are asked, exactly as for `activate` or a foreground click.
+        if UserPresence.read().state != .away {
+            let name = live.label.isEmpty ? live.role : "“\(live.label)”"
+            let prompt: String = if case .setText = action {
+                "Type into \(name) with the real keyboard"
+            } else {
+                "Click \(name) with the real cursor"
+            }
+            guard await PresenceRelay.approveHardware(prompt) else {
+                attempts.append(.init(
+                    tentacle: .hardwareInput,
+                    outcome: "declined by the human at the machine — the cursor and keyboard were not taken",
+                ))
+                return await foldingVisual(finish(
+                    action, element, .postedEvent, .noEffect, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                ))
+            }
         }
 
         switch action {
@@ -646,6 +728,24 @@ nonisolated struct GhostReach {
                 attempts.append(.init(tentacle: .accessibility, outcome: "no accessibility equivalent for a \(clickOptions.button.rawValue)/×\(clickOptions.count) click — falling through to a posted event"))
                 return nil
             }
+            // A left click on a text field or text area puts the caret in it. These expose
+            // `AXShowMenu` and no `AXPress`, and performing the menu action opens a context menu
+            // in place of focusing (measured on a Notes body, 2026-10-12), so the accessibility
+            // equivalent is the focus write, confirmed by the app's focused element reading back.
+            if element.isEditable, !element.actionNames.contains(kAXPressAction) {
+                element.setBool(true, for: kAXFocusedAttribute)
+                try? await Task.sleep(for: .milliseconds(150))
+                let focusAfter = ElementQuery.focused(pid: pid)?.signature
+                guard focusAfter == element.signature else {
+                    attempts.append(.init(tentacle: .accessibility, outcome: "focus write did not move the app's focus to the field"))
+                    return nil
+                }
+                attempts.append(.init(tentacle: .accessibility, outcome: "focused the field — the app's focused element reads back as the target"))
+                return await finish(
+                    action, element, .accessibility, .confirmed, nil, nil,
+                    focusBefore, focusAfter, cursorBefore, frontBefore, attempts, pid,
+                )
+            }
             // `AXShowMenu` counts as a press: menu buttons (and the remote elements System
             // Settings panes host) expose only it, and a human clicks them like any button.
             guard let pressish = element.pressishAction else {
@@ -760,8 +860,12 @@ nonisolated struct GhostReach {
             try? await Task.sleep(for: .milliseconds(300))
             let focusAfter = ElementQuery.focused(pid: pid)?.signature
             // A focus change is weak but real evidence that the click was received — unless a
-            // display wake intervened, which changes every signature by itself.
-            let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore)
+            // display wake intervened, which changes every signature by itself, or the focus only
+            // moved onto the clicked control: a focusable web button takes focus from a click it
+            // otherwise ignores (measured 2026-10-12, Safari). A text field is the exception,
+            // since focusing it is what the click is for.
+            let focusLandedOnTarget = focusAfter == element.signature && !element.isEditable
+            let verdict: Evidence.Verdict = (focusDeltaIsUsable && focusAfter != focusBefore && !focusLandedOnTarget)
                 ? .confirmed : .unverifiable
             attempts.append(.init(tentacle: .postedEvent, outcome: "click posted"))
             return await finish(
@@ -805,9 +909,14 @@ nonisolated struct GhostReach {
     ///
     /// A capture that throws mid-action (the grant revoked between baseline and now) records its
     /// reason into `fault` rather than being lost to a `try?`.
+    ///
+    /// When the action is what focused the target, the band along its edge is left out of the
+    /// diff: that is where the focus ring is drawn, and a ring alone moved 4.7% of a Safari
+    /// `role="button"` div's pixels — past the 2% band — while the page ignored the press
+    /// (measured 2026-10-12). A change inside the control still counts.
     private func pixelDelta(
         from baseline: CGImage?, at baselineRect: CGRect?, of element: AXElement,
-        into fault: VisualFault, _ refetch: () -> AXElement?
+        into fault: VisualFault, targetWasFocused: Bool, _ refetch: () -> AXElement?
     ) async -> Double? {
         guard let baseline, let baselineRect else { return nil }
         let source = element.isValid ? element : (refetch() ?? element)
@@ -824,7 +933,24 @@ nonisolated struct GhostReach {
             return nil
         }
         guard let after else { return nil }
+        let focusedByUs = !targetWasFocused && source.boolValue(kAXFocusedAttribute) == true
+        if focusedByUs,
+           let before = Self.interior(of: baseline, frame: frame),
+           let afterInterior = Self.interior(of: after, frame: frame) {
+            return ScreenDiff.changedFraction(from: before, to: afterInterior)
+        }
         return ScreenDiff.changedFraction(from: baseline, to: after)
+    }
+
+    /// The capture with ``Constants/focusRingBand`` points trimmed from every edge, or nil when
+    /// too little would remain to measure.
+    private static func interior(of image: CGImage, frame: CGRect) -> CGImage? {
+        guard frame.width > 0 else { return nil }
+        let scale = CGFloat(image.width) / frame.width
+        let band = (Constants.focusRingBand * scale).rounded(.up)
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height).insetBy(dx: band, dy: band)
+        guard rect.width >= band * 2, rect.height >= band * 2 else { return nil }
+        return image.cropping(to: rect)
     }
 
     // MARK: - Evidence assembly

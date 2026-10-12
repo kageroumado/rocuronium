@@ -63,8 +63,30 @@ actor Engine {
     /// reported on the act reply as `matchedBy`. Requests are serialized, so the last
     /// resolution is this request's.
     private var lastMatchedBy: String?
+    /// Safari processes `prepareTree` has already waited on, so each pays the wait once.
+    private var preparedWebProcesses: Set<pid_t> = []
+
+    /// Asks the app to expose its whole tree before a walk. Chromium builds its tree only once
+    /// `AXManualAccessibility` is set. WebKit builds a page's tree on the first request for it:
+    /// the first walk of a Safari window finds the toolbar and no `AXWebArea` (measured
+    /// 2026-10-12, a first `read` of a loaded page returned 13 toolbar lines), and the page
+    /// arrives a few hundred milliseconds later. So the first walk of a Safari process waits,
+    /// up to ``Constants/webTreeWaitAttempts`` polls, for a web area to appear.
+    private func prepareTree(pid: pid_t) {
+        AXElement(pid: pid).enableManualAccessibility()
+        guard !preparedWebProcesses.contains(pid), WebContent.family(of: pid) == .safari else { return }
+        preparedWebProcesses.insert(pid)
+        for _ in 0..<Constants.webTreeWaitAttempts {
+            let windows = ElementQuery.windows(pid: pid, selector: .init())
+            if windows.isEmpty || windows.contains(where: { firstDescendant(role: "AXWebArea", under: $0) != nil }) { return }
+            Thread.sleep(forTimeInterval: Constants.webTreeWaitInterval)
+        }
+    }
 
     private enum Constants {
+        /// How long the first walk of a Safari process waits for WebKit to expose a page.
+        static let webTreeWaitAttempts = 5
+        static let webTreeWaitInterval: TimeInterval = 0.2
         /// How much a window may change on its own between two back-to-back captures and
         /// still be treated as still enough for its pixels to testify. Deliberately tight:
         /// over-trusting a moving window is what produces false confirmations.
@@ -272,8 +294,7 @@ actor Engine {
         // first so the caller hears "no such window", never a silent whole-app search.
         if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
 
-        // Chromium builds its tree lazily; ask once, cheap and harmless elsewhere.
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
         // `all` is its own cache key (a distinct predicate) but the page — limit/offset — is
@@ -328,7 +349,7 @@ actor Engine {
     func annotationRows(pid: pid_t, window: WindowSelector = .init()) throws -> [ElementDescriptor] {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         cache.evictDeadProcesses(livePIDs: livePIDs())
         let results = ElementQuery.search(pid: pid, window: window) { element in
             element.frame != nil && Self.interactableRoles.contains(element.role)
@@ -392,7 +413,7 @@ actor Engine {
         exact: Bool = false
     ) throws -> ReadOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         cache.evictDeadProcesses(livePIDs: livePIDs())
         observations.evictDeadProcesses(livePIDs: livePIDs())
 
@@ -533,7 +554,7 @@ actor Engine {
     ) async throws -> WaitOutcome {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
         if window.isSpecified { _ = try windowElement(pid: pid, selector: window) }
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         let clock = ContinuousClock()
         let start = clock.now
         var polls = 0
@@ -1543,7 +1564,7 @@ actor Engine {
         exact: Bool = false
     ) async throws -> (evidence: Evidence, barBefore: Double?, barAfter: Double?, area: ScrollAreaPick?) {
         guard DisplayWake.perceptionIsReliable else { throw EngineError.cannotSee }
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
         let (area, pick) = try resolveScrollArea(
@@ -1795,7 +1816,7 @@ actor Engine {
                 "'untilText' needs Screen Recording — the loop is OCR over captured frames. Grant it, or use 'scroll' with a label (AXScrollToVisible) instead.",
             )
         }
-        AXElement(pid: pid).enableManualAccessibility()
+        prepareTree(pid: pid)
         cache.evictDeadProcesses(livePIDs: livePIDs())
 
         let (area, pick) = try resolveScrollArea(

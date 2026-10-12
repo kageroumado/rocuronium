@@ -125,6 +125,25 @@ struct TreeDeltaTests {
 
     /// Duplicate elements diff by multiplicity: two identical buttons becoming three is
     /// one appearance.
+    /// A bare container appearing is a change, but not one with content: the evidence channel
+    /// must not confirm a click on it (the WebKit focus wrapper).
+    @Test func bareContainerIsAChangeWithoutContent() {
+        var new = window
+        new.append(node("AXGroup"))
+        let delta = TreeDelta.compute(from: window, to: new)
+        #expect(delta.changeCount == 1)
+        #expect(delta.contentChangeCount == 0)
+    }
+
+    @Test func labelledOrValuedChangesCarryContent() {
+        var new = window
+        new.append(node("AXGroup"))
+        new.append(node("AXButton", "Archive"))
+        new[2] = node("AXStaticText", value: "2 unread")
+        let delta = TreeDelta.compute(from: window, to: new)
+        #expect(delta.contentChangeCount == 2)
+    }
+
     @Test func duplicateMultiplicityChangeIsOneAppearance() {
         let old = [node("AXButton", "OK"), node("AXButton", "OK")]
         let new = [node("AXButton", "OK"), node("AXButton", "OK"), node("AXButton", "OK")]
@@ -162,5 +181,27 @@ struct TreeSnapshotStoreTests {
         store.evictDeadProcesses(livePIDs: [42])
         #expect(store.snapshot(for: dead) == nil)
         #expect(store.snapshot(for: live) != nil)
+    }
+}
+
+/// Each evidence fold rebuilds the value; the reach's suggestion must come out the other side,
+/// or the agent gets a bare `noEffect` with the next step stripped from it.
+struct EvidenceAnnotationTests {
+    private var ignoredClick: Evidence {
+        Evidence(
+            action: "click", target: "AXButton 'Publish'", tentacle: .postedEvent, verdict: .noEffect,
+            readback: nil, pixelDelta: 0, focusBefore: nil, focusAfter: nil,
+            cursorMoved: false, frontmostChanged: false, frontmostBecameTarget: false,
+            attempts: [], referral: nil,
+        ).suggestingRealClickForWebContent()
+    }
+
+    @Test func suggestionSurvivesTheTreeAndVisualFolds() {
+        let folded = ignoredClick
+            .addingTreeEvidence(TreeDelta.compute(from: [], to: []))
+            .addingVisualEvidence(delta: 0)
+            .addingConfirmingVisualEvidence(delta: 0)
+        #expect(folded.verdict == .noEffect)
+        #expect(folded.suggestion?.hasPrefix("click --allow-hardware-input") == true)
     }
 }

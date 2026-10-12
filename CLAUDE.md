@@ -75,7 +75,7 @@ Signals feeding the verdict: read-back (`element.value` after write), pixel delt
 
 ## Presence and safety — two invariants
 
-1. **Never take the cursor without opt-in.** Ghost tentacles are the default; hardware needs `allowHardwareInput` (click/type) or `confirm` (move/drag/activate). `UserPresence` reads HID idle, lock, and display power → present/idle/away/unknown, **defaulting to present when unknown**. Presence is *propagated to the agent* (a `mayTakeCursor` flag + advice), not acted on unilaterally.
+1. **Never take the cursor without opt-in.** Ghost tentacles are the default; hardware needs `allowHardwareInput` (click/type) or `confirm` (move/drag/activate), and a human who is present is asked before the hardware tentacle runs (`PresenceRelay.approveHardware`). `UserPresence` reads HID idle, lock, and display power → present/idle/away/unknown, **defaulting to present when unknown**. Presence is *propagated to the agent* (a `mayTakeCursor` flag + advice), not acted on unilaterally.
 2. **Every action returns evidence** (above).
 
 `EmergencyStop` is a process-global atomic checked per-element in walks and per-sample (~8 ms) in cursor traces — ⌃⌥⇧⎋ halts mid-payload. **Resume is popover-only: no socket verb clears the halt**, so an agent cannot un-halt itself. `Core` never imports `Presence/`; the engine telegraphs hardware actions through `PresenceRelay`'s static hooks.

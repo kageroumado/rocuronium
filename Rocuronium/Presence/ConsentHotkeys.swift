@@ -16,9 +16,12 @@ enum ConsentAnswer: Sendable, Equatable {
 ///
 /// The keys are taken by a session event tap, which swallows them: a one-second hold
 /// auto-repeats, and a listen-only monitor lets every repeat through to whatever is focused
-/// (a held Y typed "yyyyyyyy" into the front window). The tap lives only while a prompt is up,
-/// and only the three bare keys are taken; a chord with ⌘, ⌃ or ⌥ passes untouched. The
-/// Accessibility grant the app already holds is what permits an active tap.
+/// (a held Y typed "yyyyyyyy" into the front window). The tap lives while a prompt is up and
+/// until the key that answered it comes up: the hold outlasts the one-second threshold, and
+/// its remaining repeats and key-up, let through, would type into the front window and read to
+/// `HumanInputMonitor` as the human touching the action they had just approved. Only the
+/// three bare keys are taken; a chord with ⌘, ⌃ or ⌥ passes untouched. The Accessibility
+/// grant the app already holds is what permits an active tap.
 @MainActor
 final class ConsentHotkeys {
     /// Reports the held answer and how far toward the one-second threshold (0…1), each tick.
@@ -30,6 +33,12 @@ final class ConsentHotkeys {
     private var tapSource: CFRunLoopSource?
     private var holdAnswer: ConsentAnswer?
     private var ticker: Task<Void, Never>?
+    /// The keycode currently held down among the three, if any.
+    private var heldKeycode: Int64?
+    /// Set once the prompt is answered while its key is still down: the tap then swallows only
+    /// that key and comes down with its key-up.
+    private var draining = false
+    private var drainDeadline: Task<Void, Never>?
 
     private enum Constants {
         static let holdDuration: TimeInterval = 1.0
@@ -38,9 +47,12 @@ final class ConsentHotkeys {
         static let yesForAWhileKey: Int64 = 0x00
         static let noKey: Int64 = 0x2D
         static let chordFlags: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
+        /// The longest the tap waits for a held key's key-up after the prompt is answered.
+        static let drainLimit: Duration = .seconds(5)
     }
 
     func start() {
+        if draining { endDrain(teardown: false) }
         guard tap == nil else { return }
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -55,14 +67,38 @@ final class ConsentHotkeys {
         tapSource = source
     }
 
+    /// Ends the prompt's keys. A key still held keeps the tap up, swallowing only that key,
+    /// until its key-up or ``Constants/drainLimit``.
     func stop() {
+        ticker?.cancel()
+        ticker = nil
+        holdAnswer = nil
+        guard heldKeycode == nil || tap == nil else {
+            draining = true
+            drainDeadline = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Constants.drainLimit)
+                guard !Task.isCancelled else { return }
+                self?.endDrain(teardown: true)
+            }
+            return
+        }
+        teardown()
+    }
+
+    private func endDrain(teardown shouldTeardown: Bool) {
+        draining = false
+        heldKeycode = nil
+        drainDeadline?.cancel()
+        drainDeadline = nil
+        if shouldTeardown { teardown() }
+    }
+
+    private func teardown() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
         tap = nil
         tapSource = nil
-        ticker?.cancel()
-        ticker = nil
-        holdAnswer = nil
+        heldKeycode = nil
     }
 
     /// The tap's verdict on one event: `true` to swallow it. Runs on the main run loop.
@@ -72,8 +108,14 @@ final class ConsentHotkeys {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
+        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+        if draining {
+            guard keycode == heldKeycode else { return false }
+            if type == .keyUp { endDrain(teardown: true) }
+            return true
+        }
         guard event.flags.intersection(Constants.chordFlags).isEmpty else { return false }
-        let answer: ConsentAnswer? = switch event.getIntegerValueField(.keyboardEventKeycode) {
+        let answer: ConsentAnswer? = switch keycode {
         case Constants.yesKey: .approve
         case Constants.yesForAWhileKey: .approveForAWhile
         case Constants.noKey: .decline
@@ -81,8 +123,10 @@ final class ConsentHotkeys {
         }
         guard let answer else { return false }
         if type == .keyDown {
+            heldKeycode = keycode
             if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 { beginHold(answer) }
         } else {
+            if heldKeycode == keycode { heldKeycode = nil }
             endHold(answer)
         }
         return true

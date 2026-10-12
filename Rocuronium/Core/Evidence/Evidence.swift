@@ -130,12 +130,38 @@ nonisolated struct Evidence: Codable, Sendable {
         return copy
     }
 
+    /// The next step for a click web content ignored: both ghost deliveries reached the page
+    /// and neither moved it. Controls that listen for pointer events are the measured case
+    /// (a `role="button"` div in Safari, 2026-10-12); bringing the browser forward changes
+    /// nothing for them, and an agent left without this guessed `activate` and took the front
+    /// window from the human typing elsewhere.
+    func suggestingRealClickForWebContent() -> Evidence {
+        guard suggestion == nil else { return self }
+        var copy = self
+        copy.suggestion = "click --allow-hardware-input: the page ignored the accessibility press and the "
+            + "posted click, which is what web controls listening for pointer events do. A real click "
+            + "reaches them (the human at the Mac is asked first); activating the app does not help"
+        return copy
+    }
+
     /// Folds a visual measurement into an existing verdict.
     ///
     /// `fault` carries the reason the capture produced no measurement — a broken Screen
     /// Recording grant is the usual cause. When there is no delta to fold, it is surfaced as an
     /// attempt so the reader sees *why* there is no pixel witness rather than a bare
     /// `unverifiable`.
+    /// The annotations a fold must not lose: each fold rebuilds the value from its stored
+    /// fields, and these are set after construction (the reach's suggestion, the router's
+    /// `matchedBy`, an earlier tree diff).
+    private func carryingAnnotations(onto rebuilt: Evidence) -> Evidence {
+        var result = rebuilt
+        result.suggestion = result.suggestion ?? suggestion
+        result.matchedBy = result.matchedBy ?? matchedBy
+        result.treeDelta = result.treeDelta ?? treeDelta
+        result.treeChanges = result.treeChanges ?? treeChanges
+        return result
+    }
+
     func addingVisualEvidence(delta: Double?, fault: String? = nil) -> Evidence {
         guard verdict != .confirmed else { return self }
         guard let delta else {
@@ -156,7 +182,7 @@ nonisolated struct Evidence: Codable, Sendable {
         } else {
             visual
         }
-        return Evidence(
+        return carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: resolved,
             readback: readback, pixelDelta: delta,
@@ -165,13 +191,13 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// A copy carrying one more attempt, verdict and everything else untouched. For notes that
     /// explain the evidence (a capture that could not run) rather than change what it says.
     private func appendingAttempt(_ outcome: String) -> Evidence {
-        Evidence(
+        carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: verdict, readback: readback, pixelDelta: pixelDelta,
             focusBefore: focusBefore, focusAfter: focusAfter,
@@ -179,7 +205,7 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts + [.init(tentacle: tentacle, outcome: outcome)],
             referral: referral, groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// Selection as read-back: a selection that changed across a press is direct evidence the
@@ -194,7 +220,7 @@ nonisolated struct Evidence: Codable, Sendable {
         // selection that was there all along.
         guard verdict == .unverifiable, let before, let after,
               !after.isEmpty, after != before else { return self }
-        return Evidence(
+        return carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: after, pixelDelta: pixelDelta,
@@ -203,7 +229,7 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// The target process exited after the action — the read-back for actions that close
@@ -211,7 +237,7 @@ nonisolated struct Evidence: Codable, Sendable {
     /// or restart-to-update otherwise reports `unverifiable`, and an unverified-looking
     /// "error" on a press that worked invites the one retry a just-quit app must not get.
     func confirmedByProcessExit() -> Evidence {
-        Evidence(
+        carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: "the target process exited after the press",
@@ -225,7 +251,7 @@ nonisolated struct Evidence: Codable, Sendable {
             )],
             referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// The target's on-screen window count moved — the read-back for the family of actions
@@ -237,7 +263,7 @@ nonisolated struct Evidence: Codable, Sendable {
     /// one retry a "make a new window" action must not get. The count is discrete, cheap,
     /// and window-server-truthful; it overturns both weaker verdicts.
     func confirmedByWindowCountChange(before: Int, after: Int) -> Evidence {
-        Evidence(
+        carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: .confirmed,
             readback: "the target's on-screen window count changed \(before) → \(after)",
@@ -251,7 +277,7 @@ nonisolated struct Evidence: Codable, Sendable {
             )],
             referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// Like `addingVisualEvidence`, but pixels may only **confirm**, never refute.
@@ -278,7 +304,7 @@ nonisolated struct Evidence: Codable, Sendable {
         case .unverifiable: verdict == .noEffect ? .unverifiable : verdict
         case .noEffect: verdict
         }
-        return Evidence(
+        return carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: resolved,
             readback: readback, pixelDelta: delta,
@@ -287,7 +313,7 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
     }
 
     /// Folds the window's accessibility-tree diff into the verdict — the channel the pixel
@@ -296,13 +322,14 @@ nonisolated struct Evidence: Codable, Sendable {
     ///
     /// Confirm-only, like the window-pixel channel and for the same reason: the walk's scope
     /// is the whole window, and a legitimate consequence can land in a popover or a second
-    /// window the walk never reached, so a still tree must never *refute* an action. Any
-    /// appeared, vanished, or changed element upgrades a weaker verdict to `.confirmed`; an
-    /// empty diff is recorded as `treeChanges: 0` and leaves the verdict untouched.
+    /// window the walk never reached, so a still tree must never *refute* an action. A change
+    /// that carries content (``TreeDelta/Delta/contentChangeCount``) upgrades a weaker verdict
+    /// to `.confirmed`; a diff of bare containers is recorded in `treeChanges` and
+    /// `treeDelta` and leaves the verdict untouched, as an empty diff does.
     func addingTreeEvidence(_ delta: TreeDelta.Delta) -> Evidence {
         let changed = !delta.isEmpty
-        let upgrading = verdict != .confirmed && changed
-        var result = Evidence(
+        let upgrading = verdict != .confirmed && delta.contentChangeCount > 0
+        var result = carryingAnnotations(onto: Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: upgrading ? .confirmed : verdict,
             readback: upgrading
@@ -314,7 +341,7 @@ nonisolated struct Evidence: Codable, Sendable {
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
             groundedBy: groundedBy,
-        )
+        ))
         result.treeChanges = delta.changeCount
         result.treeDelta = changed ? TreeDelta.render(delta) : nil
         return result
