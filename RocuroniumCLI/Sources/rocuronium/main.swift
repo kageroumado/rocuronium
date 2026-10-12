@@ -75,7 +75,7 @@ Windows
   space      <list | switch (--next|--prev|--to <n>) [--confirm] | move --app <a> --to <n>>
                         real Mission Control Spaces; switch is presence-gated like activate
 
-Agent session — a second macOS user, off-console, with its own cursor (Docs/AGENT-SESSION.md)
+Agent session — a second macOS user, off-console, with its own cursor (`rocuronium guide`, Isolation)
   session    status                        account, uid, login process age, displays, the daemon inside,
                                            and the dead-man's switch
              enable [--account <name>] [--password-stdin]

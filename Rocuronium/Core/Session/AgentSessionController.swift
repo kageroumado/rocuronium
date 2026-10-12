@@ -195,7 +195,7 @@ final class AgentSessionController {
             return ["ok": false, "error": AgentSessionLink.LinkError.notEnabled.description]
         }
         guard let route = makeBringUp?() else {
-            return ["ok": false, "error": "no way to create an off-console session is available on this Mac — see Docs/AGENT-SESSION.md"]
+            return ["ok": false, "error": "no way to create an off-console session is available on this Mac — see the agent session in `rocuronium guide` (Isolation)"]
         }
         do { try retainEmergencyShortcut?() }
         catch { return ["ok": false, "error": String(describing: error)] }
