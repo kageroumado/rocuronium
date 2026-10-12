@@ -108,6 +108,8 @@ nonisolated struct GhostReach {
         /// How far a focus ring reaches into a control's frame, in points. WebKit's default
         /// outline is 3 pt; AppKit's ring is drawn outside the frame.
         static let focusRingBand: CGFloat = 4
+        /// The most of a target app's own label the consent question quotes.
+        static let promptLabelLimit = 40
     }
 
     func perform(
@@ -357,6 +359,35 @@ nonisolated struct GhostReach {
                 cursorBefore, frontBefore, attempts, pid, referral: referral,
             )
         }
+        // The caller's flag permits the sting; a human at the machine still owns the cursor and
+        // keyboard it takes, so they are asked, exactly as for `activate` or a foreground click.
+        // Asked before the lock, aim and occlusion checks below, so those describe the screen
+        // after the answer: the human may take seconds, and a window that moved over the target
+        // meanwhile must refuse the click, not receive it.
+        if UserPresence.read().state != .away {
+            guard await PresenceRelay.approveHardware(await hardwarePrompt(for: action, on: element, pid: pid)) else {
+                attempts.append(.init(
+                    tentacle: .hardwareInput,
+                    outcome: "declined by the human at the machine — the cursor and keyboard were not taken",
+                ))
+                return await foldingVisual(finish(
+                    action, element, .postedEvent, .noEffect, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                ))
+            }
+            // The answer can outlast the request: the socket cancels at its deadline, and a
+            // cancelled request must not go on to take the cursor.
+            guard !Task.isCancelled else {
+                attempts.append(.init(tentacle: .hardwareInput, outcome: "refused: the request was cancelled while the human was being asked"))
+                return await finish(
+                    action, element, .postedEvent, .unverifiable, nil, nil,
+                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
+                    cursorBefore, frontBefore, attempts, pid, referral: referral,
+                )
+            }
+        }
+
         // The lock screen owns the console while locked: a hardware keystroke would land in
         // the password field. Ghost tentacles are safe there — this one is categorically not.
         guard !UserPresence.read().lockBlocksHardware else {
@@ -433,28 +464,6 @@ nonisolated struct GhostReach {
             // thing to handle, and only the agent has that context.
             evidence.suggestion = "park --app \(targetName ?? "pid \(pid)")"
             return evidence
-        }
-
-        // The caller's flag permits the sting; a human at the machine still owns the cursor and
-        // keyboard it takes, so they are asked, exactly as for `activate` or a foreground click.
-        if UserPresence.read().state != .away {
-            let name = live.label.isEmpty ? live.role : "“\(live.label)”"
-            let prompt: String = if case .setText = action {
-                "Type into \(name) with the real keyboard"
-            } else {
-                "Click \(name) with the real cursor"
-            }
-            guard await PresenceRelay.approveHardware(prompt) else {
-                attempts.append(.init(
-                    tentacle: .hardwareInput,
-                    outcome: "declined by the human at the machine — the cursor and keyboard were not taken",
-                ))
-                return await foldingVisual(finish(
-                    action, element, .postedEvent, .noEffect, nil, nil,
-                    focusBefore, ElementQuery.focused(pid: pid)?.signature,
-                    cursorBefore, frontBefore, attempts, pid, referral: referral,
-                ))
-            }
         }
 
         switch action {
@@ -940,6 +949,24 @@ nonisolated struct GhostReach {
             return ScreenDiff.changedFraction(from: before, to: afterInterior)
         }
         return ScreenDiff.changedFraction(from: baseline, to: after)
+    }
+
+    /// The consent question for the sting. The app is named from the process table; the
+    /// element's label comes from the target app's own accessibility tree, which that app
+    /// writes, so it is flattened to one line and capped, and always shown as a quotation
+    /// inside the app's name rather than as the whole sentence.
+    private func hardwarePrompt(for action: Action, on element: AXElement, pid: pid_t) async -> String {
+        let app = await MainActor.run { NSRunningApplication(processIdentifier: pid)?.localizedName } ?? "pid \(pid)"
+        let flattened = element.label.unicodeScalars
+            .map { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) ? " " : String($0) }
+            .joined()
+            .trimmingCharacters(in: .whitespaces)
+        let label = flattened.count > Constants.promptLabelLimit
+            ? String(flattened.prefix(Constants.promptLabelLimit)) + "…"
+            : flattened
+        let target = label.isEmpty ? "a \(element.role) in \(app)" : "“\(label)” in \(app)"
+        if case .setText = action { return "Type into \(target) with the real keyboard" }
+        return "Click \(target) with the real cursor"
     }
 
     /// The capture with ``Constants/focusRingBand`` points trimmed from every edge, or nil when
