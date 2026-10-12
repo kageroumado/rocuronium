@@ -617,9 +617,14 @@ final class CommandRouter {
         // `label: ""`, and an agent echoing that row back means "this element", not "match ''".
         var request = request
         if request.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { request.label = nil }
-        confirmInFlight = request.confirm == true
-        approvedInDispatch = false
-        defer { approvedInDispatch = false }
+        // Each command (each plan step) answers its consent questions in a scope of its own,
+        // carried by the task rather than the router, so a request cancelled at the socket's
+        // deadline and still unwinding can never read or set the next request's.
+        let scope = ConsentScope(confirm: request.confirm == true)
+        return try await ConsentScope.$current.withValue(scope) { try await watchedDispatch(request) }
+    }
+
+    private func watchedDispatch(_ request: Request) async throws -> [String: Any] {
         guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
         let monitor = HumanInputMonitor.shared
         monitor.begin(targetPid: try? resolve(request))
@@ -1651,13 +1656,6 @@ final class CommandRouter {
     /// `nil` when no prompt was shown (nobody present, or `--confirm` already carried authority).
     private var consentOutcome: String?
 
-    /// The `confirm` flag of the request being dispatched, for the consent the engine asks for
-    /// mid-action through ``PresenceRelay/approveHardware``.
-    private var confirmInFlight = false
-    /// Whether the human approved something during the command being dispatched — one plan
-    /// step, or one top-level command. Scoped to the dispatch so a yes given to one plan step
-    /// never answers for a later step.
-    private var approvedInDispatch = false
 
     /// Set when `--app` named several running instances and one was taken by the
     /// `AppInstancePicker` rules; rides out on the reply as `appResolution`.
@@ -1667,8 +1665,9 @@ final class CommandRouter {
     /// whose bring-forward the human already approved has its answer, and asking again for the
     /// click itself would be a second prompt for the same act.
     private func approveHardware(prompt: String) async -> Bool {
-        if approvedInDispatch { return true }
-        return await consented(prompt: prompt, away: false, confirm: confirmInFlight)
+        guard let scope = ConsentScope.current else { return false }
+        if scope.approved { return true }
+        return await consented(prompt: prompt, away: false, confirm: scope.confirm)
     }
 
     private func consented(prompt: String, away: Bool, confirm: Bool) async -> Bool {
@@ -1688,12 +1687,12 @@ final class CommandRouter {
         switch await overlay.requestConsent(prompt: prompt) {
         case .approve:
             consentOutcome = "approved"
-            approvedInDispatch = true
+            ConsentScope.current?.approved = true
             return true
         case .approveForAWhile:
             StandingApproval.grant()
             consentOutcome = "approved-for-\(StandingApproval.minutes)-minutes"
-            approvedInDispatch = true
+            ConsentScope.current?.approved = true
             return true
         case .decline:
             consentOutcome = "declined"
@@ -3487,4 +3486,18 @@ final class CommandRouter {
             }
         }
     }
+}
+
+/// The consent state of one command: the caller's `confirm`, and whether the human approved
+/// something while it ran. Bound to the dispatching task with `$current.withValue`, so the
+/// engine's question before the hardware tentacle (``PresenceRelay/approveHardware``, called on
+/// that same task) sees this command's scope and no other.
+@MainActor
+final class ConsentScope {
+    @TaskLocal nonisolated static var current: ConsentScope?
+
+    let confirm: Bool
+    var approved = false
+
+    nonisolated init(confirm: Bool) { self.confirm = confirm }
 }
