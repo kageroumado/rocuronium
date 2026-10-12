@@ -127,7 +127,7 @@ nonisolated enum HardwareInput {
     /// Moves the pointer to `point`, clicks, and puts the pointer back where it was.
     ///
     /// The restore is courtesy, not concealment: `Evidence.cursorMovedByUs` reports true for
-    /// every hardware-tentacle action regardless, because the takeover happened even when undone.
+    /// pointer delivery, including clicks that restore the original position.
     ///
     /// Returns false when the human used the mouse or keyboard before the button went down: the
     /// press is withheld, and the cursor is left where the hand put it.

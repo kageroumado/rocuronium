@@ -23,7 +23,8 @@ final class PresenceOverlayController {
     private var panelWindow: PresencePanel?
     private var panelHost: NSHostingView<AnyView>?
     private var effectsWindow: NSWindow?
-    private let hotkey = HotkeyMonitor()
+    private let hotkey: HotkeyMonitor
+    private let hotkeyLifetime: EmergencyHotkeyLifetime
     private let consentKeys = ConsentHotkeys()
     private var consentContinuation: CheckedContinuation<ConsentAnswer, Never>?
     private var tickTask: Task<Void, Never>?
@@ -50,8 +51,16 @@ final class PresenceOverlayController {
     }
 
     init() {
+        let hotkey = HotkeyMonitor()
+        self.hotkey = hotkey
+        hotkeyLifetime = EmergencyHotkeyLifetime(register: { try hotkey.register() }, unregister: { hotkey.unregister() })
         hotkey.onHalt = { [weak self] in self?.emergencyStop() }
     }
+
+    var emergencyShortcutRegistered: Bool { hotkey.isRegistered }
+
+    func retainAgentEmergencyShortcut() throws { try hotkeyLifetime.acquire(.agentSession) }
+    func releaseAgentEmergencyShortcut() { hotkeyLifetime.release(.agentSession) }
 
     var isSessionVisible: Bool { model.sessionStart != nil }
 
@@ -227,7 +236,7 @@ final class PresenceOverlayController {
 
     /// ⌃⌥⇧⎋: halt the engine, then remove every surface at once — no fade, no ceremony.
     private func emergencyStop() {
-        EmergencyStop.halt(reason: "⌃⌥⇧⎋ pressed while the overlay was visible")
+        EmergencyStop.halt(reason: "⌃⌥⇧⎋ pressed on the physical keyboard")
         if consentContinuation != nil { resolveConsent(.decline) }
         model.reset()
         hideEverything()
@@ -237,7 +246,7 @@ final class PresenceOverlayController {
     private func hideEverything() {
         tickTask?.cancel()
         tickTask = nil
-        hotkey.unregister()
+        hotkeyLifetime.release(.overlay)
         panelFading = false
         effectsShown = false
         for window in [panelWindow, effectsWindow] as [NSWindow?] {
@@ -271,8 +280,7 @@ final class PresenceOverlayController {
                 panelWindow.animator().alphaValue = 1
             }
         }
-        // The stop chord exists only while there is visibly something to stop.
-        hotkey.register()
+        try? hotkeyLifetime.acquire(.overlay)
         startTicking()
         evaluate()
     }
@@ -301,7 +309,7 @@ final class PresenceOverlayController {
     /// The agent is waiting on something that is not the UI: fade the panel out and keep the
     /// session, so the next action or step brings it straight back.
     private func releaseScreen() {
-        hotkey.unregister()
+        hotkeyLifetime.release(.overlay)
         guard let panelWindow, panelWindow.isVisible, !panelFading else { return }
         panelFading = true
         NSAnimationContext.runAnimationGroup({ context in

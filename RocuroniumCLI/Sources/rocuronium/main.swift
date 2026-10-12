@@ -18,6 +18,12 @@ let socketPath = FileManager.default
 let usage = """
 rocuronium — drive this Mac without taking the cursor
 
+Desktop selection
+  <verb> --desktop agent                   use the running agent desktop; refuses if unavailable
+  <verb> --desktop current                 use the calling user's desktop (default)
+  plan --desktop agent                    keep every step on the agent desktop
+  Session lifecycle commands use the owning desktop. MCP tools accept desktop: agent.
+
 Observe
   status                                   presence, permissions, halted, display hold
   diag                                     what each permission check really returns
@@ -70,12 +76,14 @@ Windows
                         real Mission Control Spaces; switch is presence-gated like activate
 
 Agent session — a second macOS user, off-console, with its own cursor (Docs/AGENT-SESSION.md)
-  session    status                        account, uid, session uptime, displays, the daemon inside,
+  session    status                        account, uid, login process age, displays, the daemon inside,
                                            and the dead-man's switch
              enable [--account <name>] [--password-stdin]
                                            provision the agent account through the session helper
                                            (approved once in Login Items); a new account gets a
                                            generated password kept in the keychain
+                                           --password-stdin hides terminal input; Return submits
+                                           piped input is read until EOF
              start                         bring the session up, arm the dead-man's switch, wait for
                                            Rocuronium inside to report offConsole
              stop                          bootout the session; the only path allowed before a delete
@@ -156,10 +164,20 @@ Nine things to know:
 // MARK: - Argument parsing
 
 var arguments = Array(CommandLine.arguments.dropFirst())
+let desktop: String?
+do { desktop = try DesktopArgument.extract(from: &arguments) }
+catch {
+    FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+    exit(2)
+}
 
 // `version` reads the stamp from the bundle around the executable actually running, then asks
 // the daemon for its own, so a CLI from one install and a daemon from another are told apart.
 if let first = arguments.first, ["version", "--version", "-V"].contains(first) {
+    if desktop != nil {
+        FileHandle.standardError.write(Data("rocuronium: version describes this installation; use status --desktop agent for the agent daemon\n".utf8))
+        exit(2)
+    }
     let executable = StaleInstall.runningExecutablePath()
     if let stamp = InstalledVersion.read(executablePath: executable) {
         print("rocuronium \(stamp.display)   \(InstalledVersion.bundlePath(executablePath: executable) ?? "")")
@@ -188,6 +206,10 @@ guard let command = arguments.first, !command.hasPrefix("-"), !helpWords.contain
     exit(arguments.isEmpty || helpWords.contains(arguments[0]) ? 0 : 2)
 }
 arguments.removeFirst()
+if desktop != nil, ["mcp", "guide", "version", "session"].contains(command) {
+    FileHandle.standardError.write(Data("rocuronium: --desktop applies to desktop commands; MCP selects desktop in each tool call and session lifecycle commands use the owning desktop\n".utf8))
+    exit(2)
+}
 // `rocuronium key --help` asks for help, not for a request the daemon would refuse.
 if arguments.contains("--help") {
     print(usage)
@@ -249,6 +271,7 @@ if command == "session", let action = arguments.first {
 }
 
 var payload: [String: Any] = ["command": command]
+if let desktop { payload["desktop"] = desktop }
 // `display`, `demo`, `busy`, and `space` take a positional subcommand: `rocuronium space switch`.
 if command == "display" || command == "demo" || command == "busy" || command == "space" || command == "session",
    let action = arguments.first, !action.hasPrefix("-") {
@@ -279,6 +302,10 @@ if command == "plan" {
         guard let planJSON = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
             FileHandle.standardError.write(Data("rocuronium plan: expected a JSON object with 'steps'\n".utf8))
             exit(2)
+        }
+        if let planDesktop = try DesktopArgument.validate(planJSON["desktop"]) {
+            if let desktop, desktop != planDesktop { throw DesktopArgument.Invalid("plan desktop conflicts with --desktop") }
+            payload["desktop"] = planDesktop
         }
         if let steps = planJSON["steps"] { payload["steps"] = steps }
         if let profile = planJSON["profile"] { payload["profile"] = profile }
@@ -355,8 +382,12 @@ for (flag, key) in [("width", "w"), ("height", "h"), ("window-index", "windowInd
 }
 // An existing agent account's password, for `session enable`: from stdin, never argv.
 if arguments.contains("--password-stdin") {
-    let line = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
-    payload["password"] = line.trimmingCharacters(in: .newlines)
+    do {
+        payload["password"] = try PasswordInput.read()
+    } catch {
+        FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+        exit(2)
+    }
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--foreground") { payload["foreground"] = true }
@@ -384,6 +415,7 @@ let wantsRawJSON = arguments.contains("--json")
 
 @MainActor
 func send(_ payload: [String: Any]) -> [String: Any]? {
+    let payload = DesktopArgument.wireRequest(payload)
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { return nil }
     defer { close(descriptor) }
@@ -701,19 +733,23 @@ case "plan":
 
 case "session":
     var current = reply
-    // `start` returns as soon as the bring-up is under way — a session takes ~10–20 s, and the
-    // daemon answers one request at a time — so the CLI follows it through `status`.
-    if payload["action"] as? String == "start" {
+    // Follow asynchronous startup and cancellation through status until the requested
+    // terminal state is verified; the control socket remains available during cleanup.
+    if let action = payload["action"] as? String, action == "start" || action == "stop" {
         var printed = Set<String>()
         let deadline = Date().addingTimeInterval(120)
         while true {
             for line in current["progress"] as? [String] ?? [] where printed.insert(line).inserted {
                 print("· \(line)")
             }
-            guard current["state"] as? String == "starting", Date() < deadline else { break }
+            guard ["starting", "stopping"].contains(current["state"] as? String ?? ""), Date() < deadline else { break }
             usleep(1_000_000)
             guard let next = send(["command": "session", "action": "status"]) else { break }
             current = next
+        }
+        if let error = SessionTransitionResult.failure(in: current, action: action) {
+            FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+            exit(1)
         }
     }
     for line in current["lines"] as? [String] ?? [] { print(line) }

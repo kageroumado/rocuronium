@@ -27,6 +27,13 @@ final class VirtualDisplayManager {
     }
 
     private(set) var display: CGVirtualDisplay?
+    private let sessionOnConsole: @MainActor () -> Bool?
+
+    init(sessionOnConsole: @escaping @MainActor () -> Bool? = {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?["kCGSSessionOnConsoleKey"] as? Bool
+    }) {
+        self.sessionOnConsole = sessionOnConsole
+    }
 
     var displayID: CGDirectDisplayID? {
         guard let display, display.displayID != 0 else { return nil }
@@ -43,6 +50,12 @@ final class VirtualDisplayManager {
     /// creation is rolled back and refused.
     @discardableResult
     func create() throws -> CGDirectDisplayID {
+        // CGVirtualDisplay attaches to the physical console even when its owner is off-console.
+        switch sessionOnConsole() {
+        case true?: break
+        case false?: throw CreationError.offConsole
+        case nil: throw CreationError.sessionUnknown
+        }
         if let id = displayID { return id }
 
         let mainBefore = CGMainDisplayID()
@@ -81,6 +94,11 @@ final class VirtualDisplayManager {
         guard CGMainDisplayID() == mainBefore else {
             destroy()
             throw CreationError.becamePrimary
+        }
+        let bounds = CGDisplayBounds(created.displayID)
+        guard displayIsActive(created.displayID), bounds.width > 0, bounds.height > 0 else {
+            destroy()
+            throw CreationError.notVisibleInSession
         }
         return created.displayID
     }
@@ -122,9 +140,12 @@ final class VirtualDisplayManager {
         return active.prefix(Int(count)).contains(id)
     }
 
-    enum CreationError: LocalizedError {
+    enum CreationError: LocalizedError, Equatable {
         case creationFailed
         case becamePrimary
+        case offConsole
+        case sessionUnknown
+        case notVisibleInSession
 
         var errorDescription: String? {
             switch self {
@@ -132,6 +153,12 @@ final class VirtualDisplayManager {
                 "Isolation unavailable: the system refused to create a virtual display (the private CGVirtualDisplay API may have changed)."
             case .becamePrimary:
                 "Isolation unavailable: the virtual display became the primary display, which would move the menu bar and every system prompt onto an invisible screen — creation was rolled back."
+            case .offConsole:
+                "Virtual display creation is unavailable in an off-console session: this API attaches displays to the physical console. Use the agent session's existing display."
+            case .sessionUnknown:
+                "Virtual display creation requires a verified physical-console session; the current session identity is unreadable."
+            case .notVisibleInSession:
+                "Isolation unavailable: the created display has no active, usable bounds in this session; creation was rolled back."
             }
         }
     }

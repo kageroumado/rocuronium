@@ -82,7 +82,7 @@ final class VirtualDisplayBridge {
     /// per redraw. Refreshed by the maintenance pass and after every park/release.
     private(set) var strayCount = 0
 
-    private let manager = VirtualDisplayManager()
+    private let manager: VirtualDisplayManager
     private let engine: Engine
     private var expiryTasks: [UUID: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
@@ -91,8 +91,9 @@ final class VirtualDisplayBridge {
     /// Kept for the menu bar, which only needs to know whether anything is holding it.
     var activeLease: Lease? { leases.values.first }
 
-    init(engine: Engine) {
+    init(engine: Engine, manager: VirtualDisplayManager? = nil) {
         self.engine = engine
+        self.manager = manager ?? VirtualDisplayManager()
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main,
         ) { [weak self] _ in
@@ -103,13 +104,15 @@ final class VirtualDisplayBridge {
     // MARK: - The display
 
     var displayID: CGDirectDisplayID? { manager.displayID }
-    var isAttached: Bool { displayID != nil }
+    var isAttached: Bool { virtualScreenBounds != nil }
 
     /// The virtual screen's bounds in the top-left-origin global space that AX frames and
     /// synthetic events use. `NSScreen.frame` is in Cocoa's bottom-left space; going through
     /// the display ID to `CGDisplayBounds` gets the flip right instead of doing it by hand.
     var virtualScreenBounds: CGRect? {
-        displayID.map(CGDisplayBounds)
+        guard let displayID, CGDisplayIsActive(displayID) != 0 else { return nil }
+        let bounds = CGDisplayBounds(displayID)
+        return bounds.width > 0 && bounds.height > 0 ? bounds : nil
     }
 
     /// Every attached display's bounds, in the top-left-origin global space AX frames use.
@@ -134,7 +137,7 @@ final class VirtualDisplayBridge {
         duration: Duration? = nil,
         kind: Lease.Kind = .explicit,
     ) throws -> Lease {
-        if displayID == nil { try manager.create() }
+        try manager.create()
         guard isAttached else { throw BridgeError.displayNeverAttached }
 
         let leaseDuration = duration

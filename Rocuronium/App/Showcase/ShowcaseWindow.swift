@@ -68,7 +68,8 @@ final class ShowcaseWindowController {
         static let defaultSize = CGSize(width: 1320, height: 820)
     }
 
-    func show(options: ShowcaseLaunchOptions = ShowcaseLaunchOptions()) {
+    func show(options requestedOptions: ShowcaseLaunchOptions? = nil) {
+        let options = requestedOptions ?? ShowcaseLaunchOptions()
         if window == nil {
             let size = options.windowSize ?? Constants.defaultSize
             // Borderless when bare: no title bar, so no safe area eating into the stage.
@@ -147,7 +148,8 @@ final class ShowcasePlayback {
         }
     }
 
-    init(options: ShowcaseLaunchOptions = ShowcaseLaunchOptions()) {
+    init(options requestedOptions: ShowcaseLaunchOptions? = nil) {
+        let options = requestedOptions ?? ShowcaseLaunchOptions()
         if let slug = options.sceneSlug, let index = ShowcaseScene.all.firstIndex(where: { $0.slug == slug }) {
             sceneIndex = index
         }

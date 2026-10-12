@@ -66,7 +66,7 @@ nonisolated struct AgentSessionLink: Sendable {
             "-i", Self.privateKey.path,
             "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes",
-            "-o", "UserKnownHostsFile=\(Self.knownHosts.path)",
+            "-o", "UserKnownHostsFile=\"\(Self.knownHosts.path)\"",
             "-o", "GlobalKnownHostsFile=/dev/null",
             "-o", "StrictHostKeyChecking=yes",
             "-o", "HostKeyAlias=\(Constants.hostAlias)",

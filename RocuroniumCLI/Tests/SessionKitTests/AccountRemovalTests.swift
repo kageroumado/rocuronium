@@ -17,6 +17,7 @@ struct AccountRemovalTests {
         var registered: Set<String> = ["agent"]
         /// What `processes(of:)` returns, call by call; the last entry repeats.
         var processTable: [[pid_t]] = [[]]
+        var loginWindowPID: pid_t?
         var bootoutStatus: Int32 = 0
         var deleteStatus: Int32 = 0
         private var processReads = 0
@@ -26,6 +27,7 @@ struct AccountRemovalTests {
         func isRegistered(_ name: String) -> Bool { registered.contains(name) }
         func register(_ name: String) { registered.insert(name) }
         func unregister(_ name: String) { registered.remove(name) }
+        func loginWindow(of uid: uid_t) -> pid_t? { loginWindowPID }
 
         func processes(of uid: uid_t) -> [pid_t] {
             calls.append("processes")
@@ -140,12 +142,12 @@ struct AccountRemovalTests {
         #expect(system.calls.isEmpty)
     }
 
-    /// Provisioning over an account whose session is live would rewrite preferences under a
-    /// running cfprefsd and a LaunchAgent under a running launchd — refused, not attempted.
+    /// Provisioning requires the account's GUI login session to be down.
     @Test func provisioningRefusesALiveSession() {
         let system = FakeSystem()
         system.processTable = [[401]]
-        #expect(Provisioning.gate(name: "agent", system: system) == .refused("'agent' has a running session (1 process) — stop it first: rocuronium session stop"))
+        system.loginWindowPID = 401
+        #expect(Provisioning.gate(name: "agent", system: system) == .refused("'agent' has a running session (loginwindow pid 401) — stop it first: rocuronium session stop"))
     }
 
     @Test func provisioningAcceptsAnIdleOrNewAccount() {
@@ -153,5 +155,11 @@ struct AccountRemovalTests {
         #expect(Provisioning.gate(name: "agent", system: system) == .existing(uid: 502))
         system.accounts = [:]
         #expect(Provisioning.gate(name: "agent", system: system) == .new)
+    }
+
+    @Test func provisioningAcceptsBackgroundProcessesWithoutAGUILogin() {
+        let system = FakeSystem()
+        system.processTable = [[6973]]
+        #expect(Provisioning.gate(name: "agent", system: system) == .existing(uid: 502))
     }
 }

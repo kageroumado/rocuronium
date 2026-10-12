@@ -13,6 +13,14 @@ final class PlanExecutor {
         let guardResult: PlanGuard.Result?
         let policy: String?
         let fallbackReply: [String: Any]?
+        var fallbackGuardResult: PlanGuard.Result?
+
+        var succeeded: Bool {
+            if let fallbackReply {
+                return fallbackReply["ok"] as? Bool == true && (fallbackGuardResult?.passed ?? true)
+            }
+            return reply["ok"] as? Bool == true && (guardResult?.passed ?? true)
+        }
     }
 
     private let dispatch: (CommandRouter.Request) async throws -> [String: Any]
@@ -76,25 +84,12 @@ final class PlanExecutor {
             priorReplies[index + 1] = reply
             overlay?.commandFinished(reply)
 
-            var guardResult: PlanGuard.Result?
-            if let expect = step.expect {
-                try? await Task.sleep(for: .milliseconds(150))
-                // Mirror Engine.waitForGuard: an asleep display makes every AX tree degenerate, so
-                // a state guard would abort/continue/pause on a fabricated verdict. Fail it
-                // honestly instead of evaluating; reply-only guards stay meaningful and run.
-                if expect.needsLivePerception, !DisplayWake.perceptionIsReliable {
-                    guardResult = PlanGuard.Result(
-                        passed: false,
-                        reason: "could not evaluate the guard: the display is asleep, so every accessibility tree is degenerate and any verdict would be fabricated",
-                    )
-                } else {
-                    guardResult = await expect.evaluate(
-                        reply: reply, pid: resolvedPid, engine: engine,
-                    )
-                }
-            }
-
-            let passed = guardResult?.passed ?? true
+            let guardResult = await evaluateGuard(step.expect, reply: reply, pid: resolvedPid)
+            let commandPassed = reply["ok"] as? Bool == true
+            let passed = commandPassed && (guardResult?.passed ?? true)
+            let failureReason = commandPassed
+                ? "guard failed: \(guardResult?.reason ?? "unknown")"
+                : "command failed: \(reply["error"] ?? reply["summary"] ?? "command returned no success")"
             var result = StepResult(
                 index: index, command: step.command, intent: step.intent,
                 reply: reply, guardResult: guardResult,
@@ -114,7 +109,7 @@ final class PlanExecutor {
                     // No append here: the common append below records this step exactly once, and
                     // `abortReason != nil` then breaks the loop. Appending in the switch too would
                     // list the aborted step twice and inflate stepsCompleted.
-                    abortReason = "guard failed on step \(index + 1): \(guardResult?.reason ?? "unknown")"
+                    abortReason = "step \(index + 1) \(failureReason)"
 
                 case .continue:
                     result = StepResult(
@@ -131,17 +126,23 @@ final class PlanExecutor {
                     )
                     results.append(result)
                     await pauseForHuman(
-                        reason: "Step \(index + 1) guard failed: \(guardResult?.reason ?? "unknown")",
+                        reason: "Step \(index + 1) \(failureReason)",
                     )
                     continue
 
                 case let .fallback(fallbackStep):
-                    let (fallbackReply, _) = await executeStep(fallbackStep, profile: plan.profile, priorReplies: priorReplies)
+                    let (fallbackReply, fallbackPid) = await executeStep(fallbackStep, profile: plan.profile, priorReplies: priorReplies)
                     result = StepResult(
                         index: index, command: step.command, intent: step.intent,
                         reply: reply, guardResult: guardResult,
                         policy: "fallback", fallbackReply: fallbackReply,
                     )
+                    result.fallbackGuardResult = await evaluateGuard(fallbackStep.expect, reply: fallbackReply, pid: fallbackPid)
+                    if result.succeeded {
+                        priorReplies[index + 1] = fallbackReply
+                    } else {
+                        abortReason = "fallback failed on step \(index + 1): \(fallbackReply["error"] ?? result.fallbackGuardResult?.reason ?? "command failed")"
+                    }
                 }
             }
 
@@ -154,16 +155,26 @@ final class PlanExecutor {
             }
         }
 
-        overlay?.endPlan(abortReason: abortReason)
-
+        let failedCount = results.filter { !$0.succeeded }.count
+        let completedWithFailures = failedCount > 0 ? "plan completed with \(failedCount) failed step(s)" : nil
+        overlay?.endPlan(abortReason: abortReason ?? completedWithFailures)
+        let reply = buildTranscriptReply(results: results, total: plan.steps.count, abortReason: abortReason)
         activityLog.append(
             action: "plan",
             target: "\(plan.steps.count) step(s), \(plan.profile.rawValue)",
-            verdict: abortReason == nil ? "ok" : "aborted",
-            summary: abortReason ?? "plan completed — \(results.count)/\(plan.steps.count) step(s)",
+            verdict: reply["ok"] as? Bool == true ? "ok" : "failed",
+            summary: reply["summary"] as? String ?? "plan ended",
         )
+        return reply
+    }
 
-        return buildTranscriptReply(results: results, abortReason: abortReason)
+    private func evaluateGuard(_ expect: PlanGuard?, reply: [String: Any], pid: pid_t?) async -> PlanGuard.Result? {
+        guard let expect else { return nil }
+        try? await Task.sleep(for: .milliseconds(150))
+        if expect.needsLivePerception, !DisplayWake.perceptionIsReliable {
+            return PlanGuard.Result(passed: false, reason: "could not evaluate the guard: the display is asleep")
+        }
+        return await expect.evaluate(reply: reply, pid: pid, engine: engine)
     }
 
     // MARK: - Private
@@ -230,11 +241,12 @@ final class PlanExecutor {
     }
 
     private func buildTranscriptReply(
-        results: [StepResult], abortReason: String?
+        results: [StepResult], total: Int, abortReason: String?
     ) -> [String: Any] {
         var reply: [String: Any] = [
-            "ok": abortReason == nil,
-            "stepsTotal": results.isEmpty ? 0 : results.last!.index + 1,
+            "ok": abortReason == nil && results.allSatisfy(\.succeeded),
+            "stepsTotal": total,
+            "stepsFailed": results.filter { !$0.succeeded }.count,
             "stepsCompleted": results.count,
             "transcript": results.map { stepReplyDict($0) },
         ]
@@ -243,7 +255,7 @@ final class PlanExecutor {
         }
         reply["summary"] = abortReason != nil
             ? "plan aborted at step \(results.count): \(abortReason!)"
-            : "plan completed — \(results.count) step(s)"
+            : (results.allSatisfy(\.succeeded) ? "plan completed — \(results.count) step(s)" : "plan completed with \(results.filter { !$0.succeeded }.count) failed step(s)")
         return reply
     }
 
@@ -252,12 +264,15 @@ final class PlanExecutor {
             "step": result.index + 1,
             "command": result.command,
             "intent": result.intent,
+            "succeeded": result.succeeded,
             "ok": result.reply["ok"] as? Bool ?? false,
         ]
         if let verdict = result.reply["verdict"] { dict["verdict"] = verdict }
         if let summary = result.reply["summary"] { dict["summary"] = summary }
         if let readback = result.reply["readback"] { dict["readback"] = readback }
         if let error = result.reply["error"] { dict["error"] = error }
+        if let path = result.reply["path"] { dict["path"] = path }
+        if let regions = result.reply["regions"] { dict["regions"] = regions }
 
         if let guard_ = result.guardResult {
             dict["guardPassed"] = guard_.passed
@@ -270,6 +285,10 @@ final class PlanExecutor {
                 "verdict": fallback["verdict"],
                 "summary": fallback["summary"],
                 "error": fallback["error"],
+                "path": fallback["path"],
+                "regions": fallback["regions"],
+                "guardPassed": result.fallbackGuardResult?.passed,
+                "guardReason": result.fallbackGuardResult?.reason,
             ].compactMapValues { $0 }
         }
         return dict

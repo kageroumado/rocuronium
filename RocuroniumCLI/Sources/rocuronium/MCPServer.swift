@@ -19,6 +19,9 @@ enum MCPServer {
         Declare the goal first with `busy` (action on, goal "<what you're doing>"), batch a known \
         sequence as one `plan`, and pass done: true on the last action of a chain (or call `busy` \
         with action off) so the panel says Done and goes away.
+        Desktop tools accept desktop: "agent" to target the running off-console agent desktop; \
+        the default "current" uses the calling user's desktop. Select it on the whole plan. \
+        An unavailable agent desktop is refused. Session lifecycle tools stay on the owning desktop.
         """
 
     /// Tool definitions mirror the socket commands one-to-one. The descriptions carry the
@@ -623,7 +626,7 @@ enum MCPServer {
             The agent account's off-console session — a second macOS user logged in on its \
             own virtual display, with its own cursor and focus, so hardware-grade input there \
             never touches the human's. 'status' (default) reports the account and uid, whether \
-            a session exists and its uptime, whether the dead-man's switch is armed, the \
+            a session exists and its login process age, whether the dead-man's switch is armed, the \
             session's displays, and whether the Rocuronium daemon inside answers and reports \
             offConsole. 'stop' ends the session (launchctl bootout of the account's GUI \
             domain) and confirms its loginwindow is gone. Enabling and starting are the \
@@ -700,6 +703,12 @@ enum MCPServer {
         // Every tool that targets an app also accepts a pid, uniformly: it overrides `app`
         // and is the only unambiguous address when two instances share a bundle id.
         var properties = properties
+        if name != "session" {
+            properties["desktop"] = [
+                "type": "string", "enum": ["current", "agent"],
+                "description": "Desktop to operate: current (default) or the running agent account. Agent targeting fails if its verified off-console session is unavailable. Applies to the entire plan.",
+            ]
+        }
         if var app = properties["app"] as? [String: Any], app["description"] == nil {
             // The one uniform meaning across every app-targeting tool — filled centrally so no
             // tool has to repeat it, and so the docs-consistency test's "every property has a
@@ -798,7 +807,7 @@ enum MCPServer {
         exit(0)
     }
 
-    private static func call(
+    static func call(
         _ parameters: [String: Any],
         forward: ([String: Any]) -> [String: Any]?
     ) -> [String: Any] {
@@ -827,6 +836,8 @@ enum MCPServer {
         if name == "session", let action = payload["action"] as? String, !["status", "stop"].contains(action) {
             return errorContent("session over MCP takes 'status' or 'stop'; enable and start are run by the human from the CLI")
         }
+        do { _ = try DesktopArgument.validate(payload["desktop"]) }
+        catch { return errorContent(String(describing: error)) }
         payload["command"] = name
         guard let socketReply = forward(payload) else {
             return errorContent(StaleInstall.diagnosis() ?? "could not reach Rocuronium.app — is it running?")

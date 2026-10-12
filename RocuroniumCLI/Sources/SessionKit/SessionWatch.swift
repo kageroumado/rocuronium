@@ -122,12 +122,13 @@ public enum RemoteCommand: Equatable, Sendable {
     case watch(deadlineSeconds: Int?)
     /// `launchctl bootout gui/<uid>` at once.
     case stop
-    /// The session as seen from inside: uid, console-ness, displays, uptime.
+    /// The session as seen from inside: uid, console-ness, displays, login process age.
     case facts
     /// One JSON request from stdin to this account's daemon socket, its reply to stdout.
     case forward
     /// Start this account's Rocuronium LaunchAgent if it is not running.
     case startDaemon
+    case restartDaemon
 
     public static func parse(_ original: String?) -> RemoteCommand? {
         guard let words = original?.split(separator: " ").map(String.init), let verb = words.first else { return nil }
@@ -138,6 +139,7 @@ public enum RemoteCommand: Equatable, Sendable {
         case ("facts", 1): return .facts
         case ("forward", 1): return .forward
         case ("start-daemon", 1): return .startDaemon
+        case ("restart-daemon", 1): return .restartDaemon
         default: return nil
         }
     }

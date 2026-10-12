@@ -249,6 +249,13 @@ nonisolated struct AXElement {
     /// act on selection (Select All and friends), which otherwise have no readable effect.
     var selectedText: String? { string(kAXSelectedTextAttribute) }
 
+    var selectedTextRange: NSRange? {
+        guard let value = axValue(kAXSelectedTextRangeAttribute) else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(value, .cfRange, &range) else { return nil }
+        return NSRange(location: range.location, length: range.length)
+    }
+
     /// How many characters the text element holds — the length `select all` selects to.
     var characterCount: Int? {
         (attribute(kAXNumberOfCharactersAttribute) as? NSNumber)?.intValue
