@@ -119,6 +119,9 @@ extension AgentSessionController {
     /// stdin, since changing an existing account's password needs a SecureToken unlock that
     /// provisioning does not have.
     func enable(password suppliedPassword: String?, account requested: String?) async -> [String: Any] {
+        guard phase == .idle else {
+            return ["ok": false, "error": "stop the agent session and wait for idle before configuring its account"]
+        }
         let account = requested ?? account
         do {
             if let uid = Self.uid(of: account), let pid = try Self.loginWindow(of: uid) {

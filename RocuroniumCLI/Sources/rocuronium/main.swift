@@ -18,6 +18,12 @@ let socketPath = FileManager.default
 let usage = """
 rocuronium — drive this Mac without taking the cursor
 
+Desktop selection
+  <verb> --desktop agent                   use the running agent desktop; refuses if unavailable
+  <verb> --desktop current                 use the calling user's desktop (default)
+  plan --desktop agent                    keep every step on the agent desktop
+  Session lifecycle commands use the owning desktop. MCP tools accept desktop: agent.
+
 Observe
   status                                   presence, permissions, halted, display hold
   diag                                     what each permission check really returns
@@ -158,10 +164,20 @@ Nine things to know:
 // MARK: - Argument parsing
 
 var arguments = Array(CommandLine.arguments.dropFirst())
+let desktop: String?
+do { desktop = try DesktopArgument.extract(from: &arguments) }
+catch {
+    FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+    exit(2)
+}
 
 // `version` reads the stamp from the bundle around the executable actually running, then asks
 // the daemon for its own, so a CLI from one install and a daemon from another are told apart.
 if let first = arguments.first, ["version", "--version", "-V"].contains(first) {
+    if desktop != nil {
+        FileHandle.standardError.write(Data("rocuronium: version describes this installation; use status --desktop agent for the agent daemon\n".utf8))
+        exit(2)
+    }
     let executable = StaleInstall.runningExecutablePath()
     if let stamp = InstalledVersion.read(executablePath: executable) {
         print("rocuronium \(stamp.display)   \(InstalledVersion.bundlePath(executablePath: executable) ?? "")")
@@ -190,6 +206,10 @@ guard let command = arguments.first, !command.hasPrefix("-"), !helpWords.contain
     exit(arguments.isEmpty || helpWords.contains(arguments[0]) ? 0 : 2)
 }
 arguments.removeFirst()
+if desktop != nil, ["mcp", "guide", "version", "session"].contains(command) {
+    FileHandle.standardError.write(Data("rocuronium: --desktop applies to desktop commands; MCP selects desktop in each tool call and session lifecycle commands use the owning desktop\n".utf8))
+    exit(2)
+}
 // `rocuronium key --help` asks for help, not for a request the daemon would refuse.
 if arguments.contains("--help") {
     print(usage)
@@ -251,6 +271,7 @@ if command == "session", let action = arguments.first {
 }
 
 var payload: [String: Any] = ["command": command]
+if let desktop { payload["desktop"] = desktop }
 // `display`, `demo`, `busy`, and `space` take a positional subcommand: `rocuronium space switch`.
 if command == "display" || command == "demo" || command == "busy" || command == "space" || command == "session",
    let action = arguments.first, !action.hasPrefix("-") {
@@ -281,6 +302,10 @@ if command == "plan" {
         guard let planJSON = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
             FileHandle.standardError.write(Data("rocuronium plan: expected a JSON object with 'steps'\n".utf8))
             exit(2)
+        }
+        if let planDesktop = try DesktopArgument.validate(planJSON["desktop"]) {
+            if let desktop, desktop != planDesktop { throw DesktopArgument.Invalid("plan desktop conflicts with --desktop") }
+            payload["desktop"] = planDesktop
         }
         if let steps = planJSON["steps"] { payload["steps"] = steps }
         if let profile = planJSON["profile"] { payload["profile"] = profile }
@@ -390,6 +415,7 @@ let wantsRawJSON = arguments.contains("--json")
 
 @MainActor
 func send(_ payload: [String: Any]) -> [String: Any]? {
+    let payload = DesktopArgument.wireRequest(payload)
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { return nil }
     defer { close(descriptor) }

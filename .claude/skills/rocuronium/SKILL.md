@@ -15,8 +15,8 @@ Every reply says which side delivered the action and, through a computed `verdic
 ## Setup
 
 - The signed **Rocuronium.app** must be running (it holds the Accessibility + Screen Recording grants and does all the work). The CLI and MCP server are thin clients that speak to it over a unix socket.
-- CLI: `rocuronium <verb> …`. Full flag reference: `rocuronium --help`.
-- MCP: register `rocuronium mcp` (stdio); every verb below is exposed as a typed tool with the same name and arguments, and each tool's description carries its own contract.
+- CLI: `rocuronium <verb> …`; add `--desktop agent` for the running agent account. Full flag reference: `rocuronium --help`.
+- MCP: register `rocuronium mcp` (stdio); desktop tools accept `desktop: "agent"` for the running agent account. Every verb below is exposed as a typed tool with the same name and arguments, and each tool's description carries its own contract.
 - First run needs Accessibility granted (check with `rocuronium status`); Screen Recording is needed only for screenshots, OCR, and vision (`rocuronium request-capture` fires the prompt).
 
 ## The loop

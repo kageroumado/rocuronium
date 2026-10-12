@@ -58,4 +58,23 @@ struct PlanExecutorTests {
         #expect(reply["ok"] as? Bool == false)
         #expect(reply["stepsFailed"] as? Int == 1)
     }
+
+    @Test func screenshotSurvivesTranscriptAndReferencedPathIsRefused() async throws {
+        let path = "/tmp/managed-capture.png"
+        let executor = PlanExecutor(dispatch: { request in
+            if let refusal = AgentDesktopTarget.planStepRefusal(command: request.command, path: request.path) {
+                return ["ok": false, "error": refusal]
+            }
+            return ["ok": true, "path": path]
+        }, resolvePid: { _ in nil }, engine: Engine(), overlay: nil, activityLog: ActivityLog())
+        let reply = await executor.execute(try plan([
+            ["command": "screenshot"],
+            ["command": "screenshot", "refs": ["path": "$1.path"]],
+        ]))
+        let transcript = try #require(reply["transcript"] as? [[String: Any]])
+        #expect(transcript.count == 2)
+        #expect(transcript[0]["path"] as? String == path)
+        #expect(transcript[1]["ok"] as? Bool == false)
+        #expect((transcript[1]["error"] as? String)?.contains("managed local capture paths") == true)
+    }
 }

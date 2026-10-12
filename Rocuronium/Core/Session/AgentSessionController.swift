@@ -21,10 +21,8 @@ protocol AgentSessionBringUp: AnyObject {
 
 /// Owns one agent account's session, startup recovery, and the running session's watchdog.
 ///
-/// The lifecycle is **recreate on demand**. An idle session costs ~2.4 W even stripped — the
-/// background daemons that cost it are platform binaries SIP will not let anyone stop — while a
-/// fresh one costs a ~17 s start and a ~0.7 Wh burst, so past ~15 minutes idle, starting anew is
-/// cheaper. Recreating also guarantees an unlocked session, which a long-lived one is not.
+/// Sessions are created for a task and stopped when it finishes, giving each task a fresh
+/// login and ending the account's background work during cleanup.
 @MainActor
 final class AgentSessionController {
     enum Phase: Equatable {
@@ -79,7 +77,7 @@ final class AgentSessionController {
     }
 
     private(set) var phase: Phase = .idle {
-        didSet { if phase == .idle { releaseEmergencyShortcut?() } }
+        didSet { if phase == .idle { ownedDesktop = nil; releaseEmergencyShortcut?() } }
     }
     /// The console shortcut is held until shutdown reaches verified idle, including failed cleanup.
     var retainEmergencyShortcut: (() throws -> Void)?
@@ -87,6 +85,7 @@ final class AgentSessionController {
     var emergencyShortcutRegistered: (() -> Bool)?
     private(set) var progress: [String] = []
     private var heartbeat: AgentSessionHeartbeat?
+    private var ownedDesktop: AgentDesktopIdentity?
     /// A switch a start is still arming: a stop that lands meanwhile must close it too.
     private var heartbeatInFlight: AgentSessionHeartbeat?
     private var bringUp: (any AgentSessionBringUp)?
@@ -136,6 +135,30 @@ final class AgentSessionController {
                 self?.heartbeat?.noteMainActorAlive()
                 try? await Task.sleep(for: .seconds(5))
             }
+        }
+    }
+
+    /// Forwards only while this controller owns a live session and its shutdown path.
+    func forwardToDesktop(_ request: [String: Any]) async -> [String: Any] {
+        guard !EmergencyStop.isHalted else {
+            return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true, "desktop": "agent"]
+        }
+        guard case .running = phase, heartbeat?.isArmed == true, bringUp?.isHeld == true,
+              let identity = ownedDesktop, identity.account == account, identity.uid != getuid(),
+              runtime.uid(account) == identity.uid,
+              (try? runtime.loginWindow(identity.uid)) == identity.loginWindowPID else {
+            return ["ok": false, "error": "agent desktop is unavailable; start it with rocuronium session start", "desktop": "agent"]
+        }
+        do {
+            let envelope = try AgentDesktopTarget.envelope(request, identity: identity)
+            switch await link.forward(envelope, timeout: 28) {
+            case let .success(reply):
+                return reply.merging(["desktop": "agent"]) { _, new in new }
+            case let .failure(error):
+                return ["ok": false, "error": String(describing: error), "desktop": "agent"]
+            }
+        } catch {
+            return ["ok": false, "error": String(describing: error), "desktop": "agent"]
         }
     }
 
@@ -314,6 +337,8 @@ final class AgentSessionController {
             }
             guard await stillWanted() else { return }
             note("Rocuronium answers inside the session (offConsole: true, accessibility \(daemon["trusted"] as? Bool == true ? "granted" : "NOT granted"))")
+            guard let loginPID = try runtime.loginWindow(uid) else { return await fail("agent login ended before startup completed") }
+            ownedDesktop = AgentDesktopIdentity(uid: uid, account: account, loginWindowPID: loginPID)
             phase = .running(since: Date())
             record?("session start", "ok", "agent session for \(account) is running")
         } catch {

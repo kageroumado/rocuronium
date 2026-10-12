@@ -271,6 +271,8 @@ final class PlanExecutor {
         if let summary = result.reply["summary"] { dict["summary"] = summary }
         if let readback = result.reply["readback"] { dict["readback"] = readback }
         if let error = result.reply["error"] { dict["error"] = error }
+        if let path = result.reply["path"] { dict["path"] = path }
+        if let regions = result.reply["regions"] { dict["regions"] = regions }
 
         if let guard_ = result.guardResult {
             dict["guardPassed"] = guard_.passed
@@ -283,6 +285,8 @@ final class PlanExecutor {
                 "verdict": fallback["verdict"],
                 "summary": fallback["summary"],
                 "error": fallback["error"],
+                "path": fallback["path"],
+                "regions": fallback["regions"],
                 "guardPassed": result.fallbackGuardResult?.passed,
                 "guardReason": result.fallbackGuardResult?.reason,
             ].compactMapValues { $0 }

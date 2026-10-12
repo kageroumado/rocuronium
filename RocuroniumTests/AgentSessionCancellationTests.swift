@@ -71,6 +71,17 @@ struct AgentSessionCancellationTests {
         #expect(controller.progress.contains("failed-start cleanup verified: agent loginwindow is gone"))
     }
 
+    @Test func accountCannotChangeDuringStartup() async {
+        let fixture = SessionFixture()
+        let controller = AgentSessionController(runtime: fixture.runtime)
+        controller.makeBringUp = { DeferredLogin { fixture.pid = 123 } }
+        _ = controller.start()
+        let reply = await controller.enable(password: nil, account: "another-agent")
+        #expect(reply["ok"] as? Bool == false)
+        #expect((reply["error"] as? String)?.contains("wait for idle") == true)
+        _ = await controller.stop(reason: "test cleanup")
+    }
+
     @Test func unavailableEmergencyShortcutRefusesLogin() {
         let fixture = SessionFixture()
         let route = DeferredLogin { fixture.pid = 123 }

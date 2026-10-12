@@ -110,6 +110,13 @@ All verbs are exposed as MCP tools with the same names and arguments; `session` 
 | **Agent session** | `session` `enable` · `start` · `stop` · `status` — a second macOS user, off-console, with its own cursor; a dead-man's switch ends it when the console daemon stops vouching for it (MCP: `status` and `stop` only) |
 | **Meta** | `busy` (hold the presence overlay up while working) `demo` (practice window) `request-capture` `mcp` `guide` (the agent skill baked into the binary) `version` |
 
+Desktop commands accept `--desktop agent` (CLI) or `desktop: "agent"` (MCP) to use the
+running agent account. The default is `current`. A plan uses one desktop throughout;
+agent targeting verifies the account and off-console login and refuses an unavailable
+session. Screenshots are copied back to readable local paths. Session setup and lifecycle
+commands remain on the owning desktop.
+
+
 One coordinate frame everywhere: points, origin at the top-left of the main display.
 `rocuronium --help` lists every flag; each MCP tool carries its own contract in its description.
 

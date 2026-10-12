@@ -56,6 +56,15 @@ nonisolated enum SessionContext {
     /// display session, or a user backgrounded by fast user switching.
     static var isOffConsole: Bool { !isOnConsole }
 
+    /// Refreshes session identity before dispatching a command pinned to the agent desktop.
+    static var isOffConsoleNow: Bool {
+        cache.withLock { entry in
+            let onConsole = readOnConsole()
+            entry = (onConsole, ProcessInfo.processInfo.systemUptime)
+            return !onConsole
+        }
+    }
+
     /// Where the hardware tentacle must post so its events land in *this* session.
     static var eventTap: CGEventTapLocation { isOnConsole ? .cghidEventTap : .cgSessionEventTap }
 

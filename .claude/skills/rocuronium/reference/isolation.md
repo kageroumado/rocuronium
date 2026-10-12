@@ -32,8 +32,27 @@ The virtual display hides windows; it does not give you a cursor of your own. Th
 - `session stop` — ends the session (bootout of the account's GUI domain) and confirms its loginwindow is gone. During startup cancellation, JSON returns `state: stopping`; poll status until `idle` or `failed`. The plain CLI follows this transition automatically. Always allowed, halted or not.
 - `session enable` / `session start` belong to the human, from the CLI: enabling asks for a one-time helper approval. Start uses the stored credential and a held loopback Screen Sharing connection to create a separate virtual session. JSON returns `starting`; poll until `running` or `failed`. A start during `stopping` is refused until cleanup finishes. A saved pending-login record lets a relaunched daemon observe and clean up an interrupted startup for up to 90 seconds from the login request. Over MCP, `session` takes `status` and `stop` only.
 
+### Targeting the agent desktop
+
+Use `rocuronium read --desktop agent --app TextEdit` or add `desktop: "agent"` to an
+MCP desktop tool's arguments. The default `current` targets the calling user's desktop.
+Every agent-targeted call requires a running, controller-owned session with an armed
+watchdog. The receiving daemon checks the account, login process, and off-console state.
+An unavailable or changed session is refused; targeting never falls back to the current
+desktop. Older daemons refuse the distinct targeting command.
+
+Select the desktop on the whole `plan`; steps inherit it and cannot override it.
+`session` lifecycle commands always use the owning desktop. They keep their existing
+human/MCP restrictions. Agent screenshots are copied into the owning user's capture
+directory, so returned paths are readable there. A top-level screenshot's `--path` selects
+a local destination using the existing PNG destination rules. Screenshot steps in agent
+plans use managed paths. Capture transfer is limited to 16 MiB per reply.
+
+MCP example: `read` with `{"app":"TextEdit","desktop":"agent"}`.
+CLI example: `rocuronium type --desktop agent --app TextEdit --text "example" --done`.
+
 What to know before relying on one:
 - **The watcher ends the session.** A manually started session needs `session watch` armed explicitly inside the agent account. Once armed, it ends the session when the console daemon stops sending heartbeats (15 s), when that daemon quits or crashes, or when it receives an explicit `stop` line. Automatic starts arm and own the watcher before reporting `running`. Live trials verified heartbeat survival, EOF cleanup, explicit stop, and timeout cleanup; a live console-daemon crash also removed the running agent session. The console emergency shortcut stays registered through agent startup, work, and shutdown, including when the overlay hides; a physical-key trial verified shutdown and a halt that remained until the human resumed. A session you were driving can vanish; `session status` says why in the activity log.
 - **Inside it, `offConsole` is true** and presence reads `away`: the presence gates relax and hardware events post at the session tap, which is what keeps them off the human's screen. Never trust a daemon reporting `offConsole: false` to be the agent session.
 - **Accessibility is granted once, by a human, inside the session.** Until then `status` there shows `trusted: false` and every posted event is silently dropped — reads work, acts do not.
-- **Start one per task, stop it when done.** An idle session costs ~2.4 W that cannot be reduced (SIP protects the daemons that spend it); a fresh one takes seconds.
+- **Start one per task, stop it when done.** This gives each task a fresh login and ends the account's background work during cleanup. Added power cost remains unmeasured.

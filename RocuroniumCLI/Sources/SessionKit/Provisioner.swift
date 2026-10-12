@@ -51,9 +51,8 @@ public struct LiveCommandRunner: CommandRunner {
 /// - **Onboarding** is skipped by pre-seeding the keys Setup Assistant writes when a human
 ///   clicks through it; the list is the one in the Setup Assistant binary, and the values were
 ///   read back from an account that had been through the flow.
-/// - **The background suite** (Spotlight, Siri, proactive/duet, Shortcuts) is what an idle
-///   session spends its ~3.1 W on. Preferences only reduce how much work those daemons choose
-///   to do — SIP forbids stopping them — which measured as ~2.4 W.
+/// - **The background suite** (Spotlight, Siri, proactive/duet, Shortcuts) launches with the
+///   account. Preferences reduce its work while preserving SIP-protected system services.
 /// - **A still black wallpaper**, because the default aerial's extension held 241 MB and
 ///   rendered continuously for a desktop nobody watches.
 ///

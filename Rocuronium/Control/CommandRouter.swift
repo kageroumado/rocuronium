@@ -120,6 +120,7 @@ final class CommandRouter {
 
     struct Request: Decodable {
         let command: String
+        var agentDesktopIdentity: AgentDesktopIdentity?
         var app: String?
         /// Targets a process directly, bypassing name resolution — the only unambiguous
         /// address when two instances share a bundle id (`open -n`).
@@ -432,11 +433,27 @@ final class CommandRouter {
     func route(_ data: Data) async -> Data {
         consentOutcome = nil
         appResolution = nil
-        let request: Request
+        var request: Request
+        let target: AgentDesktopTarget.Parsed
         do {
-            request = try JSONDecoder().decode(Request.self, from: data)
+            target = try AgentDesktopTarget.parse(data)
+            if target.desktop == "agent", target.identity == nil {
+                var forwarded = target.request
+                var destination: URL?
+                if forwarded["command"] as? String == "screenshot", let path = forwarded["path"] as? String {
+                    destination = try resolveCapturePath(path)
+                    forwarded.removeValue(forKey: "path")
+                }
+                let reply = await agentSession.forwardToDesktop(forwarded)
+                return encode(try AgentDesktopCapture.unpack(reply, directory: defaultCaptureDirectory, destination: destination))
+            }
+            request = try JSONDecoder().decode(Request.self, from: JSONSerialization.data(withJSONObject: target.request))
+            request.agentDesktopIdentity = target.identity
+            if let identity = target.identity, let complaint = agentDesktopRefusal(identity) {
+                return encode(["ok": false, "error": complaint, "desktop": "agent"])
+            }
         } catch {
-            return encode(Self.errorReply(from: error))
+            return encode(["ok": false, "error": String(describing: error)])
         }
         if let complaint = validate(request) {
             return encode(["ok": false, "error": complaint])
@@ -470,7 +487,19 @@ final class CommandRouter {
         if Self.actingVerbs.contains(request.command), let hint = endSignalHint(for: request) {
             reply["hint"] = hint
         }
+        if let identity = target.identity {
+            do { reply = try AgentDesktopCapture.pack(reply, directory: defaultCaptureDirectory) }
+            catch { reply = ["ok": false, "error": String(describing: error)] }
+            reply["desktop"] = "agent"
+            reply["sessionIdentity"] = ["uid": identity.uid, "account": identity.account, "loginWindowPID": identity.loginWindowPID, "offConsole": true]
+        }
         return encode(reply)
+    }
+
+    private func agentDesktopRefusal(_ identity: AgentDesktopIdentity) -> String? {
+        identity.refusal(uid: getuid(), account: NSUserName(),
+                         loginWindowPID: try? SessionProcessTable.loginWindow(of: getuid())?.pid,
+                         offConsole: SessionContext.isOffConsoleNow)
     }
 
     /// Turns a thrown engine error into the structured reply the socket protocol speaks: the
@@ -612,6 +641,9 @@ final class CommandRouter {
     /// tracking, no halt check. Called by both `execute()` (with its wrappers) and the plan
     /// executor, so plan steps are watched too.
     func dispatch(_ request: Request) async throws -> [String: Any] {
+        if let identity = request.agentDesktopIdentity, let complaint = agentDesktopRefusal(identity) {
+            return ["ok": false, "error": complaint]
+        }
         guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
         let monitor = HumanInputMonitor.shared
         monitor.begin(targetPid: try? resolve(request))
@@ -2293,11 +2325,17 @@ final class CommandRouter {
                 if EmergencyStop.isHalted {
                     return ["ok": false, "error": EmergencyStop.refusalMessage, "halted": true]
                 }
+                if request.agentDesktopIdentity != nil,
+                   let complaint = AgentDesktopTarget.planStepRefusal(command: req.command, path: req.path) {
+                    return ["ok": false, "error": complaint]
+                }
                 // A plan is how an MCP agent runs a sequence, so it gets MCP's limit on
                 // `session`: ending or reading a session, never creating or provisioning one.
                 if req.command == "session", !["stop", "status", nil].contains(req.action) {
                     return ["ok": false, "error": "a plan step may only run 'session status' or 'session stop'; enable and start are the human's, from the CLI"]
                 }
+                var req = req
+                req.agentDesktopIdentity = request.agentDesktopIdentity
                 self.adrafinil.noteActivity()
                 return try await self.dispatch(req)
             },
