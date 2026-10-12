@@ -60,15 +60,18 @@ if ! dscl . -read "/Users/$NAME" >/dev/null 2>&1; then
     # sysadminctl's own warning line about clear-text passwords, whose text contains "password"
     # and which precedes the real prompt — the secret is then sent into the log stream and the
     # account is created with no password at all, silently.
-    AGENT_PW="$PASSWORD" expect -c '
+    AGENT_PW="$PASSWORD" expect -f - -- "$NAME" "$FULL" >/dev/null 2>&1 <<'EXPECT' || true
         set timeout 60
         log_user 0
         spawn -noecho sysadminctl -addUser [lindex $argv 0] -fullName [lindex $argv 1] -password -
         expect {
-            "User password:" { send "$env(AGENT_PW)\r"; exp_continue }
+            "User password:" { send -- "$env(AGENT_PW)\r"; exp_continue }
+            timeout { exit 124 }
             eof
         }
-    ' "$NAME" "$FULL" >/dev/null 2>&1 || true
+        catch wait result
+        exit [lindex $result 3]
+EXPECT
 
     dscl . -read "/Users/$NAME" >/dev/null 2>&1 ||
         { echo "account creation failed" >&2; exit 1; }
@@ -76,13 +79,22 @@ if ! dscl . -read "/Users/$NAME" >/dev/null 2>&1; then
     # A record with an unusable password is the failure mode the prompt-matching bug produced,
     # and it cannot be repaired here (SecureToken, above). Fail loudly rather than hand back an
     # account that cannot log in.
-    AGENT_PW="$PASSWORD" expect -c '
+    if ! AGENT_PW="$PASSWORD" expect -f - -- "$NAME" >/dev/null 2>&1 <<'EXPECT'
         set timeout 20
         log_user 0
         spawn -noecho dscl . -authonly [lindex $argv 0]
-        expect { "Password:" { send "$env(AGENT_PW)\r"; exp_continue } eof }
-    ' "$NAME" >/dev/null 2>&1 ||
-        { echo "created $NAME but its password does not authenticate — delete it and retry with a fresh name" >&2; exit 1; }
+        expect {
+            "Password:" { send -- "$env(AGENT_PW)\r"; exp_continue }
+            timeout { exit 124 }
+            eof
+        }
+        catch wait result
+        exit [lindex $result 3]
+EXPECT
+    then
+        echo "created $NAME, but password verification failed" >&2
+        exit 1
+    fi
     echo "    credential verified"
 else
     echo "==> $NAME already exists"

@@ -36,23 +36,50 @@ nonisolated enum SessionHelperClient {
     /// instead of registering again.
     @MainActor
     static func ensureRegistered() -> String? {
-        switch availability {
+        let plist = Bundle.main.bundleURL.appendingPathComponent("Contents/Library/LaunchDaemons/\(plistName)")
+        guard FileManager.default.fileExists(atPath: plist.path) else {
+            return "the session helper configuration is missing at \(plist.path) — install a build that includes it"
+        }
+        let executable = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/rocuronium-session-helper")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            return "the session helper executable is missing or cannot run at \(executable.path) — reinstall Rocuronium"
+        }
+        return registerIfNeeded(
+            status: { availability },
+            register: { try service.register() },
+            openSettings: { SMAppService.openSystemSettingsLoginItems() },
+        )
+    }
+
+    /// Resolves service registration and returns the human action required to finish it.
+    @MainActor
+    static func registerIfNeeded(
+        status: () -> Availability,
+        register: () throws -> Void,
+        openSettings: () -> Void,
+    ) -> String? {
+        switch status() {
         case .enabled:
             return nil
-        case .notFound:
-            return "this Rocuronium.app has no session helper in Contents/Library/LaunchDaemons — install a build that includes it"
-        case .notRegistered:
+        case .notFound, .notRegistered:
+            // macOS can report notFound when the background-task registration record is absent.
             do {
-                try service.register()
+                try register()
             } catch {
-                if availability != .requiresApproval {
-                    return "registering the session helper failed: \(error.localizedDescription)"
+                if status() != .requiresApproval {
+                    let error = error as NSError
+                    return "registering the session helper failed: \(error.localizedDescription) (\(error.domain) \(error.code))"
                 }
             }
-            if availability == .enabled { return nil }
+            switch status() {
+            case .enabled: return nil
+            case .requiresApproval: break
+            case .notFound, .notRegistered:
+                return "the session helper registration is still unresolved (status: \(status().rawValue))"
+            }
             fallthrough
         case .requiresApproval:
-            SMAppService.openSystemSettingsLoginItems()
+            openSettings()
             return "approve \"Rocuronium\" under Login Items & Extensions → Allow in the Background (System Settings is open there), then run enable again. "
                 + "The helper runs as root only to create the agent account and add it to the Screen Sharing and Remote Login access lists."
         }
@@ -93,8 +120,12 @@ extension AgentSessionController {
     /// provisioning does not have.
     func enable(password suppliedPassword: String?, account requested: String?) async -> [String: Any] {
         let account = requested ?? account
-        if let uid = Self.uid(of: account), let pid = Self.loginWindow(of: uid) {
-            return ["ok": false, "error": "'\(account)' has a running session (loginwindow pid \(pid)) — stop it first: rocuronium session stop"]
+        do {
+            if let uid = Self.uid(of: account), let pid = try Self.loginWindow(of: uid) {
+                return ["ok": false, "error": "'\(account)' has a running session (loginwindow pid \(pid)) — stop it first: rocuronium session stop"]
+            }
+        } catch {
+            return ["ok": false, "error": "could not inspect the agent session: \(error)"]
         }
         if let pending = SessionHelperClient.ensureRegistered() {
             return ["ok": false, "error": pending, "helper": SessionHelperClient.availability.rawValue]
@@ -135,7 +166,7 @@ extension AgentSessionController {
         lines.append("password stored in the login keychain (\(AgentSessionKeychain.service))")
         lines.append("")
         lines.append("One step is left, and it is yours: inside the agent session, grant Rocuronium Accessibility.")
-        lines.append("Start a session (rocuronium session start), view it with Screen Sharing, and approve the")
+        lines.append("Start the agent session with Screen Sharing and approve the")
         lines.append("Accessibility prompt there with an administrator's name and password. Until then the daemon")
         lines.append("inside can read but every posted event is silently dropped.")
         return ["ok": true, "account": account, "uid": reply["uid"] ?? 0, "created": reply["created"] ?? false, "lines": lines,

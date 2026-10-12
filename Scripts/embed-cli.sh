@@ -11,7 +11,7 @@
 #
 # Run it after the archive and before signing — the release pipeline calls it as its
 # post-archive / pre-sign hook (`hooks.preSign` in the `.releaseplan`). The local
-# `Scripts/install.sh` reaches it through that same pipeline.
+# `Scripts/local-install.py` invokes this hook for isolated local Release builds.
 #
 # Usage: Scripts/embed-cli.sh <path-to-Rocuronium.app>
 

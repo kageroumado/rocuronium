@@ -70,12 +70,14 @@ Windows
                         real Mission Control Spaces; switch is presence-gated like activate
 
 Agent session — a second macOS user, off-console, with its own cursor (Docs/AGENT-SESSION.md)
-  session    status                        account, uid, session uptime, displays, the daemon inside,
+  session    status                        account, uid, login process age, displays, the daemon inside,
                                            and the dead-man's switch
              enable [--account <name>] [--password-stdin]
                                            provision the agent account through the session helper
                                            (approved once in Login Items); a new account gets a
                                            generated password kept in the keychain
+                                           --password-stdin hides terminal input; Return submits
+                                           piped input is read until EOF
              start                         bring the session up, arm the dead-man's switch, wait for
                                            Rocuronium inside to report offConsole
              stop                          bootout the session; the only path allowed before a delete
@@ -355,8 +357,12 @@ for (flag, key) in [("width", "w"), ("height", "h"), ("window-index", "windowInd
 }
 // An existing agent account's password, for `session enable`: from stdin, never argv.
 if arguments.contains("--password-stdin") {
-    let line = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
-    payload["password"] = line.trimmingCharacters(in: .newlines)
+    do {
+        payload["password"] = try PasswordInput.read()
+    } catch {
+        FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+        exit(2)
+    }
 }
 if arguments.contains("--allow-hardware-input") { payload["allowHardwareInput"] = true }
 if arguments.contains("--foreground") { payload["foreground"] = true }
@@ -701,19 +707,23 @@ case "plan":
 
 case "session":
     var current = reply
-    // `start` returns as soon as the bring-up is under way — a session takes ~10–20 s, and the
-    // daemon answers one request at a time — so the CLI follows it through `status`.
-    if payload["action"] as? String == "start" {
+    // Follow asynchronous startup and cancellation through status until the requested
+    // terminal state is verified; the control socket remains available during cleanup.
+    if let action = payload["action"] as? String, action == "start" || action == "stop" {
         var printed = Set<String>()
         let deadline = Date().addingTimeInterval(120)
         while true {
             for line in current["progress"] as? [String] ?? [] where printed.insert(line).inserted {
                 print("· \(line)")
             }
-            guard current["state"] as? String == "starting", Date() < deadline else { break }
+            guard ["starting", "stopping"].contains(current["state"] as? String ?? ""), Date() < deadline else { break }
             usleep(1_000_000)
             guard let next = send(["command": "session", "action": "status"]) else { break }
             current = next
+        }
+        if let error = SessionTransitionResult.failure(in: current, action: action) {
+            FileHandle.standardError.write(Data("rocuronium: \(error)\n".utf8))
+            exit(1)
         }
     }
     for line in current["lines"] as? [String] ?? [] { print(line) }

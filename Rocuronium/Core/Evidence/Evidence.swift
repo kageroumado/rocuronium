@@ -78,6 +78,9 @@ nonisolated struct Evidence: Codable, Sendable {
     /// real answer (the tree was walked and held still), distinct from nil (never walked).
     var treeChanges: Int? = nil
 
+    /// The action sends keys without aiming or restoring the pointer.
+    var keyboardOnly = false
+
     struct Attempt: Codable, Sendable {
         let tentacle: Tentacle
         let outcome: String
@@ -94,22 +97,11 @@ nonisolated struct Evidence: Codable, Sendable {
 
     var succeeded: Bool { verdict == .confirmed }
 
-    /// Whether *we* moved the cursor, as opposed to the cursor having moved.
-    ///
-    /// The raw measurement cannot tell the difference: a human moving the mouse while an action
-    /// runs registers identically to us stealing it. But only `hardwareInput` is capable of
-    /// moving the pointer — every other tentacle delivers events to a process without touching the
-    /// system cursor — so movement under any other tentacle was the user's own hand. Reporting it
-    /// as ours trains people to ignore the warning, which is worse than not having one.
-    ///
-    /// Conversely, the hardware tentacle **always** took the cursor, even when the before/after
-    /// measurement reads zero: the tentacle moves the pointer to aim, clicks, and restores it as
-    /// a courtesy. The restore must never conceal the takeover.
-    var cursorMovedByUs: Bool { tentacle == .hardwareInput }
+    /// Pointer delivery takes the cursor even when it restores the original position.
+    /// Keyboard-only delivery leaves pointer movement attributable to the human.
+    var cursorMovedByUs: Bool { tentacle == .hardwareInput && !keyboardOnly }
 
-    /// Movement that happened during the action but cannot have been ours. Evidence a human is
-    /// actively at the machine, not a warning.
-    var cursorMovedByUser: Bool { cursorMoved && tentacle != .hardwareInput }
+    var cursorMovedByUser: Bool { cursorMoved && !cursorMovedByUs }
 
     /// Focus we took. Unlike the cursor, an action genuinely can raise its target — so the
     /// test is whether the *target* came forward, not merely that something did.
@@ -164,7 +156,9 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -178,7 +172,9 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts + [.init(tentacle: tentacle, outcome: outcome)],
-            referral: referral, groundedBy: groundedBy,
+            referral: referral, suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -202,7 +198,9 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -224,7 +222,9 @@ nonisolated struct Evidence: Codable, Sendable {
                 outcome: "the target process exited — an action that closes its app cannot read back; the exit is the evidence",
             )],
             referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -250,7 +250,9 @@ nonisolated struct Evidence: Codable, Sendable {
                 outcome: "window count \(before) → \(after) — the consequence landed at the window level, where element evidence cannot see",
             )],
             referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -286,7 +288,9 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
     }
 
@@ -299,9 +303,11 @@ nonisolated struct Evidence: Codable, Sendable {
     /// window the walk never reached, so a still tree must never *refute* an action. Any
     /// appeared, vanished, or changed element upgrades a weaker verdict to `.confirmed`; an
     /// empty diff is recorded as `treeChanges: 0` and leaves the verdict untouched.
-    func addingTreeEvidence(_ delta: TreeDelta.Delta) -> Evidence {
+    /// `canConfirm` requires stronger read-back when a menu item reports disabled;
+    /// its window can still change independently while AXPress is ignored.
+    func addingTreeEvidence(_ delta: TreeDelta.Delta, canConfirm: Bool = true) -> Evidence {
         let changed = !delta.isEmpty
-        let upgrading = verdict != .confirmed && changed
+        let upgrading = canConfirm && verdict != .confirmed && changed
         var result = Evidence(
             action: action, target: target, tentacle: tentacle,
             verdict: upgrading ? .confirmed : verdict,
@@ -313,7 +319,9 @@ nonisolated struct Evidence: Codable, Sendable {
             cursorMoved: cursorMoved, frontmostChanged: frontmostChanged,
             frontmostBecameTarget: frontmostBecameTarget,
             attempts: attempts, referral: referral,
-            groundedBy: groundedBy,
+            suggestion: suggestion, groundedBy: groundedBy,
+            matchedBy: matchedBy, treeDelta: treeDelta, treeChanges: treeChanges,
+            keyboardOnly: keyboardOnly,
         )
         result.treeChanges = delta.changeCount
         result.treeDelta = changed ? TreeDelta.render(delta) : nil

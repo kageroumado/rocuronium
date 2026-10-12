@@ -389,7 +389,7 @@ private struct NotesPage: View {
                 Spacer()
                 Text("Done").font(.system(size: 12, weight: .medium)).foregroundStyle(.orange)
             }
-            (Text(state.notesText) + Text(state.humanTyping ? "|" : "").foregroundColor(.orange))
+            Text("\(state.notesText)\(Text(state.humanTyping ? "|" : "").foregroundColor(.orange))")
                 .font(.system(size: 13))
                 .lineSpacing(3)
             if state.humanTyping {

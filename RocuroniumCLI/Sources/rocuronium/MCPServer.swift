@@ -622,7 +622,7 @@ enum MCPServer {
             The agent account's off-console session — a second macOS user logged in on its \
             own virtual display, with its own cursor and focus, so hardware-grade input there \
             never touches the human's. 'status' (default) reports the account and uid, whether \
-            a session exists and its uptime, whether the dead-man's switch is armed, the \
+            a session exists and its login process age, whether the dead-man's switch is armed, the \
             session's displays, and whether the Rocuronium daemon inside answers and reports \
             offConsole. 'stop' ends the session (launchctl bootout of the account's GUI \
             domain) and confirms its loginwindow is gone. Enabling and starting are the \

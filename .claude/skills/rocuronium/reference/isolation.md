@@ -6,6 +6,8 @@ The headless virtual display is the strongest isolation available: windows parke
 - `park --app X` moves the app's primary window there. With no lease in force it takes an **auto-lease** (reason recorded from the command, id in the reply) that releases itself when its last parked window is returned or closes. `park --app X --x N --y N` moves the window to an explicit visible point, and the reply's `before` block is the undo: parking back to it releases the auto-lease. Attaching the display is visually silent on the real screen, so parking needs no presence gate.
 - Teardown always sweeps parked windows home first, and the daemon's startup sweeps any window left on no display back to the main screen.
 
+**Session boundary:** creating a leased display is supported in the physical-console session. In an off-console agent session, `CGVirtualDisplay` attaches the new display to the physical console, so `display acquire` and `park` auto-creation refuse before calling it. Use the agent session's existing Screen Sharing display. Unreadable session identity also refuses creation.
+
 ## The park-then-hardware pattern
 
 The sting clicks whatever window is topmost at the coordinate, so a hardware click on an occluded target is refused with the occluder named. The reliable sequence when hardware input is truly needed:
@@ -26,12 +28,12 @@ Built on the same private SkyLight/CGS footing as the virtual display; `space li
 
 The virtual display hides windows; it does not give you a cursor of your own. The **agent session** does: a second macOS user (`agent` by default) logged in off-console, so the hardware tentacle there takes *that* session's cursor, which no human is watching. It is a parallel worker, not a proxy — none of the human's logins, files, or keychain exist in it.
 
-- `session status` — the account and uid, whether a session exists and for how long, whether the dead-man's switch is armed, the session's displays, and whether Rocuronium inside answers with `offConsole: true`. Safe to poll; answers even while halted.
-- `session stop` — ends the session (bootout of the account's GUI domain) and confirms its loginwindow is gone. Always allowed, halted or not.
-- `session enable` / `session start` belong to the human, from the CLI: enabling asks for a one-time helper approval, and starting creates a login session. Over MCP, `session` takes `status` and `stop` only.
+- `session status` — the account and uid, whether a session exists and the age of its login process (including time spent at the user chooser), whether the dead-man's switch is armed, the session's displays, and whether Rocuronium inside answers with `offConsole: true`. Safe to poll; answers even while halted.
+- `session stop` — ends the session (bootout of the account's GUI domain) and confirms its loginwindow is gone. During startup cancellation, JSON returns `state: stopping`; poll status until `idle` or `failed`. The plain CLI follows this transition automatically. Always allowed, halted or not.
+- `session enable` / `session start` belong to the human, from the CLI: enabling asks for a one-time helper approval. Start uses the stored credential and a held loopback Screen Sharing connection to create a separate virtual session. JSON returns `starting`; poll until `running` or `failed`. A start during `stopping` is refused until cleanup finishes. Over MCP, `session` takes `status` and `stop` only.
 
 What to know before relying on one:
-- **It ends itself.** A watcher inside the account ends the session when the console daemon stops sending heartbeats (15 s), when that daemon quits or crashes, or when the human presses ⌃⌥⇧⎋ on the console. A session you were driving can vanish; `session status` says why in the activity log.
+- **The watcher ends the session.** A manually started session needs `session watch` armed explicitly inside the agent account. Once armed, it ends the session when the console daemon stops sending heartbeats (15 s), when that daemon quits or crashes, or when it receives an explicit `stop` line. Automatic starts arm and own the watcher before reporting `running`. Live trials verified heartbeat survival, EOF cleanup, explicit stop, and timeout cleanup; daemon-crash and physical emergency-chord trials remain pending. A session you were driving can vanish; `session status` says why in the activity log.
 - **Inside it, `offConsole` is true** and presence reads `away`: the presence gates relax and hardware events post at the session tap, which is what keeps them off the human's screen. Never trust a daemon reporting `offConsole: false` to be the agent session.
 - **Accessibility is granted once, by a human, inside the session.** Until then `status` there shows `trusted: false` and every posted event is silently dropped — reads work, acts do not.
 - **Start one per task, stop it when done.** An idle session costs ~2.4 W that cannot be reduced (SIP protects the daemons that spend it); a fresh one takes seconds.

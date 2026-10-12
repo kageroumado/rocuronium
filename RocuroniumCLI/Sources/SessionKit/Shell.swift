@@ -71,13 +71,17 @@ public enum Shell {
             log_user 0
             spawn -noecho {*}$argv
             expect {
-                "\(prompt)" { send "$env(ROCURONIUM_SECRET)\\r"; exp_continue }
+                "\(prompt)" { send -- "$env(ROCURONIUM_SECRET)\\r"; exp_continue }
+                timeout { exit 124 }
                 eof
             }
             catch wait result
             exit [lindex $result 3]
             """
-        return run("/usr/bin/expect", ["-c", script] + argv, environment: ["ROCURONIUM_SECRET": secret], timeout: timeout + 5)
+        return run(
+            "/usr/bin/expect", ["-f", "-", "--"] + argv,
+            environment: ["ROCURONIUM_SECRET": secret], input: Data(script.utf8), timeout: timeout + 5,
+        )
     }
 }
 
@@ -112,6 +116,10 @@ public struct LiveAccountSystem: AccountSystem {
 
     public func processes(of uid: uid_t) -> [pid_t] {
         ProcessTable.pids(ownedBy: uid)
+    }
+
+    public func loginWindow(of uid: uid_t) -> pid_t? {
+        ProcessTable.loginWindow(of: uid)
     }
 
     public func isRegistered(_ name: String) -> Bool { AccountRegistry.names().contains(name) }

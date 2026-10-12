@@ -15,24 +15,24 @@ import Foundation
 private typealias CGSConnectionID = Int32
 
 @_silgen_name("CGSMainConnectionID")
-private func CGSMainConnectionID() -> CGSConnectionID
+nonisolated private func CGSMainConnectionID() -> CGSConnectionID
 
 @_silgen_name("CGSCopyManagedDisplaySpaces")
-private func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> Unmanaged<CFArray>?
+nonisolated private func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> Unmanaged<CFArray>?
 
 @_silgen_name("CGSManagedDisplaySetCurrentSpace")
-private func CGSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID, _ display: CFString, _ space: UInt64)
+nonisolated private func CGSManagedDisplaySetCurrentSpace(_ cid: CGSConnectionID, _ display: CFString, _ space: UInt64)
 
 @_silgen_name("CGSAddWindowsToSpaces")
-private func CGSAddWindowsToSpaces(_ cid: CGSConnectionID, _ windows: CFArray, _ spaces: CFArray)
+nonisolated private func CGSAddWindowsToSpaces(_ cid: CGSConnectionID, _ windows: CFArray, _ spaces: CFArray)
 
 @_silgen_name("CGSRemoveWindowsFromSpaces")
-private func CGSRemoveWindowsFromSpaces(_ cid: CGSConnectionID, _ windows: CFArray, _ spaces: CFArray)
+nonisolated private func CGSRemoveWindowsFromSpaces(_ cid: CGSConnectionID, _ windows: CFArray, _ spaces: CFArray)
 
 // The CGWindowID behind an AXUIElement — the handle CGS windows-to-spaces calls take. Private,
 // and the only route from an accessibility element to the window-server id.
 @_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError
+nonisolated private func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 nonisolated enum SpacesManager {
     /// One Space on one display.

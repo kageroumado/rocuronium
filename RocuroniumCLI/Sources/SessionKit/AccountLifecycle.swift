@@ -25,6 +25,8 @@ public protocol AccountSystem: Sendable {
     func unregister(_ name: String)
     /// Every live process owned by `uid`, whatever session it belongs to.
     func processes(of uid: uid_t) -> [pid_t]
+    /// The loginwindow that owns the account's GUI session, when logged in.
+    func loginWindow(of uid: uid_t) -> pid_t?
     /// `launchctl bootout gui/<uid>`: ends the account's GUI login session.
     func bootout(uid: uid_t) -> CommandResult
     func deleteAccount(_ name: String) -> CommandResult
@@ -117,9 +119,8 @@ public enum Provisioning {
         if let refusal = refusal(name: name, uid: uid, system: system, protecting: protecting) {
             return .refused(refusal)
         }
-        let live = system.processes(of: uid)
-        guard live.isEmpty else {
-            return .refused("'\(name)' has a running session (\(live.count) process\(live.count == 1 ? "" : "es")) — stop it first: rocuronium session stop")
+        if let pid = system.loginWindow(of: uid) {
+            return .refused("'\(name)' has a running session (loginwindow pid \(pid)) — stop it first: rocuronium session stop")
         }
         return .existing(uid: uid)
     }

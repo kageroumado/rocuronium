@@ -1217,8 +1217,8 @@ actor Engine {
         // `AXEnabled` is a report, not evidence — measured: a background TextEdit's
         // "Select All" reads disabled simply because AppKit never validated a menu that was
         // never opened. So a disabled report does not gate the press; it is recorded, the
-        // press runs, and the verdict comes from read-back. A genuinely disabled item then
-        // yields an honest `noEffect` instead of a guess either way.
+        // press runs, and the verdict comes from selection, window-count, or process-exit
+        // read-back. Whole-window pixels and tree changes remain incidental for disabled items.
 
         // Window-level visual evidence. A menu press has no read-back of its own, and the
         // item's rectangle is meaningless while the menu is closed — the consequence lands in
@@ -1258,7 +1258,7 @@ actor Engine {
             before: selectionBefore,
             after: ElementQuery.focused(pid: pid)?.selectedText,
         )
-        if evidence.verdict == .unverifiable, windowIsStill, let baseline,
+        if match.enabled, evidence.verdict == .unverifiable, windowIsStill, let baseline,
            let after = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
            after.windowFrame == baseline.windowFrame {
             // Same window, same place: the fallback that picks the app's largest window would
@@ -1296,7 +1296,9 @@ actor Engine {
         // to selection, same-window pixels, and the window count alike. Skipped when the app
         // already quit: its tree is gone, and the exit is the read-back.
         if !processHasExited(pid) {
-            evidence = foldingTreeEvidence(into: evidence, pid: pid, baseline: treeBaseline)
+            evidence = foldingTreeEvidence(
+                into: evidence, pid: pid, baseline: treeBaseline, canConfirm: match.enabled,
+            )
         }
         return (evidence, match.path, match.enabled, hazard)
     }
@@ -1407,19 +1409,9 @@ actor Engine {
         return (evidence, itemName)
     }
 
-    /// Posts a key chord (Escape, Return, arrows, ⌘=…) to the process — the verb for keys
-    /// that are neither text (`type`) nor menu-reachable (`shortcut`). The measured need:
-    /// dismissing a native file-picker dialog wants a plain Escape, which no other verb
-    /// could send (trial log, 2026-08-06).
-    ///
-    /// Honesty note baked into the evidence: posted keycode events are delivered per-pid and
-    /// work on AppKit, but Electron/Chromium ignore keycode-only events entirely (measured on
-    /// Discord). Confirmation channels are the focused element changing and window pixels;
-    /// a quiet result stays `unverifiable` rather than `noEffect`, because a key that merely
-    /// moves a caret changes almost nothing a window-scale diff can see.
-    /// How a bare key reaches its target: per-pid posted events (the ghost default), or the
-    /// console pipeline (session-level — the only channel key-equivalent dispatch hears,
-    /// gated by the router like all hardware input because it lands in global focus).
+    /// Sends a key chord to the target process or its session's input pipeline.
+    /// Confirmation comes from focused text, selection, focus, still-window pixels, or
+    /// window-count changes. Quiet results remain unverifiable.
     enum KeyDelivery: Sendable {
         case process
         case session
@@ -1436,6 +1428,7 @@ actor Engine {
         let frontBefore = await MainActor.run { EventPoster.frontmostBundleID }
         let focusedBefore = ElementQuery.focused(pid: pid)
         let focusBefore = focusedBefore?.signature
+        let textBefore = KeyTextSnapshot(focusedBefore)
         let target = focusedBefore.map { "\($0.role) '\($0.label)'" } ?? "pid \(pid)"
 
         // Same two-capture stillness control as the menu press: a key's consequence lands
@@ -1465,18 +1458,27 @@ actor Engine {
         cache.invalidate(pid: pid)
 
         let tentacle: Evidence.Tentacle = delivery == .session ? .hardwareInput : .postedEvent
-        let focusAfter = ElementQuery.focused(pid: pid)?.signature
-        let focusChanged = focusAfter != focusBefore
+        let focusedAfter = ElementQuery.focused(pid: pid)
+        let focusAfter = focusedAfter?.signature
+        let focusChanged = pressed && focusAfter != focusBefore
+        let textChange: String?
+        if pressed, let focusedBefore, let focusedAfter,
+           CFEqual(focusedBefore.raw, focusedAfter.raw),
+           let textBefore, let textAfter = KeyTextSnapshot(focusedAfter) {
+            textChange = textAfter.change(from: textBefore)
+        } else {
+            textChange = nil
+        }
         let outcome = if !pressed {
             HumanInputMonitor.shared.humanInterruptedHardware
                 ? "not pressed: the human used the mouse or keyboard first — the hands are theirs"
-                : "not pressed: the console stopped being ours (a lock, a cancelled request, or ⌃⌥⇧⎋)"
+                : "not pressed: session input became unavailable (a lock, a cancelled request, or ⌃⌥⇧⎋)"
         } else {
             switch (delivery, focusChanged) {
             case (.process, true): "key posted; the focused element changed"
             case (.process, false): "key posted (per-pid keycode event — AppKit honors these; Electron/Chromium ignore them)"
-            case (.session, true): "key pressed on the console pipeline; the focused element changed"
-            case (.session, false): "key pressed on the console pipeline (reaches key-equivalent dispatch in the frontmost app)"
+            case (.session, true): "key pressed on the session input pipeline; the focused element changed"
+            case (.session, false): "key pressed on the session input pipeline (reaches key-equivalent dispatch in the frontmost app)"
             }
         }
         let attempts: [Evidence.Attempt] = [.init(tentacle: tentacle, outcome: outcome)]
@@ -1490,8 +1492,8 @@ actor Engine {
             action: "key(\(chord.name))",
             target: target,
             tentacle: tentacle,
-            verdict: focusChanged ? .confirmed : .unverifiable,
-            readback: nil,
+            verdict: focusChanged || textChange != nil ? .confirmed : .unverifiable,
+            readback: textChange,
             pixelDelta: nil,
             focusBefore: focusBefore,
             focusAfter: focusAfter,
@@ -1501,7 +1503,7 @@ actor Engine {
             attempts: attempts,
             referral: nil,
         )
-        if evidence.verdict == .unverifiable, windowIsStill, let baseline,
+        if pressed, evidence.verdict == .unverifiable, windowIsStill, let baseline,
            let after = try? await ScreenCapture.windowImage(ownedBy: pid, near: baseline.windowFrame),
            after.windowFrame == baseline.windowFrame {
             evidence = evidence.addingConfirmingVisualEvidence(
@@ -1512,7 +1514,7 @@ actor Engine {
         // channel that can actually see that (loose end 7). A shorter poll than the press
         // verbs': arrows and other caret keys legitimately stay unverifiable, and the 300 ms
         // settle above already covers most dismissal animations.
-        if evidence.verdict != .confirmed {
+        if pressed, evidence.verdict != .confirmed {
             for _ in 0 ..< 3 {
                 let now = onScreenWindowCount(pid)
                 if now != windowsBefore {
@@ -1522,6 +1524,7 @@ actor Engine {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
+        evidence.keyboardOnly = true
         return evidence
     }
 
@@ -2125,10 +2128,11 @@ actor Engine {
     /// missing or truncated after-walk leaves the evidence exactly as it was — this channel
     /// only ever adds signal, never removes it.
     private func foldingTreeEvidence(
-        into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?, window: WindowSelector = .init()
+        into evidence: Evidence, pid: pid_t, baseline: [TreeSnapshot.Node]?,
+        window: WindowSelector = .init(), canConfirm: Bool = true
     ) -> Evidence {
         guard let baseline, let after = windowNodes(pid: pid, window: window) else { return evidence }
-        return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after))
+        return evidence.addingTreeEvidence(TreeDelta.compute(from: baseline, to: after), canConfirm: canConfirm)
     }
 
     func act(

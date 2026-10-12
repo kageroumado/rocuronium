@@ -39,6 +39,11 @@ enum SessionRemote {
             emit(reply)
         case .startDaemon:
             emit(startDaemon())
+        case .restartDaemon:
+            guard SessionWatch.armingRefusal(onConsole: onConsole()) == nil else {
+                emit(["ok": false, "error": "refused: restart-daemon requires an off-console session"])
+            }
+            emit(startDaemon(restart: true))
         }
     }
 
@@ -90,7 +95,7 @@ enum SessionRemote {
         if let loginWindow = ProcessTable.loginWindow(of: uid) {
             reply["loginwindowPid"] = Int(loginWindow)
             if let started = ProcessTable.startDate(of: loginWindow) {
-                reply["uptimeSeconds"] = Int(Date().timeIntervalSince(started))
+                reply["loginwindowAgeSeconds"] = max(0, Int(Date().timeIntervalSince(started)))
             }
         }
         reply["displays"] = displays()
@@ -115,11 +120,11 @@ enum SessionRemote {
         }
     }
 
-    static func startDaemon() -> [String: Any] {
+    static func startDaemon(restart: Bool = false) -> [String: Any] {
         let uid = getuid()
         let label = "gui/\(uid)/glass.kagerou.rocuronium"
         if Shell.run("/bin/launchctl", ["print", label]).succeeded {
-            let kick = Shell.run("/bin/launchctl", ["kickstart", label])
+            let kick = Shell.run("/bin/launchctl", ["kickstart"] + (restart ? ["-k"] : []) + [label])
             return ["ok": kick.succeeded, "loaded": true, "output": kick.output]
         }
         let plist = NSHomeDirectory() + "/Library/LaunchAgents/glass.kagerou.rocuronium.plist"

@@ -61,7 +61,8 @@ enum ShowcaseRenderer {
 
     /// Renders every listed scene's key moments and returns the files written.
     @discardableResult
-    static func render(to directory: URL, scenes: [ShowcaseScene] = ShowcaseScene.all) throws -> [URL] {
+    static func render(to directory: URL, scenes requestedScenes: [ShowcaseScene]? = nil) throws -> [URL] {
+        let scenes = requestedScenes ?? ShowcaseScene.all
         let closeups = directory.appending(path: "closeups", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: closeups, withIntermediateDirectories: true)
         var written: [URL] = []

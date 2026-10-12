@@ -107,8 +107,8 @@ public struct Provisioner: Sendable {
         guard verified.succeeded else {
             return .refused(
                 created
-                    ? "created \(request.name) but its password does not authenticate — delete the account and enable again"
-                    : "that password does not authenticate \(request.name)",
+                    ? "created \(request.name), but password verification failed (exit \(verified.status))"
+                    : "password verification for '\(request.name)' failed (exit \(verified.status))",
                 log: log,
             )
         }

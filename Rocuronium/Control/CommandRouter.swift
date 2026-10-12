@@ -1927,15 +1927,12 @@ final class CommandRouter {
         reply["menuItem"] = result.menuPath
         if let hazard = result.hazard { reply["hazard"] = hazard }
         if !result.itemReportedEnabled {
-            // Measured both ways on 2026-08-02: a background AppKit app (TextEdit) reports
-            // disabled and the press is a silent no-op that still returns success; a
-            // background Electron app (Postman) reports enabled and the press works.
             reply["menuItemReportedDisabled"] = true
-            reply["note"] = "the menu item reported disabled before the press. On AppKit apps "
-                + "in the background this is accurate — the press returns success but does "
-                + "nothing, because inactive apps never validate their menus. Treat anything "
-                + "short of a confirmed verdict as 'did not happen'; activating the target "
-                + "first is what makes AppKit menus live."
+            reply["note"] = "the menu item reported disabled before the press. Background AppKit "
+                + "apps can accept AXPress while ignoring it. Confirmation requires selection, "
+                + "window-count, or process-exit read-back; whole-window changes are incidental. "
+                + "For an unverifiable result, inspect the intended outcome before retrying. "
+                + "Activating the target lets AppKit validate its menus."
         }
         return reply
     }

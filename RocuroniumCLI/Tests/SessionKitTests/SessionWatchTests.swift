@@ -68,6 +68,8 @@ struct RemoteCommandTests {
         #expect(RemoteCommand.parse("facts") == .facts)
         #expect(RemoteCommand.parse("forward") == .forward)
         #expect(RemoteCommand.parse("start-daemon") == .startDaemon)
+        #expect(RemoteCommand.parse("restart-daemon") == .restartDaemon)
+        #expect(RemoteCommand.parse("restart-daemon extra") == nil)
     }
 
     /// A login shell is exactly what the forced command exists to withhold.
