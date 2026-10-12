@@ -52,7 +52,7 @@ final class CommandRouter {
         PresenceOverlayController.installRelayHooks()
         PresenceRelay.approveHardware = { [weak self] prompt in
             guard let self else { return false }
-            return await self.consented(prompt: prompt, away: false, confirm: self.confirmInFlight)
+            return await self.approveHardware(prompt: prompt)
         }
         agentSession.record = { [activityLog] action, verdict, summary in
             activityLog.append(action: action, target: "agent session", verdict: verdict, summary: summary)
@@ -618,6 +618,7 @@ final class CommandRouter {
         var request = request
         if request.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { request.label = nil }
         confirmInFlight = request.confirm == true
+        approvedInDispatch = false
         guard Self.actingVerbs.contains(request.command) else { return try await dispatchCommand(request) }
         let monitor = HumanInputMonitor.shared
         monitor.begin(targetPid: try? resolve(request))
@@ -1652,10 +1653,22 @@ final class CommandRouter {
     /// The `confirm` flag of the request being dispatched, for the consent the engine asks for
     /// mid-action through ``PresenceRelay/approveHardware``.
     private var confirmInFlight = false
+    /// Whether the human approved something during the command being dispatched — one plan
+    /// step, or one top-level command. Scoped to the dispatch so a yes given to one plan step
+    /// never answers for a later step.
+    private var approvedInDispatch = false
 
     /// Set when `--app` named several running instances and one was taken by the
     /// `AppInstancePicker` rules; rides out on the reply as `appResolution`.
     private var appResolution: String?
+
+    /// The engine's question before the hardware tentacle. One question per action: a command
+    /// whose bring-forward the human already approved has its answer, and asking again for the
+    /// click itself would be a second prompt for the same act.
+    private func approveHardware(prompt: String) async -> Bool {
+        if approvedInDispatch { return true }
+        return await consented(prompt: prompt, away: false, confirm: confirmInFlight)
+    }
 
     private func consented(prompt: String, away: Bool, confirm: Bool) async -> Bool {
         if away { return true }
@@ -1674,10 +1687,12 @@ final class CommandRouter {
         switch await overlay.requestConsent(prompt: prompt) {
         case .approve:
             consentOutcome = "approved"
+            approvedInDispatch = true
             return true
         case .approveForAWhile:
             StandingApproval.grant()
             consentOutcome = "approved-for-\(StandingApproval.minutes)-minutes"
+            approvedInDispatch = true
             return true
         case .decline:
             consentOutcome = "declined"
