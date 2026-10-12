@@ -50,6 +50,9 @@ final class CommandRouter {
         virtualDisplay = VirtualDisplayBridge(engine: engine)
         PresenceOverlayController.shared = overlay
         PresenceOverlayController.installRelayHooks()
+        agentSession.retainEmergencyShortcut = { [weak overlay] in try overlay?.retainAgentEmergencyShortcut() }
+        agentSession.releaseEmergencyShortcut = { [weak overlay] in overlay?.releaseAgentEmergencyShortcut() }
+        agentSession.emergencyShortcutRegistered = { [weak overlay] in overlay?.emergencyShortcutRegistered == true }
         agentSession.record = { [activityLog] action, verdict, summary in
             activityLog.append(action: action, target: "agent session", verdict: verdict, summary: summary)
         }

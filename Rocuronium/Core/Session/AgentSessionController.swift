@@ -69,7 +69,13 @@ final class AgentSessionController {
         static let daemonAnswerTimeout: TimeInterval = 40
     }
 
-    private(set) var phase: Phase = .idle
+    private(set) var phase: Phase = .idle {
+        didSet { if phase == .idle { releaseEmergencyShortcut?() } }
+    }
+    /// The console shortcut is held until shutdown reaches verified idle, including failed cleanup.
+    var retainEmergencyShortcut: (() throws -> Void)?
+    var releaseEmergencyShortcut: (() -> Void)?
+    var emergencyShortcutRegistered: (() -> Bool)?
     private(set) var progress: [String] = []
     private var heartbeat: AgentSessionHeartbeat?
     /// A switch a start is still arming: a stop that lands meanwhile must close it too.
@@ -139,6 +145,8 @@ final class AgentSessionController {
         guard let route = makeBringUp?() else {
             return ["ok": false, "error": "no way to create an off-console session is available on this Mac — see Docs/AGENT-SESSION.md"]
         }
+        do { try retainEmergencyShortcut?() }
+        catch { return ["ok": false, "error": String(describing: error)] }
         phase = .starting
         progress = []
         generation += 1
@@ -359,7 +367,7 @@ final class AgentSessionController {
     /// ⌃⌥⇧⎋ on the console: the chord is session-scoped and never reaches the agent session's
     /// own daemon, so this side ends that session for it.
     func emergencyStop() {
-        guard heartbeat != nil || heartbeatInFlight != nil || bringUp != nil || phase == .starting else { return }
+        guard phase != .idle || heartbeat != nil || heartbeatInFlight != nil || bringUp != nil else { return }
         Task(name: "agent-session emergency stop") { await stop(reason: "⌃⌥⇧⎋") }
     }
 
@@ -409,6 +417,7 @@ final class AgentSessionController {
             lines.append("session     none")
         }
         lines.append("state       \(stateWord)" + (bringUp.map { " via \($0.route)\($0.isHeld ? ", viewer held" : ", viewer gone — curtained")" } ?? ""))
+        reply["emergencyShortcutRegistered"] = emergencyShortcutRegistered?() ?? false
         reply["switchArmed"] = heartbeat?.isArmed == true
         lines.append("switch      " + (heartbeat.map { $0.isArmed ? "armed, \($0.beats) beats" : "not armed" } ?? "none"))
 

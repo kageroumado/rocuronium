@@ -8,9 +8,8 @@ import Foundation
 /// hotkey API delivers exactly the chord, works while other apps have focus, and needs no
 /// additional permission.
 ///
-/// Registered only while the overlay is visible: the chord means "stop the agent I can see
-/// working", and a registered hotkey is consumed system-wide, so holding one around the clock
-/// would take it from every other app for a shortcut with nothing to stop.
+/// Held while the activity overlay is visible or an agent session needs a shutdown path.
+/// Both lifetimes share one registration in the console process.
 ///
 /// Three modifiers, and deliberately no Command. ⌥⎋ — the obvious choice — is Force Quit
 /// (⌘⌥⎋) without its Command key, which puts the stop chord directly under the muscle memory
@@ -38,7 +37,9 @@ final class HotkeyMonitor {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
 
-    func register() {
+    var isRegistered: Bool { hotKey != nil }
+
+    func register() throws {
         guard hotKey == nil else { return }
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -47,7 +48,7 @@ final class HotkeyMonitor {
         // The C callback carries no context, so `self` rides in userData. `passUnretained`
         // is safe because `unregister()` removes the handler before this object can die.
         let selfPointer = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetEventDispatcherTarget(), { _, _, userData in
+        let installed = InstallEventHandler(GetEventDispatcherTarget(), { _, _, userData in
             guard let userData else { return noErr }
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userData).takeUnretainedValue()
             // Carbon dispatches on the main run loop; assert rather than hop.
@@ -55,12 +56,17 @@ final class HotkeyMonitor {
             return noErr
         }, 1, &eventType, selfPointer, &handler)
 
+        guard installed == noErr else { throw RegistrationError(status: installed) }
         let chord = Self.chord
         let id = EventHotKeyID(signature: OSType(0x524F_4355), id: 1)  // 'ROCU'
-        RegisterEventHotKey(
+        let registered = RegisterEventHotKey(
             chord.keyCode, chord.carbonModifiers, id,
             GetEventDispatcherTarget(), 0, &hotKey,
         )
+        guard registered == noErr else {
+            unregister()
+            throw RegistrationError(status: registered)
+        }
     }
 
     func unregister() {
@@ -72,6 +78,11 @@ final class HotkeyMonitor {
             RemoveEventHandler(handler)
             self.handler = nil
         }
+    }
+
+    struct RegistrationError: Error, CustomStringConvertible {
+        let status: OSStatus
+        var description: String { "could not register the emergency shortcut (macOS status \(status))" }
     }
 
     isolated deinit {

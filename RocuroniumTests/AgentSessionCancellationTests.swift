@@ -10,12 +10,16 @@ struct AgentSessionCancellationTests {
         let route = DeferredLogin { fixture.pid = 123 }
         let controller = AgentSessionController(runtime: fixture.runtime)
         controller.makeBringUp = { route }
+        var shortcutHeld = false
+        controller.retainEmergencyShortcut = { shortcutHeld = true }
+        controller.releaseEmergencyShortcut = { shortcutHeld = false }
         #expect(controller.start()["state"] as? String == "starting")
         try await waitUntil { route.entered }
 
         let stop = await controller.stop(reason: "test cancellation")
         #expect(stop["state"] as? String == "stopping")
         #expect(!route.closed)
+        #expect(shortcutHeld)
         #expect(controller.start()["ok"] as? Bool == false)
         #expect(await controller.stop(reason: "repeated stop")["state"] as? String == "stopping")
         #expect(fixture.endCalls == 0)
@@ -25,6 +29,7 @@ struct AgentSessionCancellationTests {
         #expect(route.closed)
         #expect(fixture.pid == nil)
         #expect(fixture.endCalls == 1)
+        #expect(shortcutHeld == false)
     }
 
     @Test func cancellationDuringCredentialReadCannotRequestLoginLater() async throws {
@@ -64,6 +69,19 @@ struct AgentSessionCancellationTests {
         #expect(fixture.pid == nil)
         #expect(fixture.endCalls == 1)
         #expect(controller.progress.contains("failed-start cleanup verified: agent loginwindow is gone"))
+    }
+
+    @Test func unavailableEmergencyShortcutRefusesLogin() {
+        let fixture = SessionFixture()
+        let route = DeferredLogin { fixture.pid = 123 }
+        let controller = AgentSessionController(runtime: fixture.runtime)
+        controller.makeBringUp = { route }
+        controller.retainEmergencyShortcut = { throw AgentRFBError("shortcut occupied") }
+        let reply = controller.start()
+        #expect(reply["ok"] as? Bool == false)
+        #expect(reply["error"] as? String == "shortcut occupied")
+        #expect(controller.phase == .idle)
+        #expect(route.entered == false)
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
