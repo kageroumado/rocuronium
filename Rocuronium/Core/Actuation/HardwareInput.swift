@@ -401,6 +401,7 @@ nonisolated enum HardwareInput {
                 if excess > 0 { humanEvents += Double(excess) }
                 if humanEvents > Constants.yieldExcessEvents {
                     InputAttribution.shared.noteSyntheticInput()
+                    HumanInputMonitor.shared.recordYield()
                     if let button { post(button.up, at: previous) }
                     return Walk(
                         posted: posted, lastPoint: previous,

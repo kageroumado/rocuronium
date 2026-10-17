@@ -252,6 +252,15 @@ nonisolated final class HumanInputMonitor: @unchecked Sendable {
         }
     }
 
+    /// Records a yield that the cursor path's grab detector caught before this tap did: the hand
+    /// shows up there as motion-event excess, and the reply must still report `stopped`.
+    func recordYield() {
+        lock.withLock {
+            interrupted = true
+            stopped = true
+        }
+    }
+
     /// Whether the human has used the mouse or keyboard since the hardware tentacle armed,
     /// without recording a yield — for wording a result after the fact.
     var humanInterruptedHardware: Bool {

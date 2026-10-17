@@ -200,3 +200,16 @@ struct PanelProtocolTests {
         #expect(clickAction.why == nil)
     }
 }
+
+/// A yield the cursor path's grab detector catches reaches the reply as `stopped`, the same as one
+/// the tap catches: the panel's Stopped state and the agent both read that field.
+@MainActor
+struct HumanInputYieldTests {
+    @Test func aGrabDetectorYieldIsReportedAsStopped() {
+        let monitor = HumanInputMonitor.shared
+        monitor.armHardware()
+        monitor.recordYield()
+        #expect(monitor.humanInterruptedHardware)
+        #expect(monitor.end().stopped)
+    }
+}
