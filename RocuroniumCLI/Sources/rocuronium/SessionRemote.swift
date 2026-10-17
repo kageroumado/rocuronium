@@ -2,6 +2,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import SessionKit
+import SystemConfiguration
 
 /// The two `session` subcommands that run inside the agent account rather than talking to a
 /// daemon: `session watch`, the dead-man's switch, and `session remote`, the forced command
@@ -23,6 +24,8 @@ enum SessionRemote {
         switch command {
         case let .watch(deadline):
             watch(deadlineSeconds: SessionWatch.deadline(requested: deadline))
+        case let .watchLogin(deadline):
+            watchLogin(deadlineSeconds: SessionWatch.deadline(requested: deadline))
         case .stop:
             let result = bootoutOwnSession()
             emit(["ok": result.succeeded, "status": Int(result.status), "output": result.output])
@@ -60,11 +63,64 @@ enum SessionRemote {
                 print("armed uid=\(getuid()) deadline=\(deadlineSeconds)")
                 fflush(stdout)
             },
-            bootout: bootoutOwnSession,
+            bootout: { _ in bootoutOwnSession() },
         )
         print("bootout reason=\"\(outcome.reason)\" status=\(outcome.bootout.status)")
         fflush(stdout)
         exit(outcome.bootout.succeeded ? 0 : 1)
+    }
+
+    /// `session remote watch-login [seconds]`: the switch armed before the login request, so a
+    /// console daemon that stops while the session is still coming up cannot leave it unguarded.
+    /// Refused when this account already has a session on the console.
+    static func watchLogin(deadlineSeconds: Int) -> Never {
+        if accountOnConsole() == true {
+            fail("session watch-login: this account has a session on the console; the watcher only guards an off-console agent session", code: 2)
+        }
+        let outcome = SessionWatch.run(
+            input: STDIN_FILENO,
+            deadlineSeconds: deadlineSeconds,
+            announce: {
+                print("armed uid=\(getuid()) deadline=\(deadlineSeconds) before-login")
+                fflush(stdout)
+            },
+            bootout: { event in bootoutWhenLoginAppears(within: PendingLoginWatch.loginWait(after: event)) },
+        )
+        print("bootout reason=\"\(outcome.reason)\" status=\(outcome.bootout.status) \(outcome.bootout.output)")
+        fflush(stdout)
+        exit(outcome.bootout.succeeded ? 0 : 1)
+    }
+
+    /// Waits up to `seconds` for this account's loginwindow, then boots the session out once it is
+    /// listed off-console. A session listed on the console is refused, never booted.
+    static func bootoutWhenLoginAppears(within seconds: Int) -> CommandResult {
+        let uid = getuid()
+        let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        repeat {
+            if ProcessTable.loginWindow(of: uid) != nil {
+                switch accountOnConsole() {
+                case false?: return Shell.run("/bin/launchctl", ["bootout", "gui/\(uid)"], timeout: 30)
+                case true?: return CommandResult(status: 2, output: "refused: this account's session is on the console")
+                case nil: break
+                }
+            }
+            usleep(250_000)
+        } while Date() < deadline
+        return ProcessTable.loginWindow(of: uid) == nil
+            ? CommandResult(status: 0, output: "no session appeared within \(seconds) s")
+            : CommandResult(status: 2, output: "refused: the session never listed as off-console")
+    }
+
+    /// Whether this account's GUI session is on the console, readable from a process started
+    /// before that session existed: the console-user session list, plus this process's own
+    /// CGSession when it has one. Either one saying on-console wins.
+    static func accountOnConsole() -> Bool? {
+        let sessions = SCDynamicStoreCopyValue(nil, "State:/Users/ConsoleUser" as CFString)
+            .flatMap { ($0 as? [String: Any])?["SessionInfo"] as? [[String: Any]] } ?? []
+        let listed = PendingLoginWatch.onConsole(sessions: sessions, uid: getuid())
+        let own = onConsole()
+        if listed == true || own == true { return true }
+        return listed ?? own
     }
 
     /// `launchctl bootout gui/<own uid>` — no privilege needed, and it ends the whole GUI

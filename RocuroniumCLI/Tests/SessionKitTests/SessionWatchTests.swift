@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import SessionKit
 
@@ -64,6 +65,9 @@ struct RemoteCommandTests {
     @Test func knownCommandsParse() {
         #expect(RemoteCommand.parse("watch") == .watch(deadlineSeconds: nil))
         #expect(RemoteCommand.parse("watch 15") == .watch(deadlineSeconds: 15))
+        #expect(RemoteCommand.parse("watch-login") == .watchLogin(deadlineSeconds: nil))
+        #expect(RemoteCommand.parse("watch-login 15") == .watchLogin(deadlineSeconds: 15))
+        #expect(RemoteCommand.parse("watch-login now") == nil)
         #expect(RemoteCommand.parse("stop") == .stop)
         #expect(RemoteCommand.parse("facts") == .facts)
         #expect(RemoteCommand.parse("forward") == .forward)
@@ -80,5 +84,47 @@ struct RemoteCommandTests {
         #expect(RemoteCommand.parse("stop; rm -rf ~") == nil)
         #expect(RemoteCommand.parse("watch 15 extra") == nil)
         #expect(RemoteCommand.parse("watch abc") == nil)
+    }
+}
+
+/// The switch armed before the login exists. It must end a session that appears after the
+/// console side is gone, and must never end one at the physical console.
+struct PendingLoginWatchTests {
+    private func session(uid: Int, onConsole: Bool?) -> [String: Any] {
+        var entry: [String: Any] = ["kCGSSessionUserIDKey": NSNumber(value: uid)]
+        if let onConsole { entry["kCGSSessionOnConsoleKey"] = NSNumber(value: onConsole) }
+        return entry
+    }
+
+    /// The console-user record listed after a Screen Sharing agent login: the human on the
+    /// console, the agent off it.
+    @Test func readsTheAccountsOwnSessionOnly() {
+        let sessions = [session(uid: 502, onConsole: false), session(uid: 501, onConsole: true)]
+        #expect(PendingLoginWatch.onConsole(sessions: sessions, uid: 502) == false)
+        #expect(PendingLoginWatch.onConsole(sessions: sessions, uid: 501) == true)
+    }
+
+    @Test func anOnConsoleSessionOfTheAccountWins() {
+        let sessions = [session(uid: 502, onConsole: false), session(uid: 502, onConsole: true)]
+        #expect(PendingLoginWatch.onConsole(sessions: sessions, uid: 502) == true)
+    }
+
+    /// A session without the key cannot be shown to be off-console, so it counts as on it.
+    @Test func aSessionWithoutTheKeyCountsAsOnConsole() {
+        #expect(PendingLoginWatch.onConsole(sessions: [session(uid: 502, onConsole: nil)], uid: 502) == true)
+    }
+
+    @Test func noListedSessionIsUnknown() {
+        #expect(PendingLoginWatch.onConsole(sessions: [], uid: 502) == nil)
+        #expect(PendingLoginWatch.onConsole(sessions: [session(uid: 501, onConsole: true)], uid: 502) == nil)
+    }
+
+    /// A console side that vanished may have a login on its way; one that stopped on purpose
+    /// verifies its own cleanup, and a long wait would catch the next start's login.
+    @Test func onlyAnAbandonedWatchWaitsForTheLogin() {
+        #expect(PendingLoginWatch.loginWait(after: .endOfInput) == PendingLoginWatch.loginWaitSeconds)
+        #expect(PendingLoginWatch.loginWait(after: .timeout) == PendingLoginWatch.loginWaitSeconds)
+        #expect(PendingLoginWatch.loginWait(after: .line("hello")) == PendingLoginWatch.loginWaitSeconds)
+        #expect(PendingLoginWatch.loginWait(after: .line("stop")) == PendingLoginWatch.stopListingSeconds)
     }
 }

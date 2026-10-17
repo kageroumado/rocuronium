@@ -251,7 +251,24 @@ private final class SessionFixture {
                   self.endCalls += 1
                   self.pid = nil
                   return .success(["ok": true, "status": 0])
-              })
+              }, makeSwitch: { TestSwitch() })
+    }
+}
+
+/// Arms at once and never reaches an account over SSH.
+private final class TestSwitch: AgentSessionSwitch, @unchecked Sendable {
+    var onEnded: (@Sendable (String) -> Void)?
+    private(set) var isArmed = false
+    var beats: Int { 0 }
+    private(set) var endReason: String?
+    func arm(link: AgentSessionLink, beforeLogin: Bool) async throws { isArmed = true }
+    func noteMainActorAlive() {}
+    func stopNow() { close() }
+    func close() {
+        guard isArmed else { return }
+        isArmed = false
+        endReason = "closed"
+        onEnded?("closed")
     }
 }
 

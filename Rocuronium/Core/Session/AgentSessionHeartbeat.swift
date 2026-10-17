@@ -2,6 +2,19 @@ import Darwin
 import Foundation
 import Synchronization
 
+/// The console end of a dead-man's switch, as the controller drives it. ``AgentSessionHeartbeat``
+/// is the live one; tests supply their own so no test reaches a real account over SSH.
+nonisolated protocol AgentSessionSwitch: AnyObject, Sendable {
+    var onEnded: (@Sendable (String) -> Void)? { get set }
+    var isArmed: Bool { get }
+    var beats: Int { get }
+    var endReason: String? { get }
+    func arm(link: AgentSessionLink, beforeLogin: Bool) async throws
+    func noteMainActorAlive()
+    func stopNow()
+    func close()
+}
+
 /// The console end of the dead-man's switch: an SSH pipe to `session remote watch` inside the
 /// agent account, with a beat written down it every couple of seconds.
 ///
@@ -16,7 +29,7 @@ import Synchronization
 ///   can no longer serve ⌃⌥⇧⎋ also stops vouching for the session;
 /// - **⌃⌥⇧⎋** — ``stopNow()`` writes `stop`, which ends the session at once rather than after
 ///   the deadline.
-nonisolated final class AgentSessionHeartbeat: @unchecked Sendable {
+nonisolated final class AgentSessionHeartbeat: AgentSessionSwitch, @unchecked Sendable {
     enum Constants {
         static let beatInterval: TimeInterval = 2
         /// The watcher's deadline. Long enough to ride out a busy second or a slow ssh write;
@@ -46,9 +59,12 @@ nonisolated final class AgentSessionHeartbeat: @unchecked Sendable {
 
     /// Starts the watcher and waits until it reports armed. Throws when it refuses, fails to
     /// connect, or stays silent — and then no session may run, since nothing would end it.
-    func arm(link: AgentSessionLink) async throws {
+    /// `beforeLogin` arms it ahead of the login request (`watch-login`): if the beats stop
+    /// before the session exists, the watcher waits for it to appear and ends it then.
+    func arm(link: AgentSessionLink, beforeLogin: Bool = false) async throws {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = link.arguments("watch \(Constants.deadlineSeconds)", keepAlive: true)
+        let verb = beforeLogin ? "watch-login" : "watch"
+        process.arguments = link.arguments("\(verb) \(Constants.deadlineSeconds)", keepAlive: true)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output

@@ -43,6 +43,7 @@ final class AgentSessionController {
         var savePendingLogin: (PendingAgentLogin?) throws -> Void = { _ in }
         var now: () -> Date = { Date() }
         var recoveryPause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(250)) }
+        var makeSwitch: () -> any AgentSessionSwitch = { AgentSessionHeartbeat() }
 
         static var live: Self {
             Self(
@@ -84,10 +85,10 @@ final class AgentSessionController {
     var releaseEmergencyShortcut: (() -> Void)?
     var emergencyShortcutRegistered: (() -> Bool)?
     private(set) var progress: [String] = []
-    private var heartbeat: AgentSessionHeartbeat?
+    private var heartbeat: (any AgentSessionSwitch)?
     private var ownedDesktop: AgentDesktopIdentity?
     /// A switch a start is still arming: a stop that lands meanwhile must close it too.
-    private var heartbeatInFlight: AgentSessionHeartbeat?
+    private var heartbeatInFlight: (any AgentSessionSwitch)?
     private var bringUp: (any AgentSessionBringUp)?
     private var startTask: Task<Void, Never>?
     /// Bumped by every start and every stop. A start compares its own number after each await,
@@ -213,7 +214,7 @@ final class AgentSessionController {
         let account = account
         let link = link
         var requestedSession = false
-        var startupHeartbeat: AgentSessionHeartbeat?
+        var startupHeartbeat: (any AgentSessionSwitch)?
         func note(_ line: String) {
             guard generation == mine else { return }
             progress.append(line)
@@ -235,8 +236,14 @@ final class AgentSessionController {
             guard generation == mine else { return }
             note("failed: \(message)")
             route.close()
+            // A deliberate stop: the watcher ends a session that exists and leaves at once
+            // otherwise, so a later start's login is never taken for this one's. This failure
+            // owns the shutdown, so the watcher exiting must not start a second one.
+            heartbeat = nil
+            heartbeatInFlight = nil
+            startupHeartbeat?.stopNow()
             var failure = message
-            // A session that came up without its switch armed must not outlive this failure.
+            // A half-started session must not outlive this failure.
             if requestedSession {
                 note("ending the half-started session")
                 do {
@@ -247,8 +254,6 @@ final class AgentSessionController {
                 }
             }
             guard generation == mine else { return }
-            heartbeat?.close()
-            heartbeat = nil
             bringUp = nil
             phase = .failed(failure)
             record?("session start", "failed", failure)
@@ -274,6 +279,24 @@ final class AgentSessionController {
                     }
                 }
             }
+            // No unattended session without a kill path, including one still coming up: the
+            // switch is armed before the login is requested, so a console side that stops
+            // mid-startup leaves a watcher that ends the session once it appears.
+            let switchBox = runtime.makeSwitch()
+            startupHeartbeat = switchBox
+            heartbeatInFlight = switchBox
+            switchBox.onEnded = { [weak self] reason in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.switchEnded(reason, generation: mine) } }
+            }
+            do {
+                try await switchBox.arm(link: link, beforeLogin: true)
+            } catch {
+                heartbeatInFlight = nil
+                return await fail("\(error)")
+            }
+            guard await stillWanted() else { return }
+            note("dead-man's switch armed before login (\(AgentSessionHeartbeat.Constants.deadlineSeconds) s deadline)")
+
             note("requesting an off-console session for \(account) (\(route.route))")
             do {
                 let pending = PendingAgentLogin(account: account, uid: uid,
@@ -292,6 +315,9 @@ final class AgentSessionController {
             guard await stillWanted() else { return }
             let appeared = Date()
             while try runtime.loginWindow(uid) == nil {
+                guard switchBox.isArmed else {
+                    return await fail("the dead-man's switch ended during startup: \(switchBox.endReason ?? "unknown")")
+                }
                 guard Date().timeIntervalSince(appeared) < Constants.sessionAppearTimeout else {
                     return await fail("no session for \(account) appeared within \(Int(Constants.sessionAppearTimeout)) s")
                 }
@@ -300,25 +326,14 @@ final class AgentSessionController {
             }
             note("session is up (loginwindow pid \(try runtime.loginWindow(uid) ?? 0)) after \(String(format: "%.1f", Date().timeIntervalSince(appeared))) s")
 
-            // No unattended session without a kill path: arm the switch before anything else runs.
-            let switchBox = AgentSessionHeartbeat()
-            startupHeartbeat = switchBox
-            heartbeatInFlight = switchBox
-            switchBox.onEnded = { [weak self] reason in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.switchEnded(reason, generation: mine) } }
+            guard switchBox.isArmed else {
+                return await fail("the dead-man's switch ended during startup: \(switchBox.endReason ?? "unknown")")
             }
-            do {
-                try await switchBox.arm(link: link)
-            } catch {
-                heartbeatInFlight = nil
-                return await fail("\(error)")
-            }
-            guard await stillWanted() else { return }
             heartbeatInFlight = nil
             heartbeat = switchBox
             try runtime.savePendingLogin(nil)
             pendingLogin = nil
-            note("dead-man's switch armed (\(AgentSessionHeartbeat.Constants.deadlineSeconds) s deadline)")
+            note("the dead-man's switch now guards the session")
 
             _ = await link.call("start-daemon")
             let waiting = Date()

@@ -70,18 +70,19 @@ public enum SessionWatch {
     ///   - deadlineSeconds: how long a silence may last before it counts as the console side gone.
     ///   - announce: called once when the watcher is armed, so the console side can confirm
     ///     the switch exists before it lets the session do anything.
+    ///   - bootout: performs the bootout; it receives the event that ended the watch.
     public static func run(
         input: Int32,
         deadlineSeconds: Int,
         announce: () -> Void,
-        bootout: () -> CommandResult,
+        bootout: (Event) -> CommandResult,
     ) -> (reason: String, bootout: CommandResult) {
         announce()
         var pending = Data()
         while true {
             let event = nextEvent(input: input, buffer: &pending, deadlineSeconds: deadlineSeconds)
             if case let .bootout(reason) = verdict(for: event) {
-                return (reason, bootout())
+                return (reason, bootout(event))
             }
         }
     }
@@ -111,6 +112,40 @@ public enum SessionWatch {
     }
 }
 
+/// The dead-man's switch armed before its account's GUI session exists.
+///
+/// The console side arms it ahead of the login request, so a console daemon that stops while
+/// the login is still coming up leaves something behind that ends the session. Once beats stop,
+/// the watcher waits for the account's loginwindow and boots that session out, unless the
+/// session is on the physical console.
+public enum PendingLoginWatch {
+    /// How long an abandoned watcher waits for a login still on its way; the console side's
+    /// pending-login observation uses the same bound.
+    public static let loginWaitSeconds = 90
+    /// How long a `stop` waits for a loginwindow that already exists to be listed as a session.
+    public static let stopListingSeconds = 5
+
+    /// Whether `uid`'s GUI session is on the physical console, from the session list in
+    /// `State:/Users/ConsoleUser`. That record's own `Name` and `UID` follow the most recent GUI
+    /// login: a Screen Sharing agent login takes them over while the human stays on the console
+    /// (measured 2026-10-18), so only each session's `kCGSSessionOnConsoleKey` is read. True when
+    /// any of the account's sessions is on the console, false when it has sessions and none is,
+    /// nil when none is listed.
+    public static func onConsole(sessions: [[String: Any]], uid: uid_t) -> Bool? {
+        let own = sessions.filter { ($0["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value == uid }
+        guard !own.isEmpty else { return nil }
+        return own.contains { ($0["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue != false }
+    }
+
+    /// How long to wait for the login once the watch has ended. A `stop` is the console side
+    /// cleaning up on purpose, and it verifies the cleanup itself; a silence, a closed pipe, or
+    /// noise means the console side is gone, and the login may still be on its way.
+    public static func loginWait(after event: SessionWatch.Event) -> Int {
+        if case let .line(text) = event, text.split(separator: " ").first == "stop" { return stopListingSeconds }
+        return loginWaitSeconds
+    }
+}
+
 /// What rocuronium's SSH key may run inside the agent account.
 ///
 /// The key is installed in the agent's `authorized_keys` as
@@ -120,6 +155,8 @@ public enum SessionWatch {
 public enum RemoteCommand: Equatable, Sendable {
     /// Arm the dead-man's switch; the deadline is in seconds.
     case watch(deadlineSeconds: Int?)
+    /// Arm the dead-man's switch before the account has a GUI session (``PendingLoginWatch``).
+    case watchLogin(deadlineSeconds: Int?)
     /// `launchctl bootout gui/<uid>` at once.
     case stop
     /// The session as seen from inside: uid, console-ness, displays, login process age.
@@ -135,6 +172,8 @@ public enum RemoteCommand: Equatable, Sendable {
         switch (verb, words.count) {
         case ("watch", 1): return .watch(deadlineSeconds: nil)
         case ("watch", 2): return Int(words[1]).map { .watch(deadlineSeconds: $0) }
+        case ("watch-login", 1): return .watchLogin(deadlineSeconds: nil)
+        case ("watch-login", 2): return Int(words[1]).map { .watchLogin(deadlineSeconds: $0) }
         case ("stop", 1): return .stop
         case ("facts", 1): return .facts
         case ("forward", 1): return .forward
