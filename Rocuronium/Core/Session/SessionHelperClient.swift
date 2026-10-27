@@ -148,7 +148,7 @@ extension AgentSessionController {
         }
         let publicKey: String
         do {
-            publicKey = try AgentSessionLink.prepareKeys()
+            publicKey = try AgentSessionLink.prepareClientKey()
         } catch {
             return ["ok": false, "error": "\(error)"]
         }
@@ -159,6 +159,11 @@ extension AgentSessionController {
         let reply = await Task.detached(priority: .userInitiated) { SessionHelperClient.send(fields) }.value
         guard reply["ok"] as? Bool == true else {
             return ["ok": false, "error": reply["error"] as? String ?? "provisioning failed", "lines": reply["log"] ?? []]
+        }
+        do {
+            try AgentSessionLink.pinHostKey()
+        } catch {
+            return ["ok": false, "error": "provisioned, but \(error)", "lines": reply["log"] ?? []]
         }
         let stored = AgentSessionKeychain.store(password: password, account: account)
         guard stored == errSecSuccess else {

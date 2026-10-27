@@ -58,6 +58,19 @@ struct ProvisionerTests {
         }
     }
 
+    /// The console side pins the ed25519 host key after provisioning; a Mac that never had
+    /// Remote Login on has none until the helper creates it.
+    @Test func missingHostKeysAreCreatedBeforeRemoteLoginStarts() {
+        let system = AccountRemovalTests.FakeSystem()
+        system.accounts = [:]
+        let runner = RecordingRunner(system: system)
+        _ = Provisioner(runner: runner, system: system).run(Self.request(), protecting: 501)
+        let keygen = runner.argvs.firstIndex(of: ["/usr/bin/ssh-keygen", "-A"])
+        let sshd = runner.argvs.firstIndex(of: ["/bin/launchctl", "bootstrap", "system", "/System/Library/LaunchDaemons/ssh.plist"])
+        #expect(keygen != nil && sshd != nil)
+        if let keygen, let sshd { #expect(keygen < sshd) }
+    }
+
     @Test func neverCreatesAnAdministrator() {
         let system = AccountRemovalTests.FakeSystem()
         system.accounts = [:]

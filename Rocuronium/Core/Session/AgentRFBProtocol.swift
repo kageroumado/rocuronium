@@ -61,15 +61,28 @@ nonisolated enum AgentRFBProtocol {
         return output
     }
 
+    /// ServerInit flags that matter to session selection.
+    struct ServerFlags: OptionSet, Sendable {
+        let rawValue: UInt32
+        /// A SessionInfo block follows the name.
+        static let sessionSelection = ServerFlags(rawValue: 0x04)
+        /// screensharingd cannot capture the console's screen (`screenCapture flag` 0 in its
+        /// `SendServerInitialiation`). Expected while another user owns the console; the
+        /// virtual session is captured by its own agent, so selection still decides.
+        static let screenCaptureDenied = ServerFlags(rawValue: 0x08)
+    }
+
     /// Apple prepends 22 bytes of capabilities to ServerInit's name field.
-    static func validateServerName(_ name: Data) throws {
+    @discardableResult
+    static func validateServerName(_ name: Data) throws -> ServerFlags {
         guard name.count >= 22, try integer(name, at: 0, bytes: 2) == 0 else {
             throw AgentRFBError("Screen Sharing did not offer enhanced session selection")
         }
-        let flags = try integer(name, at: 2, bytes: 4)
-        guard flags & 4 != 0, flags & 8 == 0 else {
-            throw AgentRFBError("Screen Sharing did not offer a separate login session (flags \(flags))")
+        let flags = ServerFlags(rawValue: try integer(name, at: 2, bytes: 4))
+        guard flags.contains(.sessionSelection) else {
+            throw AgentRFBError("Screen Sharing did not offer a separate login session (flags \(flags.rawValue))")
         }
+        return flags
     }
 
     static func validateSelectionInfo(_ body: Data) throws {

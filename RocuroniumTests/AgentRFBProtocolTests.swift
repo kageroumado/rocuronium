@@ -38,12 +38,12 @@ struct AgentRFBProtocolTests {
         #expect(message[10..<21] == Data("Rocuronium\0".utf8))
     }
 
-    @Test func consoleOrMissingSelectionCapabilitiesAreRefused() throws {
+    @Test func missingSelectionCapabilitiesAreRefused() throws {
         var name = Data(repeating: 0, count: 22)
         #expect(throws: AgentRFBError.self) { try AgentRFBProtocol.validateServerName(name) }
         name[5] = 4
-        try AgentRFBProtocol.validateServerName(name)
-        name[5] = 12
+        #expect(try AgentRFBProtocol.validateServerName(name) == [.sessionSelection])
+        name[5] = 0x5b
         #expect(throws: AgentRFBError.self) { try AgentRFBProtocol.validateServerName(name) }
         var info = Data(repeating: 0, count: 74)
         info[1] = 1
@@ -54,6 +54,16 @@ struct AgentRFBProtocolTests {
         info[9] = 0
         try AgentRFBProtocol.validateSelectionInfo(info)
         #expect(throws: AgentRFBError.self) { try AgentRFBProtocol.validateSelectionInfo(info.prefix(10)) }
+    }
+
+    /// Flags 95 (0x5F), sent while another user owns the console: selection is offered and
+    /// screensharingd cannot capture the console screen. Selection still proceeds.
+    @Test func captureDeniedStillOffersSelection() throws {
+        var name = Data(repeating: 0, count: 22)
+        name[5] = 0x5f
+        let flags = try AgentRFBProtocol.validateServerName(name)
+        #expect(flags.contains(.sessionSelection))
+        #expect(flags.contains(.screenCaptureDenied))
     }
 
     @Test func refusedOrMalformedResultCannotBecomeSuccess() throws {

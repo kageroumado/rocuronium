@@ -37,21 +37,25 @@ nonisolated struct AgentSessionLink: Sendable {
     static var publicKey: URL { directory.appending(path: "id_ed25519.pub") }
     static var knownHosts: URL { directory.appending(path: "known_hosts") }
 
-    /// Creates the key pair and pins the host key, once. The host key is read from
-    /// `/etc/ssh` (world-readable) rather than learned on first connect, so there is no
-    /// trust-on-first-use moment to intercept.
-    static func prepareKeys() throws -> String {
+    /// Creates the client key pair once and returns its public half.
+    static func prepareClientKey() throws -> String {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if !manager.fileExists(atPath: privateKey.path) {
             let made = Subprocess.run("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "rocuronium-agent-session", "-f", privateKey.path])
             guard made.status == 0 else { throw LinkError.keygen(made.output) }
         }
-        let host = try String(contentsOfFile: Constants.hostKey, encoding: .utf8)
+        return try String(contentsOf: publicKey, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Pins the host key. It is read from `/etc/ssh` (world-readable) rather than learned on
+    /// first connect, so there is no trust-on-first-use moment to intercept. Runs after
+    /// provisioning: on a Mac that never had Remote Login on, the helper creates the key.
+    static func pinHostKey() throws {
+        guard let host = try? String(contentsOfFile: Constants.hostKey, encoding: .utf8) else { throw LinkError.hostKey }
         let fields = host.split(separator: " ")
         guard fields.count >= 2 else { throw LinkError.hostKey }
         try "\(Constants.hostAlias) \(fields[0]) \(fields[1])\n".write(to: knownHosts, atomically: true, encoding: .utf8)
-        return try String(contentsOf: publicKey, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static var hasKeys: Bool {

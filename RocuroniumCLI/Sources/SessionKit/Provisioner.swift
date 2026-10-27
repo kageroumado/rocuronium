@@ -136,6 +136,9 @@ public struct Provisioner: Sendable {
             runner.run("/usr/sbin/dseditgroup", ["-o", "edit", "-a", name, "-t", "user", group], input: nil)
         }
         log.append("added to com.apple.access_screensharing and com.apple.access_ssh")
+        // The console side pins /etc/ssh/ssh_host_ed25519_key.pub, which a Mac that never had
+        // Remote Login on lacks. `-A` creates only the missing host keys.
+        runner.run("/usr/bin/ssh-keygen", ["-A"], input: nil)
         // `enable` + `bootstrap` turn a service on without the kickstart -k that would drop
         // any viewer the human already has connected. A bootstrap of a loaded service fails
         // harmlessly.

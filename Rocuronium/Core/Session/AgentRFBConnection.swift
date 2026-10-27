@@ -149,11 +149,18 @@ nonisolated final class AgentRFBConnection: @unchecked Sendable {
             let server = try read(24, from: fd, until: deadline)
             let nameSize = Int(try AgentRFBProtocol.integer(server, at: 20, bytes: 4))
             guard nameSize <= AgentRFBProtocol.maximumNameSize else { throw AgentRFBError("Screen Sharing server name exceeds the size limit") }
-            try AgentRFBProtocol.validateServerName(read(nameSize, from: fd, until: deadline))
-            try AgentRFBProtocol.validateSelectionInfo(selectionMessage(from: fd, until: deadline))
-            progress("Screen Sharing offers a separate virtual session")
-            try write(AgentRFBProtocol.selectVirtualSession(encryptedCredentials: encrypted), to: fd, until: deadline)
-            try AgentRFBProtocol.validateSelectionResult(selectionMessage(from: fd, until: deadline))
+            let flags = try AgentRFBProtocol.validateServerName(read(nameSize, from: fd, until: deadline))
+            if flags.contains(.screenCaptureDenied) {
+                progress("Screen Sharing cannot capture the console screen; asking for a virtual session anyway")
+            }
+            do {
+                try AgentRFBProtocol.validateSelectionInfo(selectionMessage(from: fd, until: deadline))
+                progress("Screen Sharing offers a separate virtual session")
+                try write(AgentRFBProtocol.selectVirtualSession(encryptedCredentials: encrypted), to: fd, until: deadline)
+                try AgentRFBProtocol.validateSelectionResult(selectionMessage(from: fd, until: deadline))
+            } catch let error as AgentRFBError where flags.contains(.screenCaptureDenied) {
+                throw AgentRFBError(error.description + " (Screen Sharing also reported that it cannot capture the screen, server flag 0x08)")
+            }
             try checkCancellation()
             lock.withLock { held = !cancelled }
             progress("Screen Sharing accepted the virtual session; connection held")
