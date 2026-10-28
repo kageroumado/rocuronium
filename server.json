@@ -3,7 +3,7 @@
   "name": "glass.kagerou/rocuronium",
   "title": "Rocuronium",
   "description": "Drive macOS apps without taking the cursor: read, click, type, scroll, each with evidence.",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "websiteUrl": "https://kagerou.glass/rocuronium/",
   "repository": {
     "url": "https://github.com/kageroumado/rocuronium",
@@ -12,9 +12,9 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/kageroumado/rocuronium/releases/download/v1.6.1/rocuronium-1.6.1.mcpb",
-      "version": "1.6.1",
-      "fileSha256": "d0f73f9747604ba5dae290e836320363c65b9e424132537c588fbd597efad0a5",
+      "identifier": "https://github.com/kageroumado/rocuronium/releases/download/v1.6.2/rocuronium-1.6.2.mcpb",
+      "version": "1.6.2",
+      "fileSha256": "54cbbce066dd008b928625f5dc34f02e580422fe125d7caaf2a9464b8799f64b",
       "transport": {
         "type": "stdio"
       }
